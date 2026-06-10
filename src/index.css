@@ -1,0 +1,66 @@
+@import "tailwindcss";
+
+/* ── Nimble design tokens ─────────────────────────────────── */
+
+@layer components {
+  /* Bento card — la brique de base du layout */
+  .bento-card {
+    @apply rounded-xl border border-stone-700/60 bg-stone-900/50 p-3 backdrop-blur-sm;
+  }
+
+  /* Label de section à l'intérieur d'une bento-card */
+  .bento-label {
+    @apply text-[10px] font-semibold uppercase tracking-widest text-stone-500;
+  }
+}
+
+/* Scrollbar fine pour l'onglet de contenu */
+.scrollbar-thin {
+  scrollbar-width: thin;
+  scrollbar-color: #44403c transparent;
+}
+.scrollbar-thin::-webkit-scrollbar {
+  width: 4px;
+}
+.scrollbar-thin::-webkit-scrollbar-track {
+  background: transparent;
+}
+.scrollbar-thin::-webkit-scrollbar-thumb {
+  background-color: #44403c;
+  border-radius: 2px;
+}
+
+/* ── Base resets pour l'environnement OBR iframe ─────────────── */
+* {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+  margin: 0;
+  padding: 0;
+  overflow: hidden;
+}
+
+body {
+  font-family:
+    ui-sans-serif,
+    system-ui,
+    -apple-system,
+    sans-serif;
+  -webkit-font-smoothing: antialiased;
+  background: #0c0a09; /* stone-950 */
+}
+
+/* Remove number input spinners (they clutter the stat boxes) */
+input[type="number"]::-webkit-inner-spin-button,
+input[type="number"]::-webkit-outer-spin-button {
+  -webkit-appearance: none;
+  margin: 0;
+}
+input[type="number"] {
+  -moz-appearance: textfield;
+  appearance: textfield;
+}
