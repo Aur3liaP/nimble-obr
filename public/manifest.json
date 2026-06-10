@@ -1,0 +1,13 @@
+{
+  "manifest_version": 1,
+  "name": "Nimble Character Sheet",
+  "version": "1.0.0",
+  "description": "Interactive character sheet for the Nimble TTRPG system.",
+  "author": "Nimble OBR",
+  "icon": "/icon.svg",
+  "action": {
+    "title": "Nimble Sheet",
+    "icon": "/icon.svg",
+    "popover": "/"
+  }
+}

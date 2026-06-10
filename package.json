@@ -13,6 +13,7 @@
   "dependencies": {
     "@owlbear-rodeo/sdk": "^3.1.0",
     "@tailwindcss/vite": "^4.3.0",
+    "@vitejs/plugin-basic-ssl": "^2.3.0",
     "react": "^19.2.6",
     "react-dom": "^19.2.6",
     "tailwindcss": "^4.3.0"
