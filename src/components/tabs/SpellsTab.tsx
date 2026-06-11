@@ -1,187 +1,137 @@
-/**
- * SpellsTab – Spells & cantrips management.
- * Shows mana pool, filters by tier, and allows rolling spells.
- */
+import { useState } from "react";
+import type { NimbleCharacter, CharacterAction, SpellSchool, DiceRollRequest } from "../../types/character";
+import { DiceRollModal } from "../ui/DiceRollModal";
+import { resolveFormulaDisplay } from "../../utils/formulaParser";
 
-import { useState } from 'react';
-import type { NimbleCharacter, CharacterAction } from '../../types/character';
-import { DiceRollModal } from '../ui/DiceRollModal';
-import type { DiceRollRequest } from '../../types/character';
-import { resolveFormulaDisplay } from '../../utils/formulaParser';
-
-interface SpellsTabProps {
+interface Props {
   character: NimbleCharacter;
   canEdit: boolean;
   isGM: boolean;
-  onUpdate: (updates: Partial<NimbleCharacter>) => void;
+  onUpdate: (u: Partial<NimbleCharacter>) => void;
   onRoll: (req: DiceRollRequest) => void;
 }
 
-const SPELL_TIER_LABELS: Record<number, string> = {
-  0: 'Cantrips',
-  1: 'Tier I',
-  2: 'Tier II',
-  3: 'Tier III',
-  4: 'Tier IV',
+const TIER_LABELS: Record<number, string> = { 0: "Cantrips", 1: "Tier I", 2: "Tier II", 3: "Tier III", 4: "Tier IV" };
+
+const SCHOOL_STYLES: Record<SpellSchool, string> = {
+  fire:       "text-orange-300 border-orange-800/60 bg-orange-950/30",
+  ice:        "text-cyan-300 border-cyan-800/60 bg-cyan-950/30",
+  lightning:  "text-yellow-300 border-yellow-800/60 bg-yellow-950/30",
+  wind:       "text-teal-300 border-teal-800/60 bg-teal-950/30",
+  radiant:    "text-amber-300 border-amber-800/60 bg-amber-950/30",
+  necrotic:   "text-purple-300 border-purple-800/60 bg-purple-950/30",
+  terramancy: "text-lime-300 border-lime-800/60 bg-lime-950/30",
+  utility:    "text-stone-300 border-stone-600/60 bg-stone-800/30",
 };
 
-export function SpellsTab({ character, canEdit, isGM, onUpdate, onRoll }: SpellsTabProps) {
+const SCHOOL_ICONS: Record<SpellSchool, string> = {
+  fire: "🔥", ice: "❄️", lightning: "⚡", wind: "💨",
+  radiant: "✨", necrotic: "💀", terramancy: "🌿", utility: "🔮",
+};
+
+const SCHOOLS: SpellSchool[] = ["fire", "ice", "lightning", "wind", "radiant", "necrotic", "terramancy", "utility"];
+
+export function SpellsTab({ character, canEdit, isGM, onUpdate, onRoll }: Props) {
   const [rollPending, setRollPending] = useState<{ label: string; formula: string } | null>(null);
   const [addingSpell, setAddingSpell] = useState(false);
-  const [filterTier, setFilterTier] = useState<number | 'all'>('all');
+  const [filterTier, setFilterTier] = useState<number | "all">("all");
 
-  const spells = character.actions.filter((a) => a.type === 'spell');
-
-  const tiers = [
-    ...new Set(spells.map((s) => s.spellTier ?? 0)),
-  ].sort();
-
-  const visibleSpells = filterTier === 'all'
-    ? spells
-    : spells.filter((s) => (s.spellTier ?? 0) === filterTier);
-
-  const handleSpellClick = (spell: CharacterAction) => {
-    if (!spell.formula && !spell.damage) return;
-    setRollPending({ label: spell.name, formula: spell.formula || spell.damage });
-  };
-
-  const deleteSpell = (id: string) => {
-    if (!canEdit) return;
-    onUpdate({ actions: character.actions.filter((a) => a.id !== id) });
-  };
-
-  const toggleFavorite = (id: string) => {
-    if (!canEdit) return;
-    onUpdate({
-      actions: character.actions.map((a) =>
-        a.id === id ? { ...a, isFavorite: !a.isFavorite } : a
-      ),
-    });
-  };
+  const spells = character.actions.filter((a) => a.type === "spell");
+  const tiers = [...new Set(spells.map((s) => s.spellTier ?? 0))].sort();
+  const visible = filterTier === "all" ? spells : spells.filter((s) => (s.spellTier ?? 0) === filterTier);
 
   return (
     <div className="flex flex-col gap-3 p-3">
 
-      {/* ── Mana Pool ──────────────────────────────────────────────── */}
+      {/* ── Mana ─────────────────────────────────────────────────── */}
       <div className="bento-card flex items-center gap-4">
         <div className="flex flex-col items-center px-4 py-2 rounded-lg bg-violet-950/40 border border-violet-800/40">
           <span className="text-[10px] text-violet-400 uppercase tracking-wider">Mana</span>
           <div className="flex items-baseline gap-1">
-            {canEdit ? (
-              <input
-                type="number"
-                value={character.mana}
-                min={0}
-                max={character.maxMana}
-                onChange={(e) => onUpdate({ mana: parseInt(e.target.value) || 0 })}
-                className="w-14 text-center text-3xl font-black bg-transparent text-violet-200 outline-none border-b border-violet-800 focus:border-violet-500"
-              />
-            ) : (
-              <span className="text-3xl font-black text-violet-200">{character.mana}</span>
-            )}
+            <input type="number" value={character.mana} min={0} max={character.maxMana} disabled={!canEdit}
+              onChange={(e) => onUpdate({ mana: Math.max(0, parseInt(e.target.value) || 0) })}
+              className="w-14 text-center text-3xl font-black bg-transparent text-violet-200 outline-none border-b border-violet-800 focus:border-violet-500 disabled:border-transparent"
+            />
             <span className="text-stone-500 text-sm"> / </span>
-            {canEdit ? (
-              <input
-                type="number"
-                value={character.maxMana}
-                min={0}
-                onChange={(e) => onUpdate({ maxMana: parseInt(e.target.value) || 0 })}
-                className="w-10 text-center text-base font-semibold bg-transparent text-violet-300 outline-none border-b border-stone-700 focus:border-violet-500"
-              />
-            ) : (
-              <span className="text-base font-semibold text-violet-300">{character.maxMana}</span>
-            )}
-          </div>
-        </div>
-
-        <div className="flex-1">
-          <div className="h-2 bg-stone-800 rounded-full overflow-hidden">
-            <div
-              className="h-full rounded-full transition-all duration-300 bg-linear-to-r from-violet-700 to-violet-400"
-              style={{ width: `${character.maxMana > 0 ? (character.mana / character.maxMana) * 100 : 0}%` }}
+            <input type="number" value={character.maxMana} min={0} disabled={!canEdit}
+              onChange={(e) => onUpdate({ maxMana: parseInt(e.target.value) || 0 })}
+              className="w-10 text-center text-base font-semibold bg-transparent text-violet-300 outline-none border-b border-stone-700 focus:border-violet-500 disabled:border-transparent"
             />
           </div>
-          <p className="text-[10px] text-stone-500 mt-1">
-            Spell tier ≈ mana cost · cantrips are free
-          </p>
+        </div>
+        <div className="flex-1">
+          <div className="h-2 bg-stone-800 rounded-full overflow-hidden">
+            <div className="h-full rounded-full transition-all bg-gradient-to-r from-violet-700 to-violet-400"
+              style={{ width: `${character.maxMana > 0 ? (character.mana / character.maxMana) * 100 : 0}%` }} />
+          </div>
+          <p className="text-[10px] text-stone-500 mt-1">Spell tier ≈ mana cost · cantrips are free</p>
         </div>
       </div>
 
-      {/* ── Filter bar ─────────────────────────────────────────────── */}
+      {/* ── Tier filter ───────────────────────────────────────────── */}
       {tiers.length > 1 && (
         <div className="flex gap-1.5 flex-wrap">
-          {['all' as const, ...tiers].map((t) => (
-            <button
-              key={t}
-              onClick={() => setFilterTier(t)}
-              className={`
-                px-2.5 py-1 rounded-full text-xs font-medium border transition-all
-                ${filterTier === t
-                  ? 'border-violet-600 bg-violet-900/50 text-violet-300'
-                  : 'border-stone-700 bg-stone-800/40 text-stone-400 hover:border-stone-600'}
-              `}
-            >
-              {t === 'all' ? 'All' : SPELL_TIER_LABELS[t as number] ?? `Tier ${t}`}
+          {(["all" as const, ...tiers]).map((t) => (
+            <button key={t} onClick={() => setFilterTier(t)}
+              className={`px-2.5 py-1 rounded-full text-xs font-medium border transition-all ${
+                filterTier === t
+                  ? "border-violet-600 bg-violet-900/50 text-violet-300"
+                  : "border-stone-700 bg-stone-800/40 text-stone-400 hover:border-stone-600"
+              }`}>
+              {t === "all" ? "All" : TIER_LABELS[t as number] ?? `Tier ${t}`}
             </button>
           ))}
         </div>
       )}
 
-      {/* ── Spell list ─────────────────────────────────────────────── */}
+      {/* ── Spell list ───────────────────────────────────────────── */}
       <div className="bento-card">
         <div className="flex items-center justify-between mb-2">
           <p className="bento-label">Spells & Cantrips</p>
           {canEdit && (
-            <button
-              onClick={() => setAddingSpell(true)}
-              className="text-xs text-violet-400 hover:text-violet-300 border border-violet-800/60 px-2 py-0.5 rounded transition-colors"
-            >
+            <button onClick={() => setAddingSpell(true)}
+              className="text-xs text-violet-400 hover:text-violet-300 border border-violet-800/60 px-2 py-0.5 rounded transition-colors">
               + Add spell
             </button>
           )}
         </div>
-
-        {visibleSpells.length === 0 ? (
-          <p className="text-xs text-stone-600 italic text-center py-6">
-            {spells.length === 0 ? 'No spells known.' : 'No spells for this tier.'}
-          </p>
+        {visible.length === 0 ? (
+          <p className="text-xs text-stone-600 italic text-center py-6">No spells known.</p>
         ) : (
           <div className="flex flex-col gap-1.5">
-            {visibleSpells.map((spell) => (
-              <SpellRow
-                key={spell.id}
-                spell={spell}
-                character={character}
-                canEdit={canEdit}
-                onRoll={() => handleSpellClick(spell)}
-                onToggleFavorite={() => toggleFavorite(spell.id)}
-                onDelete={() => deleteSpell(spell.id)}
+            {visible.map((spell) => (
+              <SpellRow key={spell.id} spell={spell} character={character} canEdit={canEdit}
+                onRoll={() => setRollPending({ label: spell.name, formula: spell.formula || spell.damage })}
+                onToggleFavorite={() => onUpdate({ actions: character.actions.map((a) => a.id === spell.id ? { ...a, isFavorite: !a.isFavorite } : a) })}
+                onDelete={() => onUpdate({ actions: character.actions.filter((a) => a.id !== spell.id) })}
               />
             ))}
           </div>
         )}
       </div>
 
-      {/* Modals */}
+      {/* ── Notes ────────────────────────────────────────────────── */}
+      <div className="bento-card">
+        <p className="bento-label mb-2">Spell Notes</p>
+        {canEdit ? (
+          <textarea value={character.notes} onChange={(e) => onUpdate({ notes: e.target.value })}
+            rows={3} placeholder="Concentration, spell-specific rules…"
+            className="w-full bg-stone-900/60 border border-stone-700 rounded-lg px-3 py-2 text-xs text-stone-300 outline-none resize-none focus:border-amber-700/60 placeholder-stone-600"
+          />
+        ) : (
+          <p className="text-xs text-stone-400 whitespace-pre-wrap">{character.notes || <span className="text-stone-600 italic">No notes.</span>}</p>
+        )}
+      </div>
+
       {addingSpell && (
         <AddSpellModal
-          onAdd={(spell) => {
-            onUpdate({ actions: [...character.actions, spell] });
-            setAddingSpell(false);
-          }}
+          onAdd={(s) => { onUpdate({ actions: [...character.actions, s] }); setAddingSpell(false); }}
           onCancel={() => setAddingSpell(false)}
         />
       )}
-
       {rollPending && (
-        <DiceRollModal
-          label={rollPending.label}
-          formula={rollPending.formula}
-          isGM={isGM}
-          onConfirm={(mode, advantageCount, hidden) => {
-            onRoll({ label: rollPending.label, formula: rollPending.formula, mode, advantageCount, hidden });
-            setRollPending(null);
-          }}
+        <DiceRollModal label={rollPending.label} formula={rollPending.formula} isGM={isGM}
+          onConfirm={(mode, ac, hidden) => { onRoll({ label: rollPending.label, formula: rollPending.formula, mode, advantageCount: ac, hidden }); setRollPending(null); }}
           onCancel={() => setRollPending(null)}
         />
       )}
@@ -189,76 +139,50 @@ export function SpellsTab({ character, canEdit, isGM, onUpdate, onRoll }: Spells
   );
 }
 
-// ─── SpellRow ─────────────────────────────────────────────────────
-
-function SpellRow({
-  spell,
-  character,
-  canEdit,
-  onRoll,
-  onToggleFavorite,
-  onDelete,
-}: {
-  spell: CharacterAction;
-  character: NimbleCharacter;
-  canEdit: boolean;
-  onRoll: () => void;
-  onToggleFavorite: () => void;
-  onDelete: () => void;
+function SpellRow({ spell, character, canEdit, onRoll, onToggleFavorite, onDelete }: {
+  spell: CharacterAction; character: NimbleCharacter; canEdit: boolean;
+  onRoll: () => void; onToggleFavorite: () => void; onDelete: () => void;
 }) {
   const [expanded, setExpanded] = useState(false);
   const tier = spell.spellTier ?? 0;
-  const tierLabel = SPELL_TIER_LABELS[tier] ?? `Tier ${tier}`;
+  const school = spell.spellSchool;
+  const schoolStyle = school ? SCHOOL_STYLES[school] : "text-violet-300 border-violet-800/60 bg-violet-950/30";
+  const schoolIcon = school ? SCHOOL_ICONS[school] : "✨";
   const resolvedFormula = resolveFormulaDisplay(spell.formula || spell.damage, character);
 
   return (
     <div className="rounded-lg border border-stone-700/40 bg-stone-900/40 overflow-hidden">
-      <div
-        className="flex items-center gap-2 px-2.5 py-2 cursor-pointer"
-        onClick={() => setExpanded(!expanded)}
-      >
-        <span className="text-base">{tier === 0 ? '✦' : '✨'}</span>
-
+      <div className="flex items-center gap-2 px-2.5 py-2 cursor-pointer" onClick={() => setExpanded(!expanded)}>
+        <span>{schoolIcon}</span>
         <div className="flex-1 min-w-0">
-          <div className="flex items-center gap-2">
+          <div className="flex items-center gap-1.5 flex-wrap">
             <span className="text-xs font-semibold text-stone-200 truncate">{spell.name}</span>
-            <span className="text-[9px] font-bold uppercase px-1.5 py-0.5 rounded border text-violet-300 border-violet-800/60 bg-violet-950/30">
-              {tierLabel}
+            <span className={`text-[9px] font-bold uppercase px-1.5 py-0.5 rounded border ${schoolStyle}`}>
+              {school ?? (tier === 0 ? "cantrip" : TIER_LABELS[tier])}
             </span>
-            {tier > 0 && spell.manaCost != null && (
+            {tier > 0 && <span className="text-[9px] text-violet-400">T{tier}</span>}
+            {spell.manaCost != null && spell.manaCost > 0 && (
               <span className="text-[9px] text-violet-400">✦{spell.manaCost}</span>
             )}
           </div>
-          {resolvedFormula && (
-            <span className="text-[10px] font-mono text-amber-300/80">{resolvedFormula}</span>
-          )}
+          {resolvedFormula && <span className="text-[10px] font-mono text-amber-300/80">{resolvedFormula}</span>}
         </div>
-
         <div className="flex items-center gap-1">
-          <button
-            onClick={(e) => { e.stopPropagation(); onToggleFavorite(); }}
-            className={`text-sm transition-colors ${spell.isFavorite ? 'text-amber-400' : 'text-stone-600 hover:text-stone-400'}`}
-          >
-            ⭐
-          </button>
+          <button onClick={(e) => { e.stopPropagation(); onToggleFavorite(); }}
+            className={`text-sm ${spell.isFavorite ? "text-amber-400" : "text-stone-600 hover:text-stone-400"}`}>⭐</button>
           {(spell.formula || spell.damage) && (
-            <button
-              onClick={(e) => { e.stopPropagation(); onRoll(); }}
-              className="px-2 py-1 rounded bg-violet-900/50 hover:bg-violet-800/60 text-violet-300 text-[10px] font-bold border border-violet-800/40 transition-all active:scale-95"
-            >
+            <button onClick={(e) => { e.stopPropagation(); onRoll(); }}
+              className="px-2 py-1 rounded bg-violet-900/50 hover:bg-violet-800/60 text-violet-300 text-[10px] font-bold border border-violet-800/40 transition-all active:scale-95">
               🎲
             </button>
           )}
         </div>
       </div>
-
       {expanded && (
         <div className="px-3 pb-2.5 border-t border-stone-700/40 pt-2">
-          <p className="text-xs text-stone-400 leading-relaxed">{spell.description || 'No description.'}</p>
+          <p className="text-xs text-stone-400 leading-relaxed">{spell.description || "No description."}</p>
           {canEdit && (
-            <button onClick={onDelete} className="mt-2 text-[10px] text-rose-500 hover:text-rose-400 transition-colors">
-              Remove spell
-            </button>
+            <button onClick={onDelete} className="mt-2 text-[10px] text-rose-500 hover:text-rose-400">Remove</button>
           )}
         </div>
       )}
@@ -266,106 +190,65 @@ function SpellRow({
   );
 }
 
-// ─── AddSpellModal ────────────────────────────────────────────────
-
-function AddSpellModal({
-  onAdd,
-  onCancel,
-}: {
-  onAdd: (spell: CharacterAction) => void;
-  onCancel: () => void;
-}) {
-  const [form, setForm] = useState({
-    name: '',
-    tier: 0,
-    manaCost: 0,
-    range: '',
-    damage: '',
-    description: '',
-  });
-
-  const set = (k: string, v: unknown) => setForm((prev) => ({ ...prev, [k]: v }));
-
-  const handleSubmit = () => {
-    if (!form.name) return;
-    onAdd({
-      id: `spell-${Date.now()}`,
-      name: form.name,
-      type: 'spell',
-      range: form.range,
-      damage: form.damage,
-      formula: form.damage,
-      description: form.description,
-      isFavorite: false,
-      isCustom: true,
-      spellTier: form.tier,
-      manaCost: form.tier === 0 ? 0 : form.manaCost,
-    });
-  };
+function AddSpellModal({ onAdd, onCancel }: { onAdd: (s: CharacterAction) => void; onCancel: () => void }) {
+  const [form, setForm] = useState({ name: "", tier: 0, manaCost: 0, school: "" as SpellSchool | "", range: "", damage: "", description: "" });
+  const set = (k: string, v: string | number) => setForm((p) => ({ ...p, [k]: v }));
 
   return (
-    <div
-      className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 backdrop-blur-sm"
-      onClick={(e) => { if (e.target === e.currentTarget) onCancel(); }}
-    >
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 backdrop-blur-sm"
+      onClick={(e) => { if (e.target === e.currentTarget) onCancel(); }}>
       <div className="w-80 rounded-xl border border-stone-700 bg-stone-900 shadow-2xl overflow-hidden">
         <div className="bg-stone-800 px-4 py-3 border-b border-stone-700">
           <h3 className="text-sm font-bold text-violet-300">New Spell / Cantrip</h3>
         </div>
-
         <div className="p-4 flex flex-col gap-3">
-          <div className="flex flex-col gap-0.5">
-            <span className="text-[10px] text-stone-500 uppercase">Name *</span>
-            <input value={form.name} onChange={(e) => set('name', e.target.value)}
-              className="bg-stone-900/60 border border-stone-700 rounded px-2 py-1 text-xs text-stone-200 outline-none focus:border-violet-600" />
-          </div>
-
+          <SInput label="Name *" value={form.name} onChange={(v) => set("name", v)} />
           <div className="grid grid-cols-2 gap-2">
             <div className="flex flex-col gap-0.5">
               <span className="text-[10px] text-stone-500 uppercase">Tier</span>
-              <select value={form.tier} onChange={(e) => { const t = parseInt(e.target.value); set('tier', t); set('manaCost', t); }}
+              <select value={form.tier} onChange={(e) => { const t = parseInt(e.target.value); set("tier", t); set("manaCost", t); }}
                 className="bg-stone-800 border border-stone-700 rounded px-2 py-1.5 text-xs text-stone-200 outline-none focus:border-violet-600">
-                {[0, 1, 2, 3, 4].map((t) => (
-                  <option key={t} value={t}>{SPELL_TIER_LABELS[t]}</option>
-                ))}
+                {[0, 1, 2, 3, 4].map((t) => <option key={t} value={t}>{TIER_LABELS[t]}</option>)}
               </select>
             </div>
-            {form.tier > 0 && (
-              <div className="flex flex-col gap-0.5">
-                <span className="text-[10px] text-stone-500 uppercase">Mana cost</span>
-                <input type="number" value={form.manaCost} min={0}
-                  onChange={(e) => set('manaCost', parseInt(e.target.value) || 0)}
-                  className="bg-stone-900/60 border border-stone-700 rounded px-2 py-1 text-xs text-stone-200 outline-none focus:border-violet-600" />
-              </div>
-            )}
+            <div className="flex flex-col gap-0.5">
+              <span className="text-[10px] text-stone-500 uppercase">School</span>
+              <select value={form.school} onChange={(e) => set("school", e.target.value)}
+                className="bg-stone-800 border border-stone-700 rounded px-2 py-1.5 text-xs text-stone-200 outline-none focus:border-violet-600">
+                <option value="">— none —</option>
+                {SCHOOLS.map((s) => <option key={s} value={s}>{s}</option>)}
+              </select>
+            </div>
           </div>
-
           <div className="grid grid-cols-2 gap-2">
-            <div className="flex flex-col gap-0.5">
-              <span className="text-[10px] text-stone-500 uppercase">Range</span>
-              <input value={form.range} placeholder="e.g. range 6" onChange={(e) => set('range', e.target.value)}
-                className="bg-stone-900/60 border border-stone-700 rounded px-2 py-1 text-xs text-stone-200 outline-none focus:border-violet-600 placeholder-stone-600" />
-            </div>
-            <div className="flex flex-col gap-0.5">
-              <span className="text-[10px] text-stone-500 uppercase">Damage</span>
-              <input value={form.damage} placeholder="e.g. 2d6+INT" onChange={(e) => set('damage', e.target.value)}
-                className="bg-stone-900/60 border border-stone-700 rounded px-2 py-1 text-xs text-stone-200 outline-none focus:border-violet-600 placeholder-stone-600" />
-            </div>
+            <SInput label="Range" value={form.range} onChange={(v) => set("range", v)} placeholder="e.g. range 6" />
+            <SInput label="Damage" value={form.damage} onChange={(v) => set("damage", v)} placeholder="e.g. 2d6+INT" />
           </div>
-
+          {form.tier > 0 && (
+            <SInput label="Mana cost" value={String(form.manaCost)} onChange={(v) => set("manaCost", parseInt(v) || 0)} type="number" />
+          )}
           <div className="flex flex-col gap-0.5">
             <span className="text-[10px] text-stone-500 uppercase">Description</span>
-            <textarea value={form.description} rows={3}
-              onChange={(e) => set('description', e.target.value)}
+            <textarea value={form.description} rows={3} onChange={(e) => set("description", e.target.value)}
               className="bg-stone-900/60 border border-stone-700 rounded px-2 py-1 text-xs text-stone-300 outline-none resize-none focus:border-violet-600" />
           </div>
         </div>
-
         <div className="flex gap-2 px-4 pb-4">
           <button onClick={onCancel} className="flex-1 py-2 rounded-lg border border-stone-700 text-stone-400 text-sm hover:bg-stone-800 transition-colors">Cancel</button>
-          <button onClick={handleSubmit} className="flex-1 py-2 rounded-lg bg-violet-800 hover:bg-violet-700 text-violet-100 text-sm font-bold transition-colors">Add</button>
+          <button onClick={() => { if (!form.name) return; onAdd({ id: `sp-${Date.now()}`, name: form.name, type: "spell", range: form.range, damage: form.damage, formula: form.damage, description: form.description, isFavorite: false, isCustom: true, spellTier: form.tier, spellSchool: form.school as SpellSchool || undefined, manaCost: form.tier === 0 ? 0 : form.manaCost }); }}
+            className="flex-1 py-2 rounded-lg bg-violet-800 hover:bg-violet-700 text-violet-100 text-sm font-bold transition-colors">Add</button>
         </div>
       </div>
+    </div>
+  );
+}
+
+function SInput({ label, value, onChange, placeholder, type = "text" }: { label: string; value: string; onChange: (v: string) => void; placeholder?: string; type?: string }) {
+  return (
+    <div className="flex flex-col gap-0.5">
+      <span className="text-[10px] text-stone-500 uppercase">{label}</span>
+      <input type={type} value={value} placeholder={placeholder} onChange={(e) => onChange(e.target.value)}
+        className="bg-stone-900/60 border border-stone-700 rounded px-2 py-1 text-xs text-stone-200 outline-none focus:border-violet-600 placeholder-stone-600" />
     </div>
   );
 }

@@ -29,6 +29,7 @@ export interface UseOBRReturn {
   rollInitiative: (mode?: RollMode) => Promise<DiceRollResult | null>;
   recentRolls: DiceRollResult[];
   createSheetForToken: (item: Item) => Promise<void>;
+  claimToken: () => Promise<void>;
 }
 
 const ROLL_LOG_KEY = `${METADATA_KEY}/roll_log`;
@@ -45,85 +46,67 @@ export function useOBR(): UseOBRReturn {
   const [recentRolls, setRecentRolls] = useState<DiceRollResult[]>([]);
 
   const characterRef = useRef<NimbleCharacter | null>(null);
+  const playerIdRef = useRef<string>("");
 
-  // Synchronisation sécurisée de la ref
-  useEffect(() => {
-    characterRef.current = character;
-  }, [character]);
+  useEffect(() => { characterRef.current = character; }, [character]);
+  useEffect(() => { playerIdRef.current = playerId; }, [playerId]);
 
   const isGM = role === "GM";
-  const canEdit =
-    isGM || (character !== null && character.ownerId === playerId);
+  const canEdit = isGM || (character !== null && character.ownerId === playerId);
 
-  const loadCharacterFromItem = useCallback(
-    (item: Item): NimbleCharacter | null => {
-      return (item.metadata?.[METADATA_KEY] as NimbleCharacter) ?? null;
-    },
-    [],
-  );
+  const loadCharacterFromItem = useCallback((item: Item): NimbleCharacter | null => {
+    return (item.metadata?.[METADATA_KEY] as NimbleCharacter) ?? null;
+  }, []);
 
-  const handleSelectionChange = useCallback(
-    async (selectedIds: string[]) => {
-      if (!selectedIds || selectedIds.length === 0) {
-        setSelectedItems([]);
-        setSelectionState("none");
+  const handleSelectionChange = useCallback(async (selectedIds: string[]) => {
+    if (!selectedIds || selectedIds.length === 0) {
+      setSelectedItems([]);
+      setSelectionState("none");
+      setCharacter(null);
+      return;
+    }
+    const items = await OBR.scene.items.getItems(selectedIds);
+    const tokens = items.filter((i) => i.layer === "CHARACTER");
+    setSelectedItems(tokens);
+
+    if (tokens.length === 0) {
+      setSelectionState("none");
+      setCharacter(null);
+    } else if (tokens.length > 1) {
+      setSelectionState("multiple");
+      setCharacter(loadCharacterFromItem(tokens[0]));
+    } else {
+      const loaded = loadCharacterFromItem(tokens[0]);
+      if (!loaded) {
+        setSelectionState("no-sheet");
         setCharacter(null);
-        return;
-      }
-
-      const items = await OBR.scene.items.getItems(selectedIds);
-      // Filtrer pour ne garder que les tokens de personnages
-      const tokens = items.filter((i) => i.layer === "CHARACTER");
-      setSelectedItems(tokens);
-
-      if (tokens.length === 0) {
-        setSelectionState("none");
-        setCharacter(null);
-      } else if (tokens.length > 1) {
-        setSelectionState("multiple");
-        setCharacter(loadCharacterFromItem(tokens[0]));
       } else {
-        const loaded = loadCharacterFromItem(tokens[0]);
-        if (!loaded) {
-          setSelectionState("no-sheet");
-          setCharacter(null);
-        } else {
-          setCharacter(loaded);
-          setSelectionState("ready");
-        }
+        setCharacter(loaded);
+        setSelectionState("ready");
       }
-    },
-    [loadCharacterFromItem],
-  );
+    }
+  }, [loadCharacterFromItem]);
 
   useEffect(() => {
     if (!OBR.isAvailable) return;
-
     OBR.onReady(async () => {
       const [pid, pname, prole, initialSelection] = await Promise.all([
         OBR.player.getId(),
         OBR.player.getName(),
         OBR.player.getRole(),
         OBR.player.getSelection(),
-
         OBR.action.setWidth(500),
         OBR.action.setHeight(700),
       ]);
-
       setPlayerId(pid);
       setPlayerName(pname);
       setRole(prole as OBRRole);
       setIsReady(true);
-
-      // Charger la sélection initiale
       await handleSelectionChange(initialSelection || []);
 
-      // Écouter les changements de sélection (C'EST ICI QUE CA SE PASSE)
       OBR.player.onChange(async (player: Player) => {
         await handleSelectionChange(player.selection || []);
       });
-
-      // Écouter les changements sur les items de la scène (synchro MJ/Joueur)
       OBR.scene.items.onChange(async (items) => {
         const currentChar = characterRef.current;
         if (!currentChar) return;
@@ -133,7 +116,6 @@ export function useOBR(): UseOBRReturn {
           if (fresh) setCharacter(fresh);
         }
       });
-
       OBR.scene.onMetadataChange((meta) => {
         const log = meta[ROLL_LOG_KEY] as DiceRollResult[] | undefined;
         if (log) setRecentRolls(log.slice(-MAX_ROLL_HISTORY));
@@ -145,36 +127,32 @@ export function useOBR(): UseOBRReturn {
     const current = characterRef.current;
     if (!current) return;
     const updated = { ...current, ...updates, updatedAt: Date.now() };
-
-    setCharacter(updated); // Update local (optimiste)
+    setCharacter(updated);
     await OBR.scene.items.updateItems([current.tokenId], (items) => {
-      for (const item of items) {
-        item.metadata[METADATA_KEY] = updated;
-      }
+      for (const item of items) { item.metadata[METADATA_KEY] = updated; }
     });
   };
 
-  const handleRoll = async (req: DiceRollRequest) => {
+  const handleRoll = async (req: DiceRollRequest): Promise<DiceRollResult | null> => {
     const current = characterRef.current;
     if (!current) return null;
-
-    const rolled = rollFormula(req.formula, current, req.mode);
+    const rolled = rollFormula(req.formula, current, req.mode, req.advantageCount ?? 0);
     const result: DiceRollResult = {
       ...rolled,
       label: req.label,
-      playerId,
+      formula: req.formula,
+      playerId: playerIdRef.current,
       playerName,
       timestamp: Date.now(),
       hidden: req.hidden || false,
     };
-
     if (!result.hidden) {
       const meta = await OBR.scene.getMetadata();
       const existing = (meta[ROLL_LOG_KEY] as DiceRollResult[]) || [];
       const newLog = [...existing, result].slice(-MAX_ROLL_HISTORY);
       await OBR.scene.setMetadata({ [ROLL_LOG_KEY]: newLog });
     }
-
+    setRecentRolls((prev) => [...prev, result].slice(-MAX_ROLL_HISTORY));
     return result;
   };
 
@@ -189,30 +167,24 @@ export function useOBR(): UseOBRReturn {
   };
 
   const createSheetForToken = async (item: Item) => {
-    const newChar = createDefaultCharacter(item.id, playerId);
+    const newChar = createDefaultCharacter(item.id, playerIdRef.current);
     await OBR.scene.items.updateItems([item.id], (items) => {
-      for (const i of items) {
-        i.metadata[METADATA_KEY] = newChar;
-      }
+      for (const i of items) { i.metadata[METADATA_KEY] = newChar; }
     });
     setCharacter(newChar);
     setSelectionState("ready");
   };
 
+  const claimToken = async () => {
+    const current = characterRef.current;
+    if (!current) return;
+    await updateCharacter({ ownerId: playerIdRef.current });
+  };
+
   return {
-    isReady,
-    selectionState,
-    character,
-    selectedItems,
-    playerId,
-    playerName,
-    role,
-    canEdit,
-    isGM,
-    updateCharacter,
-    handleRoll,
-    rollInitiative,
-    recentRolls,
-    createSheetForToken,
+    isReady, selectionState, character, selectedItems,
+    playerId, playerName, role, canEdit, isGM,
+    updateCharacter, handleRoll, rollInitiative, recentRolls,
+    createSheetForToken, claimToken,
   };
 }
