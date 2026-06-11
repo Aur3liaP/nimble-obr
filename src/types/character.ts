@@ -40,6 +40,7 @@ export interface CharacterAction {
   spellSchool?: SpellSchool;
   slots?: number;
   isCustom?: boolean;
+  actionCost?: number;
 }
 
 export interface InventoryItem {
@@ -55,6 +56,8 @@ export interface InventoryItem {
   /** If true, this item is treated as armor and can set the armor value */
   isArmor?: boolean;
   armorValue?: number;
+  // ActionCost for weapons & potions
+  actionCost?: number;
 }
 
 export interface NimbleCharacter {
