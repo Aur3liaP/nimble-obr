@@ -5,14 +5,19 @@ interface RollLogProps {
   rolls: DiceRollResult[];
   isGM: boolean;
   currentPlayerId: string;
-  /** When true, renders inline (full list) instead of floating chip */
   inline?: boolean;
+}
+
+function formatTime(timestamp: number): string {
+  const d = new Date(timestamp);
+  return `${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}`;
 }
 
 export function RollLog({ rolls, isGM, currentPlayerId, inline = false }: RollLogProps) {
   const [isOpen, setIsOpen] = useState(false);
 
-  const visible = isGM ? rolls : rolls.filter((r) => !r.hidden);
+  // Players only see non-hidden rolls; GM sees everything
+  const visible = (isGM ? rolls : rolls.filter((r) => !r.hidden)).slice(-20);
 
   if (inline) {
     return (
@@ -88,9 +93,12 @@ function RollEntry({ roll, isMine, isGM }: { roll: DiceRollResult; isMine: boole
         <span className="text-stone-500 font-mono">[{roll.kept.join(", ")}]</span>
         {roll.modifier !== 0 && <span className="text-stone-400">{roll.modifier > 0 ? "+" : ""}{roll.modifier}</span>}
       </div>
+      {/* Player name + time — no character name prefix */}
       <div className="flex items-center gap-1.5 mt-0.5">
-        <span className="text-stone-600">{roll.playerName}</span>
-        {roll.hidden && isGM && <span className="text-stone-500 italic">hidden</span>}
+        <span className="text-stone-500 text-[10px]">{roll.playerName}</span>
+        <span className="text-stone-600 text-[10px]">·</span>
+        <span className="text-stone-600 text-[10px]">{formatTime(roll.timestamp)}</span>
+        {roll.hidden && isGM && <span className="text-stone-500 italic text-[10px]">· hidden</span>}
       </div>
     </div>
   );

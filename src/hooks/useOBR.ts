@@ -52,7 +52,13 @@ export function useOBR(): UseOBRReturn {
   useEffect(() => { playerIdRef.current = playerId; }, [playerId]);
 
   const isGM = role === "GM";
-  const canEdit = isGM || (character !== null && character.ownerId === playerId);
+
+  // Fix: unclaimed token (no ownerId) is NOT editable by players — only GM can edit any sheet
+  const canEdit = isGM || (
+    character !== null &&
+    !!character.ownerId &&           // must have an owner
+    character.ownerId === playerId   // and it must be this player
+  );
 
   const loadCharacterFromItem = useCallback((item: Item): NimbleCharacter | null => {
     return (item.metadata?.[METADATA_KEY] as NimbleCharacter) ?? null;
@@ -160,7 +166,7 @@ export function useOBR(): UseOBRReturn {
     const current = characterRef.current;
     if (!current) return null;
     return handleRoll({
-      label: `${current.name} — Initiative`,
+      label: `Initiative`,
       formula: `1d20+${current.stats.dex + (current.initiativeBonus || 0)}`,
       mode,
     });

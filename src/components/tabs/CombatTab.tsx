@@ -1,7 +1,7 @@
 import { useState } from "react";
-import type { NimbleCharacter, CharacterAction, DiceRollRequest, RollMode } from "../../types/character";
+import type { NimbleCharacter, CharacterAction, DiceRollRequest, RollMode, InventoryItem } from "../../types/character";
 import { DiceRollModal } from "../ui/DiceRollModal";
-import { resolveFormulaDisplay } from "../../utils/formulaParser";
+import { resolveFormulaDisplay, evalFormula } from "../../utils/formulaParser";
 
 interface Props {
   character: NimbleCharacter;
@@ -9,7 +9,7 @@ interface Props {
   isGM: boolean;
   onUpdate: (u: Partial<NimbleCharacter>) => void;
   onRoll: (req: DiceRollRequest) => void;
-  onRollInitiative: (mode?: RollMode) => void;
+  onRollInitiative: (mode?: RollMode) => Promise<{ total: number } | null> | void;
 }
 
 const ACTION_COLORS = {
@@ -22,17 +22,43 @@ const ACTION_COLORS = {
 
 const ACTION_ICONS = { melee: "⚔️", ranged: "🏹", spell: "✨", ability: "⚡", item: "🎒" } as const;
 
+/** Compute defense value from equipped armor item + bonus, fallback to pure DEX */
+function computeDefense(character: NimbleCharacter): number {
+  const armorItem = character.inventory.find(
+    (i) => i.id === character.armor.equippedItemId && i.isArmor
+  );
+  if (armorItem && armorItem.formula) {
+    const baseVal = evalFormula(armorItem.formula, character);
+    return baseVal + (character.armor.defenseBonus ?? 0);
+  }
+  // No armor equipped: just DEX
+  return character.stats.dex + (character.armor.defenseBonus ?? 0);
+}
+
+/** Actions from initiative roll result */
+function initiativeToActions(total: number): number {
+  if (total < 10) return 1;
+  if (total < 20) return 2;
+  return 3;
+}
+
 export function CombatTab({ character, canEdit, isGM, onUpdate, onRoll, onRollInitiative }: Props) {
   const [rollPending, setRollPending] = useState<{ label: string; formula: string } | null>(null);
   const [addingAction, setAddingAction] = useState(false);
-  const [actions_used, setActionsUsed] = useState([false, false, false]);
+  const [actionsUsed, setActionsUsed] = useState([false, false, false]);
+  const [initiativeResult, setInitiativeResult] = useState<number | null>(null);
 
-  // DEX-based defense when unarmored
-  const defenseValue = character.armor.equipped && character.armor.value > 0
-    ? character.armor.value
-    : 10 + character.stats.dex;
+  const defenseValue = computeDefense(character);
 
-  const favorites = character.actions.filter((a) => a.isFavorite);
+  // Armor items from inventory
+  const armorItems = character.inventory.filter((i) => i.isArmor);
+  const equippedArmorItem = armorItems.find((i) => i.id === character.armor.equippedItemId);
+
+  const favorites = [
+    ...character.actions.filter((a) => a.isFavorite),
+    ...character.inventory.filter((i) => i.isFavorite && i.formula),
+  ];
+
   const combatActions = character.actions.filter((a) => a.type !== "spell");
 
   const broadcastAction = (label: string) => {
@@ -40,7 +66,7 @@ export function CombatTab({ character, canEdit, isGM, onUpdate, onRoll, onRollIn
   };
 
   const toggleActionUsed = (i: number) => {
-    const next = [...actions_used];
+    const next = [...actionsUsed];
     next[i] = !next[i];
     setActionsUsed(next);
   };
@@ -50,10 +76,24 @@ export function CombatTab({ character, canEdit, isGM, onUpdate, onRoll, onRollIn
     broadcastAction(`${character.name} — Actions reset (new turn)`);
   };
 
+  const handleInitiativeRoll = async (mode: RollMode = "standard") => {
+    const result = await onRollInitiative(mode);
+    if (result && typeof result.total === "number") {
+      const actionCount = initiativeToActions(result.total);
+      setInitiativeResult(result.total);
+      // Mark used slots beyond actionCount
+      setActionsUsed([
+        actionCount < 1,
+        actionCount < 2,
+        actionCount < 3,
+      ]);
+    }
+  };
+
   return (
     <div className="flex flex-col gap-3 p-3">
 
-      {/* ── Quick HP/Wounds (mirror from summary) ───────────────── */}
+      {/* ── Quick HP / Temp HP / Wounds ───────────────────────────── */}
       <div className="bento-card grid grid-cols-2 gap-3">
         <div>
           <p className="bento-label">HP</p>
@@ -64,6 +104,18 @@ export function CombatTab({ character, canEdit, isGM, onUpdate, onRoll, onRollIn
               className="w-14 text-center text-2xl font-black bg-transparent border-b border-stone-700 focus:border-emerald-600 outline-none text-emerald-300 disabled:border-transparent"
             />
             <span className="text-stone-500 text-xs">/ {character.hp.max}</span>
+          </div>
+          {/* Temp HP */}
+          <div className="flex items-center gap-1.5 mt-1">
+            <span className="text-[10px] text-stone-500 uppercase tracking-wider">Temp</span>
+            {canEdit ? (
+              <input type="number" value={character.hp.temp} min={0}
+                onChange={(e) => onUpdate({ hp: { ...character.hp, temp: Math.max(0, parseInt(e.target.value) || 0) } })}
+                className="w-12 text-center text-sm font-semibold bg-transparent border-b border-stone-700/60 focus:border-sky-500 outline-none text-sky-300"
+              />
+            ) : (
+              <span className="text-sm font-semibold text-sky-300">{character.hp.temp}</span>
+            )}
           </div>
           <div className="h-1.5 bg-stone-800 rounded-full overflow-hidden mt-1.5">
             <div className="h-full rounded-full transition-all" style={{
@@ -103,7 +155,7 @@ export function CombatTab({ character, canEdit, isGM, onUpdate, onRoll, onRollIn
           </button>
         </div>
         <div className="flex gap-2">
-          {actions_used.map((used, i) => (
+          {actionsUsed.map((used, i) => (
             <button key={i} onClick={() => toggleActionUsed(i)}
               className={`flex-1 py-2 rounded-lg border-2 font-bold text-sm transition-all ${
                 used
@@ -131,10 +183,15 @@ export function CombatTab({ character, canEdit, isGM, onUpdate, onRoll, onRollIn
             <span className="text-[10px] text-stone-500">DEX</span>
           </div>
           <div className="flex flex-col gap-1.5 flex-1">
-            <button onClick={() => onRollInitiative("standard")}
+            <button onClick={() => handleInitiativeRoll("standard")}
               className="w-full py-2 rounded-lg border border-amber-700/60 bg-amber-950/40 text-amber-300 text-sm font-bold hover:bg-amber-900/50 transition-all active:scale-95">
               🎲 Roll Initiative
             </button>
+            {initiativeResult !== null && (
+              <p className="text-[10px] text-amber-400 text-center">
+                Result: {initiativeResult} → {initiativeToActions(initiativeResult)} action{initiativeToActions(initiativeResult) > 1 ? "s" : ""}
+              </p>
+            )}
             {canEdit && (
               <div className="flex items-center gap-2">
                 <span className="text-[10px] text-stone-500">Bonus:</span>
@@ -149,53 +206,75 @@ export function CombatTab({ character, canEdit, isGM, onUpdate, onRoll, onRollIn
       </div>
 
       {/* ── Defense ──────────────────────────────────────────────── */}
-      <div className="bento-card flex items-center gap-4">
-        <div className="flex flex-col items-center px-4 py-2 rounded-lg bg-stone-800/60 border border-stone-700/40">
-          <span className="text-[10px] text-stone-500 uppercase tracking-wider">Defense</span>
+      <div className="bento-card">
+        <div className="flex items-center justify-between mb-2">
+          <p className="bento-label">Defense</p>
           <span className="text-3xl font-black text-sky-300">{defenseValue}</span>
-          <span className="text-[10px] text-stone-500">
-            {character.armor.equipped && character.armor.value > 0 ? character.armor.name : "Unarmored (10+DEX)"}
-          </span>
         </div>
-        {canEdit && (
-          <div className="flex flex-col gap-1.5 flex-1">
-            <div className="flex flex-col gap-0.5">
-              <span className="text-[10px] text-stone-500">Armor name</span>
-              <input value={character.armor.name}
-                onChange={(e) => onUpdate({ armor: { ...character.armor, name: e.target.value } })}
-                className="bg-stone-900 border border-stone-700 rounded px-2 py-1 text-xs text-stone-200 outline-none focus:border-amber-600"
-              />
-            </div>
-            <div className="flex items-center gap-2">
-              <div className="flex flex-col gap-0.5">
-                <span className="text-[10px] text-stone-500">Value</span>
-                <input type="number" value={character.armor.value} min={0}
-                  onChange={(e) => onUpdate({ armor: { ...character.armor, value: parseInt(e.target.value) || 0 } })}
-                  className="w-14 text-center bg-stone-900 border border-stone-700 rounded py-0.5 text-xs text-stone-200 outline-none focus:border-amber-600"
-                />
-              </div>
-              <label className="flex items-center gap-1 cursor-pointer mt-3">
-                <input type="checkbox" checked={character.armor.equipped}
-                  onChange={(e) => onUpdate({ armor: { ...character.armor, equipped: e.target.checked } })}
-                  className="accent-amber-500" />
-                <span className="text-xs text-stone-400">Equipped</span>
-              </label>
-            </div>
+
+        {/* Armor selector from inventory */}
+        <div className="flex flex-col gap-2">
+          <div className="flex flex-col gap-0.5">
+            <span className="text-[10px] text-stone-500">Armor (from inventory)</span>
+            {canEdit ? (
+              <select
+                value={character.armor.equippedItemId ?? ""}
+                onChange={(e) => onUpdate({ armor: { ...character.armor, equippedItemId: e.target.value || undefined } })}
+                className="bg-stone-800 border border-stone-700 rounded px-2 py-1.5 text-xs text-stone-200 outline-none focus:border-sky-600"
+              >
+                <option value="">— Unarmored (DEX only) —</option>
+                {armorItems.map((item) => (
+                  <option key={item.id} value={item.id}>
+                    {item.name} ({item.formula})
+                  </option>
+                ))}
+              </select>
+            ) : (
+              <span className="text-xs text-stone-300">
+                {equippedArmorItem ? equippedArmorItem.name : "Unarmored"}
+              </span>
+            )}
           </div>
-        )}
+
+          {/* Defense bonus (class/race/other) */}
+          {canEdit && (
+            <div className="flex items-center gap-2">
+              <span className="text-[10px] text-stone-500">Extra bonus:</span>
+              <input type="number" value={character.armor.defenseBonus ?? 0}
+                onChange={(e) => onUpdate({ armor: { ...character.armor, defenseBonus: parseInt(e.target.value) || 0 } })}
+                className="w-14 text-center text-xs bg-stone-900 border border-stone-700 rounded py-0.5 text-stone-200 outline-none focus:border-sky-600"
+              />
+              <span className="text-[10px] text-stone-600">class/race/ability</span>
+            </div>
+          )}
+
+          {/* Formula preview */}
+          <p className="text-[10px] text-stone-600 italic">
+            {equippedArmorItem
+              ? `Formula: ${equippedArmorItem.formula} + ${character.armor.defenseBonus ?? 0} bonus`
+              : `DEX (${character.stats.dex}) + ${character.armor.defenseBonus ?? 0} bonus`}
+          </p>
+        </div>
       </div>
 
-      {/* ── Favorites (spells + items) ────────────────────────────── */}
+      {/* ── Favorites ────────────────────────────────────────────── */}
       {favorites.length > 0 && (
         <div className="bento-card">
           <p className="bento-label mb-2">⭐ Favorites</p>
           <div className="flex flex-col gap-1.5">
-            {favorites.map((a) => (
+            {character.actions.filter((a) => a.isFavorite).map((a) => (
               <ActionRow key={a.id} action={a} character={character} canEdit={canEdit}
                 onRoll={() => setRollPending({ label: a.name, formula: a.formula || a.damage })}
-                onToggleFavorite={() => onUpdate({ actions: character.actions.map((x) => x.id === a.id ? { ...x, isFavorite: false } : x) })}
+                onToggleFavorite={() => onUpdate({ actions: character.actions.map((x) => x.id === a.id ? { ...x, isFavorite: !x.isFavorite } : x) })}
                 onDelete={() => onUpdate({ actions: character.actions.filter((x) => x.id !== a.id) })}
                 isGM={isGM} onBroadcast={broadcastAction}
+              />
+            ))}
+            {/* Inventory favorites */}
+            {character.inventory.filter((i) => i.isFavorite && i.formula).map((item) => (
+              <InventoryFavoriteRow key={item.id} item={item} canEdit={canEdit}
+                onRoll={() => setRollPending({ label: item.name, formula: item.formula! })}
+                onToggleFavorite={() => onUpdate({ inventory: character.inventory.map((x) => x.id === item.id ? { ...x, isFavorite: !x.isFavorite } : x) })}
               />
             ))}
           </div>
@@ -258,8 +337,36 @@ export function CombatTab({ character, canEdit, isGM, onUpdate, onRoll, onRollIn
   );
 }
 
+// ─── InventoryFavoriteRow ─────────────────────────────────────────
+function InventoryFavoriteRow({ item, onRoll, onToggleFavorite }: {
+  item: InventoryItem; canEdit: boolean;
+  onRoll: () => void; onToggleFavorite: () => void;
+}) {
+  return (
+    <div className="rounded-lg border border-stone-700/40 bg-stone-900/40 overflow-hidden">
+      <div className="flex items-center gap-2 px-2.5 py-2">
+        <span>🎒</span>
+        <div className="flex-1 min-w-0">
+          <span className="text-xs font-semibold text-stone-200 truncate">{item.name}</span>
+          {item.formula && <span className="text-[10px] font-mono text-amber-300/80 ml-2">{item.formula}</span>}
+        </div>
+        <div className="flex items-center gap-1">
+          <button onClick={onToggleFavorite}
+            className={`text-sm transition-colors ${item.isFavorite ? "text-amber-400" : "text-stone-600 hover:text-stone-400"}`}>
+            {item.isFavorite ? "⭐" : "☆"}
+          </button>
+          <button onClick={onRoll}
+            className="px-2 py-1 rounded bg-amber-900/50 hover:bg-amber-800/60 text-amber-300 text-[10px] font-bold border border-amber-800/40 transition-all active:scale-95">
+            🎲
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 // ─── ActionRow ────────────────────────────────────────────────────
-function ActionRow({ action, character, canEdit, onRoll, onToggleFavorite, onDelete, isGM: _isGM, onBroadcast }: {
+function ActionRow({ action, character, canEdit, onRoll, onToggleFavorite, onDelete, onBroadcast }: {
   action: CharacterAction; character: NimbleCharacter; canEdit: boolean;
   onRoll: () => void; onToggleFavorite: () => void; onDelete: () => void;
   isGM: boolean; onBroadcast: (label: string) => void;
@@ -285,7 +392,9 @@ function ActionRow({ action, character, canEdit, onRoll, onToggleFavorite, onDel
         </div>
         <div className="flex items-center gap-1">
           <button onClick={(e) => { e.stopPropagation(); onToggleFavorite(); }}
-            className={`text-sm ${action.isFavorite ? "text-amber-400" : "text-stone-600 hover:text-stone-400"}`}>⭐</button>
+            className={`text-sm transition-colors ${action.isFavorite ? "text-amber-400" : "text-stone-600 hover:text-stone-400 text-[22px] pb-0.5"}`}>
+            {action.isFavorite ? "⭐" : "☆"}
+          </button>
           <button onClick={(e) => { e.stopPropagation(); onRoll(); }}
             className="px-2 py-1 rounded bg-amber-900/50 hover:bg-amber-800/60 text-amber-300 text-[10px] font-bold border border-amber-800/40 transition-all active:scale-95">
             🎲

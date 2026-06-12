@@ -46,6 +46,17 @@ export function SummaryTab({ character, canEdit, onUpdate, onRoll, isGM }: Props
   const setWounds = (val: number) =>
     onUpdate({ wounds: Math.max(0, Math.min(character.maxWounds + 1, val)) });
 
+  // Roll hit die AND decrement current hit dice count
+  const handleHitDiceRoll = () => {
+    if (character.hitDice.current <= 0) return; // no dice left
+    onUpdate({ hitDice: { ...character.hitDice, current: character.hitDice.current - 1 } });
+    setRollPending({
+      label: "Hit Die recovery",
+      formula: `1${character.hitDice.dice}+${character.stats.str}`,
+      saveAdv: "none",
+    });
+  };
+
   return (
     <div className="flex flex-col gap-3 p-3">
 
@@ -58,7 +69,13 @@ export function SummaryTab({ character, canEdit, onUpdate, onRoll, isGM }: Props
           <Field label="Class" value={character.class} canEdit={canEdit} onChange={(v) => onUpdate({ class: v })} />
         </div>
         <Field label="Ancestry" value={character.ancestry} canEdit={canEdit} onChange={(v) => onUpdate({ ancestry: v })} />
-        <Field label="Size / Speed" value={`${character.size} · ${character.speed}`} canEdit={false} />
+        {/* Size & Speed — now editable */}
+        <div className="flex gap-2">
+          <Field label="Size" value={character.size} canEdit={canEdit}
+            onChange={(v) => onUpdate({ size: v })} className="flex-1" />
+          <Field label="Speed" value={String(character.speed)} canEdit={canEdit} type="number"
+            onChange={(v) => onUpdate({ speed: parseInt(v) || 6 })} className="w-16" />
+        </div>
       </div>
 
       {/* ── HP & Wounds ──────────────────────────────────────────── */}
@@ -111,7 +128,7 @@ export function SummaryTab({ character, canEdit, onUpdate, onRoll, isGM }: Props
             {character.hp.current === 0 && " · DYING"}
           </p>
 
-          {/* Hit Dice — with roll button */}
+          {/* Hit Dice */}
           <div className="mt-2 flex items-center gap-2 flex-wrap">
             <span className="text-[10px] text-stone-500 uppercase tracking-wider">Hit Dice</span>
             {canEdit ? (
@@ -134,10 +151,16 @@ export function SummaryTab({ character, canEdit, onUpdate, onRoll, isGM }: Props
                 {character.hitDice.current}/{character.hitDice.max} {character.hitDice.dice}
               </span>
             )}
+            {/* Roll button — disabled if no dice left */}
             <button
-              onClick={() => setRollPending({ label: "Hit Die recovery", formula: `1${character.hitDice.dice}+${character.stats.str}`, saveAdv: "none" })}
-              className="px-1.5 py-0.5 rounded text-[10px] bg-stone-700 hover:bg-amber-900 text-stone-400 hover:text-amber-200 border border-stone-600 transition-all"
-              title={`Roll ${character.hitDice.dice}+STR to recover HP`}
+              onClick={handleHitDiceRoll}
+              disabled={character.hitDice.current <= 0}
+              className={`px-1.5 py-0.5 rounded text-[10px] border transition-all ${
+                character.hitDice.current > 0
+                  ? "bg-stone-700 hover:bg-amber-900 text-stone-400 hover:text-amber-200 border-stone-600"
+                  : "bg-stone-800/40 text-stone-600 border-stone-700/40 cursor-not-allowed"
+              }`}
+              title={character.hitDice.current > 0 ? `Roll ${character.hitDice.dice}+STR to recover HP` : "No hit dice remaining"}
             >🎲</button>
           </div>
         </div>
@@ -192,7 +215,7 @@ export function SummaryTab({ character, canEdit, onUpdate, onRoll, isGM }: Props
         </div>
       </div>
 
-      {/* ── Languages ────────────────────────────────────────────── */}
+      {/* ── Languages — ABOVE Abilities ──────────────────────────── */}
       <div className="bento-card">
         <p className="bento-label mb-2">Languages</p>
         <LanguageSelector selected={character.languages} readOnly={!canEdit}
@@ -223,7 +246,7 @@ export function SummaryTab({ character, canEdit, onUpdate, onRoll, isGM }: Props
         )}
       </div>
 
-      {/* ── Notes (background / backstory) ───────────────────────── */}
+      {/* ── Notes ────────────────────────────────────────────────── */}
       <div className="bento-card">
         <p className="bento-label mb-2">Background & Notes</p>
         {canEdit ? (

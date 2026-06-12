@@ -1,15 +1,3 @@
-/**
- * App.tsx – Root component for the Nimble OBR Character Sheet extension.
- *
- * Handles:
- *  - OBR SDK initialization via useOBR
- *  - Empty/multi-select/no-sheet states
- *  - Tab navigation (Summary | Combat | Spells | Inventory)
- *  - Roll log overlay
- *  - GM create-sheet shortcut
- */
-
-// ─── Tab config ──────────────────────────────
 import { useState } from "react";
 import { useOBR } from "./hooks/useOBR";
 import { SummaryTab } from "./components/tabs/SummaryTab";
@@ -28,7 +16,6 @@ const TABS: { id: TabId; label: string; icon: string }[] = [
   { id: "inventory", label: "Inventory", icon: "🎒" },
 ];
 
-// ─────────────────────────────────────────────────────────────────
 export default function App() {
   const {
     isReady,
@@ -48,7 +35,6 @@ export default function App() {
 
   const [activeTab, setActiveTab] = useState<TabId>("summary");
 
-  // ── Loading ──────────────────────────────────────────────────
   if (!isReady) {
     return (
       <div className="flex h-screen items-center justify-center bg-stone-950">
@@ -60,7 +46,6 @@ export default function App() {
     );
   }
 
-  // ── No selection → show global roll log ───────────────────────
   if (selectionState === "none") {
     return (
       <div className="flex flex-col h-screen bg-stone-950 text-stone-200 overflow-hidden">
@@ -73,18 +58,12 @@ export default function App() {
           </p>
         </div>
         <div className="flex-1 overflow-y-auto scrollbar-thin p-3">
-          <RollLog
-            rolls={recentRolls}
-            isGM={isGM}
-            currentPlayerId={playerId}
-            inline
-          />
+          <RollLog rolls={recentRolls} isGM={isGM} currentPlayerId={playerId} inline />
         </div>
       </div>
     );
   }
 
-  // ── No sheet on token ─────────────────────────────────────────
   if (selectionState === "no-sheet") {
     const firstItem = selectedItems[0];
     return (
@@ -104,12 +83,7 @@ export default function App() {
           )}
         </div>
         <div className="border-t border-stone-800 p-3">
-          <RollLog
-            rolls={recentRolls}
-            isGM={isGM}
-            currentPlayerId={playerId}
-            inline
-          />
+          <RollLog rolls={recentRolls} isGM={isGM} currentPlayerId={playerId} inline />
         </div>
       </div>
     );
@@ -123,10 +97,11 @@ export default function App() {
     );
   }
 
-  // ── Helpers ──────────────────────────────────────────────────
   const onRoll = (req: DiceRollRequest) => handleRoll(req);
-  const onRollInitiative = (mode: RollMode = "standard") =>
-    rollInitiative(mode);
+
+  // Return the promise so CombatTab can read the total for action count
+  const onRollInitiative = (mode: RollMode = "standard") => rollInitiative(mode);
+
   const isOwner = character.ownerId === playerId;
   const isUnclaimed = !character.ownerId;
 
@@ -141,28 +116,21 @@ export default function App() {
                 {character.name}
               </h1>
               <p className="text-[10px] text-stone-500 truncate">
-                {[
-                  character.ancestry,
-                  character.class,
-                  character.level ? `Lv.${character.level}` : "",
-                ]
-                  .filter(Boolean)
-                  .join(" · ")}
+                {[character.ancestry, character.class, character.level ? `Lv.${character.level}` : ""]
+                  .filter(Boolean).join(" · ")}
               </p>
             </div>
 
             <div className="flex flex-col items-end gap-1 shrink-0">
-              {/* HP */}
-              <span
-                className={`px-2 py-0.5 rounded-full text-[10px] font-bold border ${
-                  character.hp.current === 0
-                    ? "border-rose-700 bg-rose-950/60 text-rose-300"
-                    : character.hp.current <= character.hp.max * 0.5
-                      ? "border-amber-700/60 bg-amber-950/30 text-amber-300"
-                      : "border-emerald-800/50 bg-emerald-950/30 text-emerald-300"
-                }`}
-              >
+              <span className={`px-2 py-0.5 rounded-full text-[10px] font-bold border ${
+                character.hp.current === 0
+                  ? "border-rose-700 bg-rose-950/60 text-rose-300"
+                  : character.hp.current <= character.hp.max * 0.5
+                    ? "border-amber-700/60 bg-amber-950/30 text-amber-300"
+                    : "border-emerald-800/50 bg-emerald-950/30 text-emerald-300"
+              }`}>
                 ♥ {character.hp.current}/{character.hp.max}
+                {character.hp.temp > 0 && <span className="text-sky-300 ml-1">+{character.hp.temp}</span>}
               </span>
 
               <div className="flex items-center gap-1">
@@ -171,7 +139,6 @@ export default function App() {
                     GM
                   </span>
                 )}
-                {/* Claim button for unclaimed or other player's token */}
                 {!isGM && !isOwner && (
                   <button
                     onClick={claimToken}
@@ -190,18 +157,13 @@ export default function App() {
             </div>
           </div>
 
-          {/* Wound dots */}
           {character.wounds > 0 && (
             <div className="flex items-center gap-1.5 mt-1.5">
-              <span className="text-[9px] text-rose-500 uppercase tracking-wider">
-                Wounds
-              </span>
+              <span className="text-[9px] text-rose-500 uppercase tracking-wider">Wounds</span>
               <div className="flex gap-1">
                 {Array.from({ length: character.maxWounds + 1 }).map((_, i) => (
-                  <div
-                    key={i}
-                    className={`w-2 h-2 rounded-full ${i < character.wounds ? "bg-rose-600" : "bg-stone-700"}`}
-                  />
+                  <div key={i}
+                    className={`w-2 h-2 rounded-full ${i < character.wounds ? "bg-rose-600" : "bg-stone-700"}`} />
                 ))}
               </div>
             </div>
@@ -232,45 +194,23 @@ export default function App() {
       {/* ── Content ─────────────────────────────────────────────── */}
       <main className="flex-1 overflow-y-auto scrollbar-thin">
         {activeTab === "summary" && (
-          <SummaryTab
-            character={character}
-            canEdit={canEdit}
-            onUpdate={updateCharacter}
-            onRoll={onRoll}
-            isGM={isGM}
-          />
+          <SummaryTab character={character} canEdit={canEdit} onUpdate={updateCharacter} onRoll={onRoll} isGM={isGM} />
         )}
         {activeTab === "combat" && (
           <CombatTab
-            character={character}
-            canEdit={canEdit}
-            isGM={isGM}
-            onUpdate={updateCharacter}
-            onRoll={onRoll}
+            character={character} canEdit={canEdit} isGM={isGM}
+            onUpdate={updateCharacter} onRoll={onRoll}
             onRollInitiative={onRollInitiative}
           />
         )}
         {activeTab === "spells" && (
-          <SpellsTab
-            character={character}
-            canEdit={canEdit}
-            isGM={isGM}
-            onUpdate={updateCharacter}
-            onRoll={onRoll}
-          />
+          <SpellsTab character={character} canEdit={canEdit} isGM={isGM} onUpdate={updateCharacter} onRoll={onRoll} />
         )}
         {activeTab === "inventory" && (
-          <InventoryTab
-            character={character}
-            canEdit={canEdit}
-            isGM={isGM}
-            onUpdate={updateCharacter}
-            onRoll={onRoll}
-          />
+          <InventoryTab character={character} canEdit={canEdit} isGM={isGM} onUpdate={updateCharacter} onRoll={onRoll} />
         )}
       </main>
 
-      {/* ── Floating roll log ───────────────────────────────────── */}
       <RollLog rolls={recentRolls} isGM={isGM} currentPlayerId={playerId} />
     </div>
   );

@@ -22,8 +22,23 @@ export interface Skills {
   influence: number; insight: number; lore: number;
   might: number; naturecraft: number; perception: number; stealth: number;
 }
+
+/**
+ * Armor is now driven by an inventory item selection.
+ * - equippedItemId: id of the InventoryItem (isArmor:true) currently worn
+ * - defenseBonus: flat extra bonus from class/race/ability
+ * Legacy fields (name, value, proficient, equipped) kept for migration safety but
+ * the defense calculation uses equippedItemId + defenseBonus instead.
+ */
 export interface Armor {
-  name: string; value: number; proficient: boolean; equipped: boolean;
+  name: string;
+  value: number;
+  proficient: boolean;
+  equipped: boolean;
+  /** ID of the equipped armor InventoryItem */
+  equippedItemId?: string;
+  /** Flat bonus from class ability, racial trait, etc. */
+  defenseBonus?: number;
 }
 
 export interface CharacterAction {
@@ -53,10 +68,9 @@ export interface InventoryItem {
   formula?: string;
   isFavorite?: boolean;
   isCustom?: boolean;
-  /** If true, this item is treated as armor and can set the armor value */
+  /** If true, this item can be selected as worn armor in the defense calculation */
   isArmor?: boolean;
   armorValue?: number;
-  // ActionCost for weapons & potions
   actionCost?: number;
 }
 
@@ -144,7 +158,7 @@ export function createDefaultCharacter(tokenId: string, ownerId: string): Nimble
       arcana: 0, examination: 0, finesse: 0, influence: 0, insight: 0,
       lore: 0, might: 0, naturecraft: 0, perception: 0, stealth: 0,
     },
-    armor: { name: "Unarmored", value: 0, proficient: true, equipped: false },
+    armor: { name: "Unarmored", value: 0, proficient: true, equipped: false, equippedItemId: undefined, defenseBonus: 0 },
     initiativeBonus: 0,
     languages: ["Common"],
     abilities: [], notes: "",

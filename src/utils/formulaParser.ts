@@ -13,7 +13,7 @@
  * We deliberately avoid eval() and use a tiny recursive descent parser.
  */
 
-import type { NimbleCharacter, Skills, Stats } from '../types/character';
+import type { NimbleCharacter, Skills, Stats } from "../types/character";
 
 // ─────────────────────────────────────────────────────────────────
 // Variable substitution
@@ -44,10 +44,7 @@ export function buildContext(char: NimbleCharacter): FormulaContext {
  * Replace named variables in a formula string with numeric values.
  * Returns the substituted string ready for arithmetic parsing.
  */
-function substituteVariables(
-  formula: string,
-  ctx: FormulaContext
-): string {
+function substituteVariables(formula: string, ctx: FormulaContext): string {
   let f = formula.trim().toUpperCase();
 
   // Stats
@@ -76,8 +73,8 @@ function substituteVariables(
   f = f.replace(/\bMAXHP\b/g, String(ctx.maxHp ?? 0));
 
   // floor / ceil shorthands → keep as tokens for the parser
-  f = f.replace(/MATH\.FLOOR\(/g, 'floor(');
-  f = f.replace(/MATH\.CEIL\(/g, 'ceil(');
+  f = f.replace(/MATH\.FLOOR\(/g, "floor(");
+  f = f.replace(/MATH\.CEIL\(/g, "ceil(");
   f = f.toLowerCase(); // parser works in lowercase
 
   return f;
@@ -107,7 +104,7 @@ export function diceToAverage(formula: string): string {
  */
 export function parseDamageFormula(
   formula: string,
-  ctx: FormulaContext
+  ctx: FormulaContext,
 ): { diceNotation: string; modifier: number } {
   // Substitute variables first, then split dice from modifiers
   const subbed = substituteVariables(formula, ctx);
@@ -117,7 +114,7 @@ export function parseDamageFormula(
   if (!diceMatch) {
     // No dice — pure modifier
     const mod = safeEval(subbed);
-    return { diceNotation: '', modifier: isNaN(mod) ? 0 : mod };
+    return { diceNotation: "", modifier: isNaN(mod) ? 0 : mod };
   }
 
   const diceNotation = diceMatch[1];
@@ -133,17 +130,20 @@ export function parseDamageFormula(
 // ─────────────────────────────────────────────────────────────────
 
 class Parser {
+  private readonly input: string;
   private pos = 0;
-  constructor(private readonly input: string) {}
+  constructor(input: string) {
+    this.input = input;
+  }
 
   private peek(): string {
     this.skipWhitespace();
-    return this.input[this.pos] ?? '';
+    return this.input[this.pos] ?? "";
   }
 
   private consume(): string {
     this.skipWhitespace();
-    return this.input[this.pos++] ?? '';
+    return this.input[this.pos++] ?? "";
   }
 
   private skipWhitespace() {
@@ -163,9 +163,13 @@ class Parser {
     let left = this.parseTerm();
     while (true) {
       const ch = this.peek();
-      if (ch === '+') { this.consume(); left += this.parseTerm(); }
-      else if (ch === '-') { this.consume(); left -= this.parseTerm(); }
-      else break;
+      if (ch === "+") {
+        this.consume();
+        left += this.parseTerm();
+      } else if (ch === "-") {
+        this.consume();
+        left -= this.parseTerm();
+      } else break;
     }
     return left;
   }
@@ -175,8 +179,10 @@ class Parser {
     let left = this.parseUnary();
     while (true) {
       const ch = this.peek();
-      if (ch === '*') { this.consume(); left *= this.parseUnary(); }
-      else if (ch === '/') {
+      if (ch === "*") {
+        this.consume();
+        left *= this.parseUnary();
+      } else if (ch === "/") {
         this.consume();
         const right = this.parseUnary();
         left = right !== 0 ? left / right : 0;
@@ -187,7 +193,7 @@ class Parser {
 
   /** unary = '-' primary | primary */
   private parseUnary(): number {
-    if (this.peek() === '-') {
+    if (this.peek() === "-") {
       this.consume();
       return -this.parsePrimary();
     }
@@ -199,34 +205,37 @@ class Parser {
     this.skipWhitespace();
 
     // floor(
-    if (this.input.startsWith('floor(', this.pos)) {
+    if (this.input.startsWith("floor(", this.pos)) {
       this.pos += 6; // skip "floor("
       const val = this.parseExpr();
-      if (this.peek() === ')') this.consume();
+      if (this.peek() === ")") this.consume();
       return Math.floor(val);
     }
 
     // ceil(
-    if (this.input.startsWith('ceil(', this.pos)) {
+    if (this.input.startsWith("ceil(", this.pos)) {
       this.pos += 5;
       const val = this.parseExpr();
-      if (this.peek() === ')') this.consume();
+      if (this.peek() === ")") this.consume();
       return Math.ceil(val);
     }
 
     // Parenthesised expression
-    if (this.peek() === '(') {
+    if (this.peek() === "(") {
       this.consume();
       const val = this.parseExpr();
-      if (this.peek() === ')') this.consume();
+      if (this.peek() === ")") this.consume();
       return val;
     }
 
     // Number (integer or float, possibly negative sign was already handled)
     const start = this.pos;
     this.skipWhitespace();
-    if (/[\d.]/.test(this.input[this.pos] ?? '')) {
-      while (this.pos < this.input.length && /[\d.]/.test(this.input[this.pos])) {
+    if (/[\d.]/.test(this.input[this.pos] ?? "")) {
+      while (
+        this.pos < this.input.length &&
+        /[\d.]/.test(this.input[this.pos])
+      ) {
         this.pos++;
       }
       return parseFloat(this.input.slice(start, this.pos)) || 0;
@@ -244,10 +253,14 @@ export function safeEval(expr: string): number {
   try {
     // Guard: only allow digits, operators, parens, dots, whitespace, and our
     // known function names. Reject anything else.
-    const sanitised = expr.replace(/\s+/g, ' ').trim();
-    if (!/^[\d\s\+\-\*\/\(\)\.\bfloor\bceil]+$/.test(sanitised.replace(/floor|ceil/g, ''))) {
+    const sanitised = expr.replace(/\s+/g, " ").trim();
+    if (
+      !/^[\d\s+\-*/().floorceil]+$/.test(
+        sanitised.replace(/floor|ceil/g, ""),
+      )
+    ) {
       // If unknown chars remain after removing known identifiers, bail.
-      const unknown = sanitised.replace(/[\d\s\+\-\*\/\(\)\.floor ceil]+/g, '');
+      const unknown = sanitised.replace(/[\d\s+\-*/().floorceil]+/g, "");
       if (unknown.length > 0) return NaN;
     }
     return new Parser(sanitised).parse();
@@ -267,10 +280,7 @@ export function safeEval(expr: string): number {
  * @example
  *   evalFormula("1d10 + STR + floor(LEVEL / 2)", char) → 7
  */
-export function evalFormula(
-  formula: string,
-  char: NimbleCharacter
-): number {
+export function evalFormula(formula: string, char: NimbleCharacter): number {
   const ctx = buildContext(char);
   return evalFormulaWithContext(formula, ctx);
 }
@@ -280,7 +290,7 @@ export function evalFormula(
  */
 export function evalFormulaWithContext(
   formula: string,
-  ctx: FormulaContext
+  ctx: FormulaContext,
 ): number {
   try {
     let f = substituteVariables(formula, ctx);
@@ -298,10 +308,10 @@ export function evalFormulaWithContext(
  */
 export function resolveFormulaDisplay(
   formula: string,
-  char: NimbleCharacter
+  char: NimbleCharacter,
 ): string {
   const ctx = buildContext(char);
-  let f = substituteVariables(formula, ctx);
+  const f = substituteVariables(formula, ctx);
   // Evaluate non-dice parts but keep dice notation
   // e.g. "1d8 + 2 + 1" → "1d8+3"
   const diceMatch = f.match(/\d+d\d+/i);
@@ -311,7 +321,7 @@ export function resolveFormulaDisplay(
   }
 
   const dicePart = diceMatch[0];
-  const rest = f.replace(dicePart, '0');
+  const rest = f.replace(dicePart, "0");
   const modifier = safeEval(rest);
 
   if (isNaN(modifier) || modifier === 0) return dicePart;
@@ -342,8 +352,8 @@ export function rollDice(count: number, sides: number): number[] {
 export function rollFormula(
   formula: string,
   char: NimbleCharacter,
-  mode: 'standard' | 'advantage' | 'disadvantage' = 'standard',
-  extraDice = 0
+  mode: "standard" | "advantage" | "disadvantage" = "standard",
+  extraDice = 0,
 ): {
   diceNotation: string;
   rolls: number[];
@@ -355,8 +365,6 @@ export function rollFormula(
 } {
   const ctx = buildContext(char);
   const { diceNotation, modifier } = parseDamageFormula(formula, ctx);
-
-  let rolls: number[] = [];
   let sides = 20;
   let count = 1;
 
@@ -369,7 +377,7 @@ export function rollFormula(
   } else {
     // No dice in formula, e.g. flat "+3"
     return {
-      diceNotation: '',
+      diceNotation: "",
       rolls: [],
       kept: [],
       modifier,
@@ -382,12 +390,12 @@ export function rollFormula(
   // Advantage/disadvantage adds extra dice, keep best/worst
   const extraCount = Math.abs(extraDice);
   const totalCount = count + extraCount;
-  rolls = rollDice(totalCount, sides);
+  const rolls = rollDice(totalCount, sides);
 
   let kept: number[];
-  if (mode === 'standard' && extraDice === 0) {
+  if (mode === "standard" && extraDice === 0) {
     kept = rolls;
-  } else if (mode === 'advantage' || extraDice > 0) {
+  } else if (mode === "advantage" || extraDice > 0) {
     // Keep highest `count` dice
     const sorted = [...rolls].sort((a, b) => b - a);
     kept = sorted.slice(0, count);
