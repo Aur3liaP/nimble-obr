@@ -11,9 +11,9 @@ import type { DiceRollRequest, RollMode } from "./types/character";
 type TabId = "summary" | "combat" | "spells" | "inventory";
 
 const TABS: { id: TabId; label: string; icon: string }[] = [
-  { id: "summary", label: "Summary", icon: "📋" },
-  { id: "combat", label: "Combat", icon: "⚔️" },
-  { id: "spells", label: "Spells", icon: "✨" },
+  { id: "summary",   label: "Summary",   icon: "📋" },
+  { id: "combat",    label: "Combat",    icon: "⚔️" },
+  { id: "spells",    label: "Spells",    icon: "✨" },
   { id: "inventory", label: "Inventory", icon: "🎒" },
 ];
 
@@ -51,6 +51,7 @@ export default function App() {
   }
 
   // ── No token selected ──────────────────────────────────────────
+  // DicePanel is open by default here — main use case for GM with no token
   if (selectionState === "none") {
     return (
       <div className="flex flex-col h-screen bg-stone-950 text-stone-200 overflow-hidden">
@@ -63,12 +64,11 @@ export default function App() {
           </p>
         </div>
         <div className="flex-1 overflow-y-auto scrollbar-thin p-3 flex flex-col gap-3">
-          {/* Free dice panel always available */}
           <DicePanel
             isGM={isGM}
             playerName={playerName}
             onRoll={handleFreeRoll}
-            collapsed={false}
+            defaultCollapsed={false}
           />
           <RollLog rolls={recentRolls} isGM={isGM} currentPlayerId={playerId} inline />
         </div>
@@ -100,7 +100,6 @@ export default function App() {
             isGM={isGM}
             playerName={playerName}
             onRoll={handleFreeRoll}
-            collapsed={true}
           />
           <RollLog rolls={recentRolls} isGM={isGM} currentPlayerId={playerId} inline />
         </div>
@@ -108,7 +107,6 @@ export default function App() {
     );
   }
 
-  // ── Fallback loading ───────────────────────────────────────────
   if (!character) {
     return (
       <div className="flex h-screen items-center justify-center bg-stone-950">
@@ -210,53 +208,41 @@ export default function App() {
 
       <div className="shrink-0 h-px bg-stone-700/60 mx-3" />
 
-      {/* ── Content ─────────────────────────────────────────────── */}
+      {/* ── Tab content ─────────────────────────────────────────── */}
       <main className="flex-1 overflow-y-auto scrollbar-thin">
         {activeTab === "summary" && (
           <SummaryTab
-            character={character}
-            canEdit={canEdit}
-            onUpdate={updateCharacter}
-            onRoll={onRoll}
-            isGM={isGM}
+            character={character} canEdit={canEdit}
+            onUpdate={updateCharacter} onRoll={onRoll} isGM={isGM}
           />
         )}
         {activeTab === "combat" && (
           <CombatTab
-            character={character}
-            canEdit={canEdit}
-            isGM={isGM}
-            onUpdate={updateCharacter}
-            onRoll={onRoll}
+            character={character} canEdit={canEdit} isGM={isGM}
+            onUpdate={updateCharacter} onRoll={onRoll}
             onRollInitiative={onRollInitiative}
           />
         )}
         {activeTab === "spells" && (
           <SpellsTab
-            character={character}
-            canEdit={canEdit}
-            isGM={isGM}
-            onUpdate={updateCharacter}
-            onRoll={onRoll}
+            character={character} canEdit={canEdit} isGM={isGM}
+            onUpdate={updateCharacter} onRoll={onRoll}
           />
         )}
         {activeTab === "inventory" && (
           <InventoryTab
-            character={character}
-            canEdit={canEdit}
-            isGM={isGM}
-            onUpdate={updateCharacter}
-            onRoll={onRoll}
+            character={character} canEdit={canEdit} isGM={isGM}
+            onUpdate={updateCharacter} onRoll={onRoll}
           />
         )}
 
-        {/* ── Free Dice Panel — always accessible at the bottom ── */}
-        <div className="px-3 pt-0 pb-3">
+        {/* ── Free Dice Panel — always at the bottom of any tab ── */}
+        <div className="px-3 pt-2 pb-3">
           <DicePanel
             isGM={isGM}
             playerName={playerName}
             onRoll={handleFreeRoll}
-            collapsed={true}
+            defaultCollapsed={true}
           />
         </div>
       </main>

@@ -35,15 +35,20 @@ export function StatBox({ statKey, value, saveAdvantage, canEdit, isKeyStats = f
         <span className="absolute -top-2 left-1/2 -translate-x-1/2 text-[9px] font-bold tracking-widest text-amber-400 bg-stone-950 px-1 rounded uppercase">KEY</span>
       )}
       {saveAdvantage !== "none" && (
-        <span className={`absolute top-1 right-1.5 text-[10px] font-bold ${saveAdvantage === "advantage" ? "text-emerald-400" : "text-rose-400"}`}
-          title={`${saveAdvantage} on saves`}>
+        <span
+          className={`absolute top-1 right-1.5 text-[10px] font-bold ${saveAdvantage === "advantage" ? "text-emerald-400" : "text-rose-400"}`}
+          title={`${saveAdvantage} on saves`}
+        >
           {saveAdvantage === "advantage" ? "▲" : "▼"}
         </span>
       )}
+
       <span className="text-[10px] font-semibold tracking-widest text-stone-400 uppercase">{STAT_LABELS[statKey]}</span>
 
       {isEditing ? (
-        <input autoFocus type="number" min={-5} max={5} value={inputVal}
+        <input
+          autoFocus
+          type="number" min={-5} max={5} value={inputVal}
           onChange={(e) => setInputVal(e.target.value)}
           onBlur={commitEdit}
           onKeyDown={(e) => { if (e.key === "Enter") commitEdit(); if (e.key === "Escape") setIsEditing(false); }}
@@ -59,10 +64,19 @@ export function StatBox({ statKey, value, saveAdvantage, canEdit, isKeyStats = f
         </span>
       )}
 
-      <button onClick={() => onRoll?.(`${STAT_FULL[statKey]} Save`, `1d20+${value}`, saveAdvantage)}
-        className="mt-0.5 px-2 py-0.5 rounded text-[10px] font-semibold tracking-wide bg-stone-700/60 hover:bg-amber-900/60 text-stone-300 hover:text-amber-200 border border-stone-600/40 hover:border-amber-700/60 transition-all active:scale-95">
-        SAVE
-      </button>
+      {/* SAVE button — only clickable by owner/GM (canEdit).
+          Hidden entirely for read-only viewers to avoid confusion. */}
+      {onRoll ? (
+        <button
+          onClick={() => onRoll(`${STAT_FULL[statKey]} Save`, `1d20+${value}`, saveAdvantage)}
+          className="mt-0.5 px-2 py-0.5 rounded text-[10px] font-semibold tracking-wide bg-stone-700/60 hover:bg-amber-900/60 text-stone-300 hover:text-amber-200 border border-stone-600/40 hover:border-amber-700/60 transition-all active:scale-95"
+        >
+          SAVE
+        </button>
+      ) : (
+        /* Placeholder to keep box height consistent */
+        <span className="mt-0.5 px-2 py-0.5 text-[10px] text-stone-700 select-none">SAVE</span>
+      )}
     </div>
   );
 }
@@ -80,9 +94,17 @@ export function StatGrid({ stats, saveMods, keyStats = [], canEdit, onStatChange
   return (
     <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
       {(["str", "dex", "int", "wil"] as Array<keyof Stats>).map((key) => (
-        <StatBox key={key} statKey={key} value={stats[key]} saveAdvantage={saveMods[key]}
-          canEdit={canEdit} isKeyStats={keyStats.includes(key)}
-          onChange={onStatChange} onRoll={onRoll} />
+        <StatBox
+          key={key}
+          statKey={key}
+          value={stats[key]}
+          saveAdvantage={saveMods[key]}
+          canEdit={canEdit}
+          isKeyStats={keyStats.includes(key)}
+          onChange={canEdit ? onStatChange : undefined}
+          // onRoll only passed if canEdit — disables the button for non-owners
+          onRoll={canEdit ? onRoll : undefined}
+        />
       ))}
     </div>
   );

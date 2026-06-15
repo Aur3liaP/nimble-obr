@@ -66,7 +66,7 @@ export function RollLog({ rolls, isGM, currentPlayerId, inline = false }: RollLo
         }`}
       >
         <span>🎲</span>
-        <span className="max-w-[100px] truncate">{last.label}</span>
+        <span className="max-w-25 truncate">{last.label}</span>
         <span className={`text-base font-black ${last.isCritical ? "text-amber-300" : last.isFumble ? "text-rose-400" : "text-white"}`}>
           {last.total}
         </span>
@@ -84,7 +84,7 @@ function RollEntry({ roll, isMine, isGM }: { roll: DiceRollResult; isMine: boole
       roll.isCritical ? "border-amber-700/60" : roll.isFumble ? "border-rose-800/60" : "border-stone-700/40"
     }`}>
       <div className="flex items-center justify-between">
-        <span className="font-semibold text-stone-300 truncate max-w-[140px]">{roll.label}</span>
+        <span className="font-semibold text-stone-300 truncate max-w-35>">{roll.label}</span>
         <span className={`font-black text-sm ml-1 ${roll.isCritical ? "text-amber-300" : roll.isFumble ? "text-rose-400" : "text-white"}`}>
           {roll.total}{roll.isCritical ? " ⚡" : roll.isFumble ? " 💀" : ""}
         </span>
