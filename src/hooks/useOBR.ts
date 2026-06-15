@@ -26,6 +26,7 @@ export interface UseOBRReturn {
   isGM: boolean;
   updateCharacter: (updates: Partial<NimbleCharacter>) => Promise<void>;
   handleRoll: (req: DiceRollRequest) => Promise<DiceRollResult | null>;
+  handleFreeRoll: (req: DiceRollRequest) => Promise<DiceRollResult | null>;
   rollInitiative: (mode?: RollMode) => Promise<DiceRollResult | null>;
   recentRolls: DiceRollResult[];
   createSheetForToken: (item: Item) => Promise<void>;
@@ -47,17 +48,24 @@ export function useOBR(): UseOBRReturn {
 
   const characterRef = useRef<NimbleCharacter | null>(null);
   const playerIdRef = useRef<string>("");
+  const playerNameRef = useRef<string>("");
 
   useEffect(() => { characterRef.current = character; }, [character]);
   useEffect(() => { playerIdRef.current = playerId; }, [playerId]);
+  useEffect(() => { playerNameRef.current = playerName; }, [playerName]);
 
   const isGM = role === "GM";
 
-  // Fix: unclaimed token (no ownerId) is NOT editable by players — only GM can edit any sheet
+  /**
+   * canEdit rules:
+   * - GM can always edit any sheet
+   * - A player can edit ONLY if the token's ownerId matches their playerId
+   * - Unclaimed tokens (no ownerId) are read-only for players (they can claim first)
+   */
   const canEdit = isGM || (
     character !== null &&
-    !!character.ownerId &&           // must have an owner
-    character.ownerId === playerId   // and it must be this player
+    !!character.ownerId &&
+    character.ownerId === playerId
   );
 
   const loadCharacterFromItem = useCallback((item: Item): NimbleCharacter | null => {
@@ -106,6 +114,7 @@ export function useOBR(): UseOBRReturn {
       ]);
       setPlayerId(pid);
       setPlayerName(pname);
+      playerNameRef.current = pname;
       setRole(prole as OBRRole);
       setIsReady(true);
       await handleSelectionChange(initialSelection || []);
@@ -139,6 +148,16 @@ export function useOBR(): UseOBRReturn {
     });
   };
 
+  /** Push a roll result to the shared scene metadata log */
+  const pushRollToLog = async (result: DiceRollResult) => {
+    if (result.hidden) return;
+    const meta = await OBR.scene.getMetadata();
+    const existing = (meta[ROLL_LOG_KEY] as DiceRollResult[]) || [];
+    const newLog = [...existing, result].slice(-MAX_ROLL_HISTORY);
+    await OBR.scene.setMetadata({ [ROLL_LOG_KEY]: newLog });
+  };
+
+  /** Roll tied to a character sheet (requires character in context) */
   const handleRoll = async (req: DiceRollRequest): Promise<DiceRollResult | null> => {
     const current = characterRef.current;
     if (!current) return null;
@@ -148,16 +167,43 @@ export function useOBR(): UseOBRReturn {
       label: req.label,
       formula: req.formula,
       playerId: playerIdRef.current,
-      playerName,
+      playerName: playerNameRef.current,
       timestamp: Date.now(),
       hidden: req.hidden || false,
     };
-    if (!result.hidden) {
-      const meta = await OBR.scene.getMetadata();
-      const existing = (meta[ROLL_LOG_KEY] as DiceRollResult[]) || [];
-      const newLog = [...existing, result].slice(-MAX_ROLL_HISTORY);
-      await OBR.scene.setMetadata({ [ROLL_LOG_KEY]: newLog });
-    }
+    await pushRollToLog(result);
+    setRecentRolls((prev) => [...prev, result].slice(-MAX_ROLL_HISTORY));
+    return result;
+  };
+
+  /**
+   * Free roll — no character required.
+   * Uses a minimal character stub so rollFormula can run (no stat substitution needed
+   * for plain NdX+modifier formulas from DicePanel).
+   */
+  const handleFreeRoll = async (req: DiceRollRequest): Promise<DiceRollResult | null> => {
+    // Build a minimal stub so rollFormula doesn't crash on missing character
+    const stub = {
+      level: 1,
+      stats: { str: 0, dex: 0, int: 0, wil: 0 },
+      skills: {
+        arcana: 0, examination: 0, finesse: 0, influence: 0, insight: 0,
+        lore: 0, might: 0, naturecraft: 0, perception: 0, stealth: 0,
+      },
+      hp: { current: 0, max: 0, temp: 0 },
+    } as unknown as import("../types/character").NimbleCharacter;
+
+    const rolled = rollFormula(req.formula, stub, req.mode, req.advantageCount ?? 0);
+    const result: DiceRollResult = {
+      ...rolled,
+      label: req.label,
+      formula: req.formula,
+      playerId: playerIdRef.current,
+      playerName: playerNameRef.current,
+      timestamp: Date.now(),
+      hidden: req.hidden || false,
+    };
+    await pushRollToLog(result);
     setRecentRolls((prev) => [...prev, result].slice(-MAX_ROLL_HISTORY));
     return result;
   };
@@ -190,7 +236,7 @@ export function useOBR(): UseOBRReturn {
   return {
     isReady, selectionState, character, selectedItems,
     playerId, playerName, role, canEdit, isGM,
-    updateCharacter, handleRoll, rollInitiative, recentRolls,
+    updateCharacter, handleRoll, handleFreeRoll, rollInitiative, recentRolls,
     createSheetForToken, claimToken,
   };
 }

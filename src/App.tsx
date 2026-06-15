@@ -5,6 +5,7 @@ import { CombatTab } from "./components/tabs/CombatTab";
 import { SpellsTab } from "./components/tabs/SpellsTab";
 import { InventoryTab } from "./components/tabs/InventoryTab";
 import { RollLog } from "./components/ui/RollLog";
+import { DicePanel } from "./components/ui/DicePanel";
 import type { DiceRollRequest, RollMode } from "./types/character";
 
 type TabId = "summary" | "combat" | "spells" | "inventory";
@@ -23,10 +24,12 @@ export default function App() {
     character,
     selectedItems,
     playerId,
+    playerName,
     isGM,
     canEdit,
     updateCharacter,
     handleRoll,
+    handleFreeRoll,
     rollInitiative,
     recentRolls,
     createSheetForToken,
@@ -35,6 +38,7 @@ export default function App() {
 
   const [activeTab, setActiveTab] = useState<TabId>("summary");
 
+  // ── Loading ────────────────────────────────────────────────────
   if (!isReady) {
     return (
       <div className="flex h-screen items-center justify-center bg-stone-950">
@@ -46,6 +50,7 @@ export default function App() {
     );
   }
 
+  // ── No token selected ──────────────────────────────────────────
   if (selectionState === "none") {
     return (
       <div className="flex flex-col h-screen bg-stone-950 text-stone-200 overflow-hidden">
@@ -57,20 +62,28 @@ export default function App() {
             Select a character token to open their sheet.
           </p>
         </div>
-        <div className="flex-1 overflow-y-auto scrollbar-thin p-3">
+        <div className="flex-1 overflow-y-auto scrollbar-thin p-3 flex flex-col gap-3">
+          {/* Free dice panel always available */}
+          <DicePanel
+            isGM={isGM}
+            playerName={playerName}
+            onRoll={handleFreeRoll}
+            collapsed={false}
+          />
           <RollLog rolls={recentRolls} isGM={isGM} currentPlayerId={playerId} inline />
         </div>
       </div>
     );
   }
 
+  // ── Token with no sheet ────────────────────────────────────────
   if (selectionState === "no-sheet") {
     const firstItem = selectedItems[0];
     return (
       <div className="flex flex-col h-screen bg-stone-950 text-stone-200 overflow-hidden">
         <div className="flex-1 flex flex-col items-center justify-center gap-4 p-6 text-center">
           <span className="text-5xl opacity-40">📄</span>
-          <p className="text-sm text-stone-500 max-w-50 leading-relaxed">
+          <p className="text-sm text-stone-500 max-w-[200px] leading-relaxed">
             This token has no character sheet.
           </p>
           {firstItem && (
@@ -82,13 +95,20 @@ export default function App() {
             </button>
           )}
         </div>
-        <div className="border-t border-stone-800 p-3">
+        <div className="border-t border-stone-800 p-3 flex flex-col gap-3">
+          <DicePanel
+            isGM={isGM}
+            playerName={playerName}
+            onRoll={handleFreeRoll}
+            collapsed={true}
+          />
           <RollLog rolls={recentRolls} isGM={isGM} currentPlayerId={playerId} inline />
         </div>
       </div>
     );
   }
 
+  // ── Fallback loading ───────────────────────────────────────────
   if (!character) {
     return (
       <div className="flex h-screen items-center justify-center bg-stone-950">
@@ -98,8 +118,6 @@ export default function App() {
   }
 
   const onRoll = (req: DiceRollRequest) => handleRoll(req);
-
-  // Return the promise so CombatTab can read the total for action count
   const onRollInitiative = (mode: RollMode = "standard") => rollInitiative(mode);
 
   const isOwner = character.ownerId === playerId;
@@ -107,6 +125,7 @@ export default function App() {
 
   return (
     <div className="flex flex-col h-screen bg-stone-950 text-stone-200 overflow-hidden font-sans">
+
       {/* ── Header ────────────────────────────────────────────── */}
       <header className="shrink-0 px-3 pt-3 pb-0">
         <div className="bento-card !py-2 !px-3">
@@ -194,23 +213,55 @@ export default function App() {
       {/* ── Content ─────────────────────────────────────────────── */}
       <main className="flex-1 overflow-y-auto scrollbar-thin">
         {activeTab === "summary" && (
-          <SummaryTab character={character} canEdit={canEdit} onUpdate={updateCharacter} onRoll={onRoll} isGM={isGM} />
+          <SummaryTab
+            character={character}
+            canEdit={canEdit}
+            onUpdate={updateCharacter}
+            onRoll={onRoll}
+            isGM={isGM}
+          />
         )}
         {activeTab === "combat" && (
           <CombatTab
-            character={character} canEdit={canEdit} isGM={isGM}
-            onUpdate={updateCharacter} onRoll={onRoll}
+            character={character}
+            canEdit={canEdit}
+            isGM={isGM}
+            onUpdate={updateCharacter}
+            onRoll={onRoll}
             onRollInitiative={onRollInitiative}
           />
         )}
         {activeTab === "spells" && (
-          <SpellsTab character={character} canEdit={canEdit} isGM={isGM} onUpdate={updateCharacter} onRoll={onRoll} />
+          <SpellsTab
+            character={character}
+            canEdit={canEdit}
+            isGM={isGM}
+            onUpdate={updateCharacter}
+            onRoll={onRoll}
+          />
         )}
         {activeTab === "inventory" && (
-          <InventoryTab character={character} canEdit={canEdit} isGM={isGM} onUpdate={updateCharacter} onRoll={onRoll} />
+          <InventoryTab
+            character={character}
+            canEdit={canEdit}
+            isGM={isGM}
+            onUpdate={updateCharacter}
+            onRoll={onRoll}
+          />
         )}
+
+        {/* ── Free Dice Panel — always accessible at the bottom ── */}
+        <div className="px-3 pt-0 pb-3">
+          <DicePanel
+            isGM={isGM}
+            playerName={playerName}
+            onRoll={handleFreeRoll}
+            collapsed={true}
+          />
+        </div>
       </main>
 
+      {/* Floating roll log pill */}
       <RollLog rolls={recentRolls} isGM={isGM} currentPlayerId={playerId} />
     </div>
   );

@@ -75,7 +75,7 @@ function AddItemModal({ onAdd, onCancel }: {
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 backdrop-blur-sm"
       onClick={(e) => { if (e.target === e.currentTarget) onCancel(); }}>
-      <div className="w-[340px] max-h-[85vh] rounded-xl border border-stone-700 bg-stone-900 shadow-2xl overflow-hidden flex flex-col">
+      <div className="w-85 max-h-[85vh] rounded-xl border border-stone-700 bg-stone-900 shadow-2xl overflow-hidden flex flex-col">
 
         {/* Header */}
         <div className="bg-stone-800 px-4 py-3 border-b border-stone-700 shrink-0">

@@ -48,10 +48,12 @@ export function SummaryTab({ character, canEdit, onUpdate, onRoll, isGM }: Props
 
   // Roll hit die AND decrement current hit dice count
   const handleHitDiceRoll = () => {
-    if (character.hitDice.current <= 0) return; // no dice left
+    if (character.hitDice.current <= 0) return;
     onUpdate({ hitDice: { ...character.hitDice, current: character.hitDice.current - 1 } });
     setRollPending({
       label: "Hit Die recovery",
+      // No flat bonus — the rule says roll your hit die, add STR
+      // The "+STR" part is separate from the dice notation display
       formula: `1${character.hitDice.dice}+${character.stats.str}`,
       saveAdv: "none",
     });
@@ -61,20 +63,41 @@ export function SummaryTab({ character, canEdit, onUpdate, onRoll, isGM }: Props
     <div className="flex flex-col gap-3 p-3">
 
       {/* ── Identity ─────────────────────────────────────────────── */}
-      <div className="bento-card grid grid-cols-2 gap-x-4 gap-y-2">
-        <Field label="Name" value={character.name} canEdit={canEdit} onChange={(v) => onUpdate({ name: v })} />
-        <div className="flex gap-2">
-          <Field label="Level" value={String(character.level)} canEdit={canEdit} type="number"
-            onChange={(v) => onUpdate({ level: parseInt(v) || 1 })} className="w-16" />
-          <Field label="Class" value={character.class} canEdit={canEdit} onChange={(v) => onUpdate({ class: v })} />
+      <div className="bento-card flex flex-col gap-2">
+        {/* Row 1: Name + Level (compact) */}
+        <div className="flex gap-3 items-end">
+          <Field
+            label="Name"
+            value={character.name}
+            canEdit={canEdit}
+            onChange={(v) => onUpdate({ name: v })}
+            className="flex-1 min-w-0"
+          />
+          {/* Level is narrow — fixed width */}
+          <Field
+            label="Lvl"
+            value={String(character.level)}
+            canEdit={canEdit}
+            type="number"
+            onChange={(v) => onUpdate({ level: parseInt(v) || 1 })}
+            className="w-12 shrink-0"
+          />
         </div>
-        <Field label="Ancestry" value={character.ancestry} canEdit={canEdit} onChange={(v) => onUpdate({ ancestry: v })} />
-        {/* Size & Speed — now editable */}
-        <div className="flex gap-2">
+
+        {/* Row 2: Ancestry + Class */}
+        <div className="flex gap-3">
+          <Field label="Ancestry" value={character.ancestry} canEdit={canEdit}
+            onChange={(v) => onUpdate({ ancestry: v })} className="flex-1 min-w-0" />
+          <Field label="Class" value={character.class} canEdit={canEdit}
+            onChange={(v) => onUpdate({ class: v })} className="flex-1 min-w-0" />
+        </div>
+
+        {/* Row 3: Size + Speed — both compact */}
+        <div className="flex gap-3">
           <Field label="Size" value={character.size} canEdit={canEdit}
-            onChange={(v) => onUpdate({ size: v })} className="flex-1" />
+            onChange={(v) => onUpdate({ size: v })} className="flex-1 min-w-0" />
           <Field label="Speed" value={String(character.speed)} canEdit={canEdit} type="number"
-            onChange={(v) => onUpdate({ speed: parseInt(v) || 6 })} className="w-16" />
+            onChange={(v) => onUpdate({ speed: parseInt(v) || 6 })} className="w-16 shrink-0" />
         </div>
       </div>
 
@@ -128,40 +151,69 @@ export function SummaryTab({ character, canEdit, onUpdate, onRoll, isGM }: Props
             {character.hp.current === 0 && " · DYING"}
           </p>
 
-          {/* Hit Dice */}
-          <div className="mt-2 flex items-center gap-2 flex-wrap">
+          {/* ── Hit Dice ──────────────────────────────────────────
+              Display: Xd8  (e.g. "4d8" = 4 remaining d8s)
+              No additive modifier here — the STR bonus is only applied
+              when actually rolling, shown separately in the roll modal.
+          ────────────────────────────────────────────────────── */}
+          <div className="mt-2">
             <span className="text-[10px] text-stone-500 uppercase tracking-wider">Hit Dice</span>
-            {canEdit ? (
-              <>
-                <NumInput value={character.hitDice.current} canEdit min={0} max={character.hitDice.max}
-                  onChange={(v) => onUpdate({ hitDice: { ...character.hitDice, current: v } })}
-                  className="text-sm font-semibold text-stone-300 w-8" />
-                <span className="text-stone-500 text-xs">/</span>
-                <NumInput value={character.hitDice.max} canEdit min={1}
-                  onChange={(v) => onUpdate({ hitDice: { ...character.hitDice, max: v } })}
-                  className="text-sm font-semibold text-stone-300 w-8" />
-                <select value={character.hitDice.dice}
-                  onChange={(e) => onUpdate({ hitDice: { ...character.hitDice, dice: e.target.value as DiceType } })}
-                  className="bg-stone-800 border border-stone-700 rounded px-1 py-0.5 text-[11px] text-stone-300 outline-none focus:border-amber-600">
-                  {HIT_DICE_OPTIONS.map((d) => <option key={d} value={d}>{d}</option>)}
-                </select>
-              </>
-            ) : (
-              <span className="text-sm font-semibold text-stone-300">
-                {character.hitDice.current}/{character.hitDice.max} {character.hitDice.dice}
-              </span>
-            )}
-            {/* Roll button — disabled if no dice left */}
-            <button
-              onClick={handleHitDiceRoll}
-              disabled={character.hitDice.current <= 0}
-              className={`px-1.5 py-0.5 rounded text-[10px] border transition-all ${
-                character.hitDice.current > 0
-                  ? "bg-stone-700 hover:bg-amber-900 text-stone-400 hover:text-amber-200 border-stone-600"
-                  : "bg-stone-800/40 text-stone-600 border-stone-700/40 cursor-not-allowed"
-              }`}
-              title={character.hitDice.current > 0 ? `Roll ${character.hitDice.dice}+STR to recover HP` : "No hit dice remaining"}
-            >🎲</button>
+            <div className="flex items-center gap-2 mt-1 flex-wrap">
+              {canEdit ? (
+                <>
+                  {/* Current count */}
+                  <input
+                    type="number"
+                    value={character.hitDice.current}
+                    min={0}
+                    max={character.hitDice.max}
+                    onChange={(e) => onUpdate({ hitDice: { ...character.hitDice, current: Math.max(0, parseInt(e.target.value) || 0) } })}
+                    className="w-8 text-center text-sm font-bold bg-stone-900 border border-stone-700 rounded text-stone-200 outline-none py-0.5 focus:border-amber-600"
+                  />
+                  <span className="text-stone-500 text-xs">/</span>
+                  {/* Max count */}
+                  <input
+                    type="number"
+                    value={character.hitDice.max}
+                    min={1}
+                    onChange={(e) => onUpdate({ hitDice: { ...character.hitDice, max: Math.max(1, parseInt(e.target.value) || 1) } })}
+                    className="w-8 text-center text-sm font-bold bg-stone-900 border border-stone-700 rounded text-stone-200 outline-none py-0.5 focus:border-amber-600"
+                  />
+                  {/* Die type */}
+                  <select
+                    value={character.hitDice.dice}
+                    onChange={(e) => onUpdate({ hitDice: { ...character.hitDice, dice: e.target.value as DiceType } })}
+                    className="bg-stone-800 border border-stone-700 rounded px-1 py-0.5 text-[11px] text-stone-300 outline-none focus:border-amber-600"
+                  >
+                    {HIT_DICE_OPTIONS.map((d) => <option key={d} value={d}>{d}</option>)}
+                  </select>
+                </>
+              ) : (
+                /* Read-only: show "4/6 d8" */
+                <span className="text-sm font-bold text-stone-300">
+                  {character.hitDice.current}/{character.hitDice.max} {character.hitDice.dice}
+                </span>
+              )}
+
+              {/* Roll button */}
+              <button
+                onClick={handleHitDiceRoll}
+                disabled={character.hitDice.current <= 0}
+                title={character.hitDice.current > 0
+                  ? `Roll ${character.hitDice.dice} + STR (${character.stats.str >= 0 ? "+" : ""}${character.stats.str}) to recover HP`
+                  : "No hit dice remaining"}
+                className={`px-1.5 py-0.5 rounded text-[10px] border transition-all ${
+                  character.hitDice.current > 0
+                    ? "bg-stone-700 hover:bg-amber-900 text-stone-400 hover:text-amber-200 border-stone-600"
+                    : "bg-stone-800/40 text-stone-600 border-stone-700/40 cursor-not-allowed"
+                }`}
+              >
+                🎲
+              </button>
+            </div>
+            <p className="text-[10px] text-stone-600 mt-0.5 italic">
+              Roll = {character.hitDice.dice} + STR ({character.stats.str >= 0 ? "+" : ""}{character.stats.str})
+            </p>
           </div>
         </div>
       </div>
@@ -174,7 +226,7 @@ export function SummaryTab({ character, canEdit, onUpdate, onRoll, isGM }: Props
           onRoll={handleStatRoll} />
         {canEdit && (
           <p className="text-[10px] text-stone-600 mt-2 italic">
-            Double-click a value to edit. Distributions: +2/+2/+0/−1 · +2/+1/+1/+0 · +3/+1/−1/−1
+            Double-click a value to edit · +2/+2/+0/−1 · +2/+1/+1/+0 · +3/+1/−1/−1
           </p>
         )}
       </div>
@@ -215,11 +267,14 @@ export function SummaryTab({ character, canEdit, onUpdate, onRoll, isGM }: Props
         </div>
       </div>
 
-      {/* ── Languages — ABOVE Abilities ──────────────────────────── */}
-      <div className="bento-card">
+      {/* ── Languages — z-index raised so dropdown clears cards below ── */}
+      <div className="bento-card relative z-10">
         <p className="bento-label mb-2">Languages</p>
-        <LanguageSelector selected={character.languages} readOnly={!canEdit}
-          onChange={(langs) => onUpdate({ languages: langs })} />
+        <LanguageSelector
+          selected={character.languages}
+          readOnly={!canEdit}
+          onChange={(langs) => onUpdate({ languages: langs })}
+        />
         {canEdit && (
           <p className="text-[10px] text-stone-600 mt-1.5 italic">
             Common is always known. +1 language per INT point.
@@ -263,12 +318,19 @@ export function SummaryTab({ character, canEdit, onUpdate, onRoll, isGM }: Props
       </div>
 
       {rollPending && (
-        <DiceRollModal label={rollPending.label} formula={rollPending.formula} isGM={isGM}
-          onConfirm={confirmRoll} onCancel={() => setRollPending(null)} />
+        <DiceRollModal
+          label={rollPending.label}
+          formula={rollPending.formula}
+          isGM={isGM}
+          onConfirm={confirmRoll}
+          onCancel={() => setRollPending(null)}
+        />
       )}
     </div>
   );
 }
+
+// ── Small helpers ─────────────────────────────────────────────────
 
 function Field({ label, value, canEdit, type = "text", onChange, className = "" }: {
   label: string; value: string; canEdit: boolean; type?: string;
@@ -278,10 +340,14 @@ function Field({ label, value, canEdit, type = "text", onChange, className = "" 
     <div className={`flex flex-col gap-0.5 ${className}`}>
       <span className="text-[10px] text-stone-500 uppercase tracking-wider">{label}</span>
       {canEdit ? (
-        <input type={type} value={value} onChange={(e) => onChange?.(e.target.value)}
-          className="bg-transparent border-b border-stone-700 focus:border-amber-600 outline-none text-sm text-stone-200 pb-0.5 transition-colors" />
+        <input
+          type={type}
+          value={value}
+          onChange={(e) => onChange?.(e.target.value)}
+          className="bg-transparent border-b border-stone-700 focus:border-amber-600 outline-none text-sm text-stone-200 pb-0.5 transition-colors w-full"
+        />
       ) : (
-        <span className="text-sm text-stone-200 font-medium">{value || "—"}</span>
+        <span className="text-sm text-stone-200 font-medium truncate">{value || "—"}</span>
       )}
     </div>
   );
@@ -293,7 +359,11 @@ function NumInput({ value, canEdit, min, max, onChange, className = "" }: {
 }) {
   if (!canEdit) return <span className={className}>{value}</span>;
   return (
-    <input type="number" value={value} min={min} max={max}
+    <input
+      type="number"
+      value={value}
+      min={min}
+      max={max}
       onChange={(e) => { const v = parseInt(e.target.value); if (!isNaN(v)) onChange(v); }}
       className={`bg-transparent border-b border-stone-700/60 focus:border-amber-600 outline-none text-center w-16 transition-colors ${className}`}
     />
