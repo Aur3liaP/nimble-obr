@@ -56,12 +56,6 @@ export function useOBR(): UseOBRReturn {
 
   const isGM = role === "GM";
 
-  /**
-   * canEdit rules:
-   * - GM can always edit any sheet
-   * - A player can edit ONLY if the token's ownerId matches their playerId
-   * - Unclaimed tokens (no ownerId) are read-only for players (they can claim first)
-   */
   const canEdit = isGM || (
     character !== null &&
     !!character.ownerId &&
@@ -109,7 +103,7 @@ export function useOBR(): UseOBRReturn {
         OBR.player.getName(),
         OBR.player.getRole(),
         OBR.player.getSelection(),
-        OBR.action.setWidth(500),
+        OBR.action.setWidth(430),
         OBR.action.setHeight(700),
       ]);
       setPlayerId(pid);
@@ -122,6 +116,7 @@ export function useOBR(): UseOBRReturn {
       OBR.player.onChange(async (player: Player) => {
         await handleSelectionChange(player.selection || []);
       });
+
       OBR.scene.items.onChange(async (items) => {
         const currentChar = characterRef.current;
         if (!currentChar) return;
@@ -131,6 +126,9 @@ export function useOBR(): UseOBRReturn {
           if (fresh) setCharacter(fresh);
         }
       });
+
+      // Single source of truth for the roll log — only update from metadata,
+      // never from local setRecentRolls after a push (avoids double-update re-mounts)
       OBR.scene.onMetadataChange((meta) => {
         const log = meta[ROLL_LOG_KEY] as DiceRollResult[] | undefined;
         if (log) setRecentRolls(log.slice(-MAX_ROLL_HISTORY));
@@ -148,16 +146,29 @@ export function useOBR(): UseOBRReturn {
     });
   };
 
-  /** Push a roll result to the shared scene metadata log */
+  /**
+   * Push result to shared scene metadata.
+   * The onMetadataChange listener will pick it up and call setRecentRolls —
+   * so we must NOT call setRecentRolls here to avoid a double state update
+   * that causes App to re-mount its conditional branches and destroy DicePanel state.
+   *
+   * EXCEPTION: hidden rolls are never written to metadata, so for those we
+   * update local state directly (only the GM sees them).
+   */
   const pushRollToLog = async (result: DiceRollResult) => {
-    if (result.hidden) return;
+    if (result.hidden) {
+      // Not written to scene — update locally only
+      setRecentRolls((prev) => [...prev, result].slice(-MAX_ROLL_HISTORY));
+      return;
+    }
     const meta = await OBR.scene.getMetadata();
     const existing = (meta[ROLL_LOG_KEY] as DiceRollResult[]) || [];
     const newLog = [...existing, result].slice(-MAX_ROLL_HISTORY);
+    // onMetadataChange will fire and update recentRolls — don't call setRecentRolls here
     await OBR.scene.setMetadata({ [ROLL_LOG_KEY]: newLog });
   };
 
-  /** Roll tied to a character sheet (requires character in context) */
+  /** Roll tied to a character sheet */
   const handleRoll = async (req: DiceRollRequest): Promise<DiceRollResult | null> => {
     const current = characterRef.current;
     if (!current) return null;
@@ -172,17 +183,14 @@ export function useOBR(): UseOBRReturn {
       hidden: req.hidden || false,
     };
     await pushRollToLog(result);
-    setRecentRolls((prev) => [...prev, result].slice(-MAX_ROLL_HISTORY));
     return result;
   };
 
   /**
    * Free roll — no character required.
-   * Uses a minimal character stub so rollFormula can run (no stat substitution needed
-   * for plain NdX+modifier formulas from DicePanel).
+   * Uses a minimal stub so rollFormula works with plain NdX+modifier formulas.
    */
   const handleFreeRoll = async (req: DiceRollRequest): Promise<DiceRollResult | null> => {
-    // Build a minimal stub so rollFormula doesn't crash on missing character
     const stub = {
       level: 1,
       stats: { str: 0, dex: 0, int: 0, wil: 0 },
@@ -191,7 +199,7 @@ export function useOBR(): UseOBRReturn {
         lore: 0, might: 0, naturecraft: 0, perception: 0, stealth: 0,
       },
       hp: { current: 0, max: 0, temp: 0 },
-    } as unknown as import("../types/character").NimbleCharacter;
+    } as unknown as NimbleCharacter;
 
     const rolled = rollFormula(req.formula, stub, req.mode, req.advantageCount ?? 0);
     const result: DiceRollResult = {
@@ -204,7 +212,6 @@ export function useOBR(): UseOBRReturn {
       hidden: req.hidden || false,
     };
     await pushRollToLog(result);
-    setRecentRolls((prev) => [...prev, result].slice(-MAX_ROLL_HISTORY));
     return result;
   };
 
@@ -212,7 +219,7 @@ export function useOBR(): UseOBRReturn {
     const current = characterRef.current;
     if (!current) return null;
     return handleRoll({
-      label: `Initiative`,
+      label: "Initiative",
       formula: `1d20+${current.stats.dex + (current.initiativeBonus || 0)}`,
       mode,
     });

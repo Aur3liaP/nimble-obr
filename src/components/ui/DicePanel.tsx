@@ -21,7 +21,7 @@ const DICE: DieOption[] = [
   { sides: 10,  label: "d10", color: "text-yellow-300", bg: "bg-yellow-950/40", border: "border-yellow-800/60" },
   { sides: 12,  label: "d12", color: "text-lime-300",   bg: "bg-lime-950/40",   border: "border-lime-800/60" },
   { sides: 20,  label: "d20", color: "text-emerald-300",bg: "bg-emerald-950/40",border: "border-emerald-800/60" },
-  { sides: 100, label: "d%",  color: "text-sky-300",    bg: "bg-sky-950/40",    border: "border-sky-800/60" },
+  { sides: 100, label: "d100",  color: "text-sky-300",    bg: "bg-sky-950/40",    border: "border-sky-800/60" },
 ];
 
 export function DicePanel({ isGM = false, onRoll, defaultCollapsed = false }: DicePanelProps) {

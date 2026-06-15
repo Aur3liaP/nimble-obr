@@ -196,6 +196,18 @@ export function SummaryTab({ character, canEdit, onUpdate, onRoll, isGM }: Props
                   >
                     {HIT_DICE_OPTIONS.map((d) => <option key={d} value={d}>{d}</option>)}
                   </select>
+                  <button
+                    onClick={handleHitDiceRoll}
+                    disabled={character.hitDice.current <= 0}
+                    title={character.hitDice.current > 0
+                      ? `Roll ${character.hitDice.dice} + STR (${strSign}${character.stats.str})`
+                      : "No hit dice remaining"}
+                    className={`px-1.5 py-0.5 rounded text-[10px] border transition-all ${
+                      character.hitDice.current > 0
+                        ? "bg-stone-700 hover:bg-amber-900 text-stone-400 hover:text-amber-200 border-stone-600 cursor-pointer"
+                        : "bg-stone-800/40 text-stone-600 border-stone-700/40 cursor-not-allowed"
+                    }`}
+                  >🎲</button>
                 </>
               ) : (
                 <span className="text-sm font-bold text-stone-300">
@@ -203,18 +215,6 @@ export function SummaryTab({ character, canEdit, onUpdate, onRoll, isGM }: Props
                 </span>
               )}
 
-              <button
-                onClick={handleHitDiceRoll}
-                disabled={character.hitDice.current <= 0}
-                title={character.hitDice.current > 0
-                  ? `Roll ${character.hitDice.dice} + STR (${strSign}${character.stats.str})`
-                  : "No hit dice remaining"}
-                className={`px-1.5 py-0.5 rounded text-[10px] border transition-all ${
-                  character.hitDice.current > 0
-                    ? "bg-stone-700 hover:bg-amber-900 text-stone-400 hover:text-amber-200 border-stone-600 cursor-pointer"
-                    : "bg-stone-800/40 text-stone-600 border-stone-700/40 cursor-not-allowed"
-                }`}
-              >🎲</button>
             </div>
             <p className="text-[10px] text-stone-600 mt-0.5 italic">
               Roll = {character.hitDice.dice} + STR ({strSign}{character.stats.str})

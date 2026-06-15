@@ -38,7 +38,7 @@ export default function App() {
 
   const [activeTab, setActiveTab] = useState<TabId>("summary");
 
-  // ── Loading ────────────────────────────────────────────────────
+  // ── Loading — only truly empty screen, no DicePanel needed yet ──
   if (!isReady) {
     return (
       <div className="flex h-screen items-center justify-center bg-stone-950">
@@ -50,11 +50,105 @@ export default function App() {
     );
   }
 
-  // ── No token selected ──────────────────────────────────────────
-  // DicePanel is open by default here — main use case for GM with no token
-  if (selectionState === "none") {
-    return (
-      <div className="flex flex-col h-screen bg-stone-950 text-stone-200 overflow-hidden">
+  const onRoll = (req: DiceRollRequest) => handleRoll(req);
+  const onRollInitiative = (mode: RollMode = "standard") => rollInitiative(mode);
+  const isOwner = character ? character.ownerId === playerId : false;
+  const isUnclaimed = character ? !character.ownerId : false;
+
+  // ─────────────────────────────────────────────────────────────────────
+  // All post-ready states share ONE layout so DicePanel is never unmounted.
+  // Only the *content area* changes based on selectionState.
+  // This prevents the DicePanel internal state (collapsed/mode/count) from
+  // resetting when recentRolls updates and triggers a re-render.
+  // ─────────────────────────────────────────────────────────────────────
+
+  const showSheet = selectionState === "ready" && character !== null;
+  const showNoToken = selectionState === "none";
+  const showNoSheet = selectionState === "no-sheet";
+  const firstItem = selectedItems[0];
+
+  return (
+    <div className="flex flex-col h-screen bg-stone-950 text-stone-200 overflow-hidden font-sans">
+
+      {/* ── Header — only when a sheet is open ───────────────────── */}
+      {showSheet && character && (
+        <header className="shrink-0 px-3 pt-3 pb-0">
+          <div className="bento-card !py-2 !px-3">
+            <div className="flex items-start justify-between gap-2">
+              <div className="min-w-0">
+                <h1 className="text-base font-black text-amber-200 truncate leading-tight">
+                  {character.name}
+                </h1>
+                <p className="text-[10px] text-stone-500 truncate">
+                  {[character.ancestry, character.class, character.level ? `Lv.${character.level}` : ""]
+                    .filter(Boolean).join(" · ")}
+                </p>
+              </div>
+              <div className="flex flex-col items-end gap-1 shrink-0">
+                <span className={`px-2 py-0.5 rounded-full text-[10px] font-bold border ${
+                  character.hp.current === 0
+                    ? "border-rose-700 bg-rose-950/60 text-rose-300"
+                    : character.hp.current <= character.hp.max * 0.5
+                      ? "border-amber-700/60 bg-amber-950/30 text-amber-300"
+                      : "border-emerald-800/50 bg-emerald-950/30 text-emerald-300"
+                }`}>
+                  ♥ {character.hp.current}/{character.hp.max}
+                  {character.hp.temp > 0 && <span className="text-sky-300 ml-1">+{character.hp.temp}</span>}
+                </span>
+                <div className="flex items-center gap-1">
+                  {isGM && (
+                    <span className="px-1.5 py-0.5 rounded text-[9px] font-bold tracking-widest uppercase bg-amber-900/40 text-amber-400 border border-amber-800/40">
+                      GM
+                    </span>
+                  )}
+                  {!isGM && !isOwner && (
+                    <button onClick={claimToken}
+                      className="px-2 py-0.5 rounded text-[9px] font-semibold border border-sky-700/60 bg-sky-950/40 text-sky-300 hover:bg-sky-900/50 transition-colors">
+                      {isUnclaimed ? "Claim" : "Take over"}
+                    </button>
+                  )}
+                  {isOwner && !isGM && (
+                    <span className="px-1.5 py-0.5 rounded text-[9px] text-stone-500 border border-stone-800">mine</span>
+                  )}
+                </div>
+              </div>
+            </div>
+            {character.wounds > 0 && (
+              <div className="flex items-center gap-1.5 mt-1.5">
+                <span className="text-[9px] text-rose-500 uppercase tracking-wider">Wounds</span>
+                <div className="flex gap-1">
+                  {Array.from({ length: character.maxWounds + 1 }).map((_, i) => (
+                    <div key={i} className={`w-2 h-2 rounded-full ${i < character.wounds ? "bg-rose-600" : "bg-stone-700"}`} />
+                  ))}
+                </div>
+              </div>
+            )}
+          </div>
+        </header>
+      )}
+
+      {/* ── Tab bar — only when sheet open ───────────────────────── */}
+      {showSheet && (
+        <>
+          <div className="shrink-0 flex gap-1 px-3 pt-2">
+            {TABS.map((tab) => (
+              <button key={tab.id} onClick={() => setActiveTab(tab.id)}
+                className={`flex-1 flex flex-col items-center py-1.5 rounded-t-lg border-b-2 text-[10px] font-semibold tracking-wide transition-all duration-150 ${
+                  activeTab === tab.id
+                    ? "border-amber-600 bg-stone-800/80 text-amber-300"
+                    : "border-transparent text-stone-500 hover:text-stone-300 hover:bg-stone-900/40"
+                }`}>
+                <span className="text-base leading-none">{tab.icon}</span>
+                <span className="mt-0.5">{tab.label}</span>
+              </button>
+            ))}
+          </div>
+          <div className="shrink-0 h-px bg-stone-700/60 mx-3" />
+        </>
+      )}
+
+      {/* ── No-token header ───────────────────────────────────────── */}
+      {showNoToken && (
         <div className="shrink-0 px-3 pt-3 pb-2 border-b border-stone-800">
           <h2 className="text-xs font-semibold uppercase tracking-widest text-stone-500">
             Nimble · No token selected
@@ -63,192 +157,70 @@ export default function App() {
             Select a character token to open their sheet.
           </p>
         </div>
-        <div className="flex-1 overflow-y-auto scrollbar-thin p-3 flex flex-col gap-3">
-          <DicePanel
-            isGM={isGM}
-            playerName={playerName}
-            onRoll={handleFreeRoll}
-            defaultCollapsed={false}
-          />
-          <RollLog rolls={recentRolls} isGM={isGM} currentPlayerId={playerId} inline />
-        </div>
-      </div>
-    );
-  }
+      )}
 
-  // ── Token with no sheet ────────────────────────────────────────
-  if (selectionState === "no-sheet") {
-    const firstItem = selectedItems[0];
-    return (
-      <div className="flex flex-col h-screen bg-stone-950 text-stone-200 overflow-hidden">
-        <div className="flex-1 flex flex-col items-center justify-center gap-4 p-6 text-center">
+      {/* ── No-sheet message ──────────────────────────────────────── */}
+      {showNoSheet && (
+        <div className="flex flex-col items-center justify-center gap-4 py-10 px-6 text-center">
           <span className="text-5xl opacity-40">📄</span>
           <p className="text-sm text-stone-500 max-w-[200px] leading-relaxed">
             This token has no character sheet.
           </p>
           {firstItem && (
-            <button
-              onClick={() => createSheetForToken(firstItem)}
-              className="px-4 py-2 rounded-lg bg-amber-800 hover:bg-amber-700 text-amber-100 text-sm font-semibold transition-colors"
-            >
+            <button onClick={() => createSheetForToken(firstItem)}
+              className="px-4 py-2 rounded-lg bg-amber-800 hover:bg-amber-700 text-amber-100 text-sm font-semibold transition-colors">
               Create sheet
             </button>
           )}
         </div>
-        <div className="border-t border-stone-800 p-3 flex flex-col gap-3">
-          <DicePanel
-            isGM={isGM}
-            playerName={playerName}
-            onRoll={handleFreeRoll}
-          />
-          <RollLog rolls={recentRolls} isGM={isGM} currentPlayerId={playerId} inline />
-        </div>
-      </div>
-    );
-  }
+      )}
 
-  if (!character) {
-    return (
-      <div className="flex h-screen items-center justify-center bg-stone-950">
-        <p className="text-sm text-stone-500">Loading…</p>
-      </div>
-    );
-  }
-
-  const onRoll = (req: DiceRollRequest) => handleRoll(req);
-  const onRollInitiative = (mode: RollMode = "standard") => rollInitiative(mode);
-
-  const isOwner = character.ownerId === playerId;
-  const isUnclaimed = !character.ownerId;
-
-  return (
-    <div className="flex flex-col h-screen bg-stone-950 text-stone-200 overflow-hidden font-sans">
-
-      {/* ── Header ────────────────────────────────────────────── */}
-      <header className="shrink-0 px-3 pt-3 pb-0">
-        <div className="bento-card !py-2 !px-3">
-          <div className="flex items-start justify-between gap-2">
-            <div className="min-w-0">
-              <h1 className="text-base font-black text-amber-200 truncate leading-tight">
-                {character.name}
-              </h1>
-              <p className="text-[10px] text-stone-500 truncate">
-                {[character.ancestry, character.class, character.level ? `Lv.${character.level}` : ""]
-                  .filter(Boolean).join(" · ")}
-              </p>
-            </div>
-
-            <div className="flex flex-col items-end gap-1 shrink-0">
-              <span className={`px-2 py-0.5 rounded-full text-[10px] font-bold border ${
-                character.hp.current === 0
-                  ? "border-rose-700 bg-rose-950/60 text-rose-300"
-                  : character.hp.current <= character.hp.max * 0.5
-                    ? "border-amber-700/60 bg-amber-950/30 text-amber-300"
-                    : "border-emerald-800/50 bg-emerald-950/30 text-emerald-300"
-              }`}>
-                ♥ {character.hp.current}/{character.hp.max}
-                {character.hp.temp > 0 && <span className="text-sky-300 ml-1">+{character.hp.temp}</span>}
-              </span>
-
-              <div className="flex items-center gap-1">
-                {isGM && (
-                  <span className="px-1.5 py-0.5 rounded text-[9px] font-bold tracking-widest uppercase bg-amber-900/40 text-amber-400 border border-amber-800/40">
-                    GM
-                  </span>
-                )}
-                {!isGM && !isOwner && (
-                  <button
-                    onClick={claimToken}
-                    className="px-2 py-0.5 rounded text-[9px] font-semibold border border-sky-700/60 bg-sky-950/40 text-sky-300 hover:bg-sky-900/50 transition-colors"
-                    title="Claim this character as yours"
-                  >
-                    {isUnclaimed ? "Claim" : "Take over"}
-                  </button>
-                )}
-                {isOwner && !isGM && (
-                  <span className="px-1.5 py-0.5 rounded text-[9px] text-stone-500 border border-stone-800">
-                    mine
-                  </span>
-                )}
-              </div>
-            </div>
-          </div>
-
-          {character.wounds > 0 && (
-            <div className="flex items-center gap-1.5 mt-1.5">
-              <span className="text-[9px] text-rose-500 uppercase tracking-wider">Wounds</span>
-              <div className="flex gap-1">
-                {Array.from({ length: character.maxWounds + 1 }).map((_, i) => (
-                  <div key={i}
-                    className={`w-2 h-2 rounded-full ${i < character.wounds ? "bg-rose-600" : "bg-stone-700"}`} />
-                ))}
-              </div>
-            </div>
-          )}
-        </div>
-      </header>
-
-      {/* ── Tab bar ─────────────────────────────────────────────── */}
-      <div className="shrink-0 flex gap-1 px-3 pt-2">
-        {TABS.map((tab) => (
-          <button
-            key={tab.id}
-            onClick={() => setActiveTab(tab.id)}
-            className={`flex-1 flex flex-col items-center py-1.5 rounded-t-lg border-b-2 text-[10px] font-semibold tracking-wide transition-all duration-150 ${
-              activeTab === tab.id
-                ? "border-amber-600 bg-stone-800/80 text-amber-300"
-                : "border-transparent text-stone-500 hover:text-stone-300 hover:bg-stone-900/40"
-            }`}
-          >
-            <span className="text-base leading-none">{tab.icon}</span>
-            <span className="mt-0.5">{tab.label}</span>
-          </button>
-        ))}
-      </div>
-
-      <div className="shrink-0 h-px bg-stone-700/60 mx-3" />
-
-      {/* ── Tab content ─────────────────────────────────────────── */}
+      {/* ── Scrollable content area ───────────────────────────────── */}
       <main className="flex-1 overflow-y-auto scrollbar-thin">
-        {activeTab === "summary" && (
-          <SummaryTab
-            character={character} canEdit={canEdit}
-            onUpdate={updateCharacter} onRoll={onRoll} isGM={isGM}
-          />
-        )}
-        {activeTab === "combat" && (
-          <CombatTab
-            character={character} canEdit={canEdit} isGM={isGM}
-            onUpdate={updateCharacter} onRoll={onRoll}
-            onRollInitiative={onRollInitiative}
-          />
-        )}
-        {activeTab === "spells" && (
-          <SpellsTab
-            character={character} canEdit={canEdit} isGM={isGM}
-            onUpdate={updateCharacter} onRoll={onRoll}
-          />
-        )}
-        {activeTab === "inventory" && (
-          <InventoryTab
-            character={character} canEdit={canEdit} isGM={isGM}
-            onUpdate={updateCharacter} onRoll={onRoll}
-          />
+
+        {/* Sheet tabs */}
+        {showSheet && character && (
+          <>
+            {activeTab === "summary" && (
+              <SummaryTab character={character} canEdit={canEdit}
+                onUpdate={updateCharacter} onRoll={onRoll} isGM={isGM} />
+            )}
+            {activeTab === "combat" && (
+              <CombatTab character={character} canEdit={canEdit} isGM={isGM}
+                onUpdate={updateCharacter} onRoll={onRoll}
+                onRollInitiative={onRollInitiative} />
+            )}
+            {activeTab === "spells" && (
+              <SpellsTab character={character} canEdit={canEdit} isGM={isGM}
+                onUpdate={updateCharacter} onRoll={onRoll} />
+            )}
+            {activeTab === "inventory" && (
+              <InventoryTab character={character} canEdit={canEdit} isGM={isGM}
+                onUpdate={updateCharacter} onRoll={onRoll} />
+            )}
+          </>
         )}
 
-        {/* ── Free Dice Panel — always at the bottom of any tab ── */}
-        <div className="px-3 pt-2 pb-3">
+        {/* ── DicePanel + RollLog — always mounted here, never unmounted.
+            Mounted once in <main>, visible in all states.
+            defaultCollapsed=false when no token (main use), true when sheet open. */}
+        <div className="px-3 pt-2 pb-3 flex flex-col gap-3">
           <DicePanel
             isGM={isGM}
             playerName={playerName}
             onRoll={handleFreeRoll}
-            defaultCollapsed={true}
+            defaultCollapsed={showSheet}
           />
+          {(showNoToken || showNoSheet) && (
+            <RollLog rolls={recentRolls} isGM={isGM} currentPlayerId={playerId} inline />
+          )}
         </div>
       </main>
 
-      {/* Floating roll log pill */}
-      <RollLog rolls={recentRolls} isGM={isGM} currentPlayerId={playerId} />
+      {/* Floating pill — only when sheet is visible (not to stack with inline log) */}
+      {showSheet && (
+        <RollLog rolls={recentRolls} isGM={isGM} currentPlayerId={playerId} />
+      )}
     </div>
   );
 }
