@@ -23,7 +23,7 @@ type FormulaContext = {
   level: number;
   stats: Stats;
   key: number;
-  flaw: number; 
+  flaw: number;
   skills: Skills;
   hp?: number;
   maxHp?: number;
@@ -39,7 +39,7 @@ export function buildContext(char: NimbleCharacter): FormulaContext {
   return {
     level: char.level,
     stats: char.stats,
-    key: keyValue, 
+    key: keyValue,
     flaw: flawValue,
     skills: char.skills,
     hp: char.hp.current,
@@ -84,7 +84,14 @@ function substituteVariables(formula: string, ctx: FormulaContext): string {
   // floor / ceil shorthands → keep as tokens for the parser
   f = f.replace(/MATH\.FLOOR\(/g, "floor(");
   f = f.replace(/MATH\.CEIL\(/g, "ceil(");
+  f = f.replace(/MATH\.MIN\(/g, "min(");
+  f = f.replace(/MATH\.MAX\(/g, "max(");
   f = f.toLowerCase(); // parser works in lowercase
+
+
+  // Custom
+  f = f.replace(/\bINCREMENTDICE\(/g, "incrementdice(");
+  f = f.replace(/\bSTEPDICE\(/g, "stepdice(");
 
   return f;
 }
@@ -116,7 +123,8 @@ export function parseDamageFormula(
   ctx: FormulaContext,
 ): { diceNotation: string; modifier: number } {
   // Substitute variables first, then split dice from modifiers
-  const subbed = substituteVariables(formula, ctx);
+  let subbed = substituteVariables(formula, ctx);
+  subbed = resolveDynamicDice(subbed);
 
   // Extract leading NdX
   const diceMatch = subbed.match(/^(\d+d\d+)/i);
@@ -250,6 +258,66 @@ class Parser {
       return parseFloat(this.input.slice(start, this.pos)) || 0;
     }
 
+    // Min & Max 
+    if (this.input.startsWith("min(", this.pos)) {
+      this.pos += 4;
+      const a = this.parseExpr();
+      if (this.peek() === ",") this.consume();
+      const b = this.parseExpr();
+      if (this.peek() === ")") this.consume();
+      return Math.min(a, b);
+    }
+
+    if (this.input.startsWith("max(", this.pos)) {
+      this.pos += 4;
+      const a = this.parseExpr();
+      if (this.peek() === ",") this.consume();
+      const b = this.parseExpr();
+      if (this.peek() === ")") this.consume();
+      return Math.max(a, b);
+    }
+
+    // Custom
+    // incrementdice(baseSides, level)
+    if (this.input.startsWith("incrementdice(", this.pos)) {
+      this.pos += "incrementdice(".length;
+      const baseSides = this.parseExpr();
+
+      if (this.peek() === ",") this.consume();
+      const level = this.parseExpr();
+
+      if (this.peek() === ")") this.consume();
+      const increments = Math.floor(level / 5);
+
+      return baseSides + increments * 2;
+    }
+
+    // stepdice(level, d1, d2, d3, d4)
+    if (this.input.startsWith("stepdice(", this.pos)) {
+      this.pos += "stepdice(".length;
+      const level = this.parseExpr();
+
+      if (this.peek() === ",") this.consume();
+      const d1 = this.parseExpr();
+
+      if (this.peek() === ",") this.consume();
+      const d2 = this.parseExpr();
+
+      if (this.peek() === ",") this.consume();
+      const d3 = this.parseExpr();
+
+      if (this.peek() === ",") this.consume();
+      const d4 = this.parseExpr();
+
+      if (this.peek() === ")") this.consume();
+
+      if (level >= 15) return d4;
+      if (level >= 10) return d3;
+      if (level >= 5) return d2;
+      return d1;
+    }
+
+
     return 0; // Unknown token — return 0 gracefully
   }
 }
@@ -260,22 +328,45 @@ class Parser {
  */
 export function safeEval(expr: string): number {
   try {
-    // Guard: only allow digits, operators, parens, dots, whitespace, and our
-    // known function names. Reject anything else.
     const sanitised = expr.replace(/\s+/g, " ").trim();
-    if (
-      !/^[\d\s+\-*/().floorceil]+$/.test(
-        sanitised.replace(/floor|ceil/g, ""),
-      )
-    ) {
-      // If unknown chars remain after removing known identifiers, bail.
-      const unknown = sanitised.replace(/[\d\s+\-*/().floorceil]+/g, "");
-      if (unknown.length > 0) return NaN;
+
+    if (!/^[\d\s+\-*/().,a-z]+$/i.test(sanitised)) {
+      return NaN;
     }
+
     return new Parser(sanitised).parse();
   } catch {
     return NaN;
   }
+}
+
+function resolveDynamicDice(formula: string): string {
+  formula = formula.replace(
+    /1dstepdice\(([^)]+)\)/gi,
+    (_match, args) => {
+      const [level, d1, d2, d3, d4] =
+        args.split(",").map((v: string) => Number(v.trim()));
+
+      if (level >= 15) return `1d${d4}`;
+      if (level >= 10) return `1d${d3}`;
+      if (level >= 5) return `1d${d2}`;
+
+      return `1d${d1}`;
+    }
+  );
+
+  formula = formula.replace(
+    /incrementdice\((\d+),(\d+)\)d(\d+)/gi,
+    (_match, base, level, sides) => {
+
+      const count =
+        Number(base) + Math.floor(Number(level) / 5);
+
+      return `${count}d${sides}`;
+    }
+  );
+
+  return formula;
 }
 
 // ─────────────────────────────────────────────────────────────────
@@ -303,6 +394,7 @@ export function evalFormulaWithContext(
 ): number {
   try {
     let f = substituteVariables(formula, ctx);
+    f = resolveDynamicDice(f);
     f = diceToAverage(f); // Replace NdX with average before arithmetic
     const result = safeEval(f);
     return isNaN(result) ? 0 : result;
@@ -320,7 +412,8 @@ export function resolveFormulaDisplay(
   char: NimbleCharacter,
 ): string {
   const ctx = buildContext(char);
-  const f = substituteVariables(formula, ctx);
+  let f = substituteVariables(formula, ctx);
+  f = resolveDynamicDice(f);
   // Evaluate non-dice parts but keep dice notation
   // e.g. "1d8 + 2 + 1" → "1d8+3"
   const diceMatch = f.match(/\d+d\d+/i);
