@@ -50,50 +50,62 @@ export function useOBR(): UseOBRReturn {
   const playerIdRef = useRef<string>("");
   const playerNameRef = useRef<string>("");
 
-  useEffect(() => { characterRef.current = character; }, [character]);
-  useEffect(() => { playerIdRef.current = playerId; }, [playerId]);
-  useEffect(() => { playerNameRef.current = playerName; }, [playerName]);
+  useEffect(() => {
+    characterRef.current = character;
+  }, [character]);
+  useEffect(() => {
+    playerIdRef.current = playerId;
+  }, [playerId]);
+  useEffect(() => {
+    playerNameRef.current = playerName;
+  }, [playerName]);
 
   const isGM = role === "GM";
 
-  const canEdit = isGM || (
-    character !== null &&
-    !!character.ownerId &&
-    character.ownerId === playerId
+  const canEdit =
+    isGM ||
+    (character !== null &&
+      !!character.ownerId &&
+      character.ownerId === playerId);
+
+  const loadCharacterFromItem = useCallback(
+    (item: Item): NimbleCharacter | null => {
+      return (item.metadata?.[METADATA_KEY] as NimbleCharacter) ?? null;
+    },
+    [],
   );
 
-  const loadCharacterFromItem = useCallback((item: Item): NimbleCharacter | null => {
-    return (item.metadata?.[METADATA_KEY] as NimbleCharacter) ?? null;
-  }, []);
-
-  const handleSelectionChange = useCallback(async (selectedIds: string[]) => {
-    if (!selectedIds || selectedIds.length === 0) {
-      setSelectedItems([]);
-      setSelectionState("none");
-      setCharacter(null);
-      return;
-    }
-    const items = await OBR.scene.items.getItems(selectedIds);
-    const tokens = items.filter((i) => i.layer === "CHARACTER");
-    setSelectedItems(tokens);
-
-    if (tokens.length === 0) {
-      setSelectionState("none");
-      setCharacter(null);
-    } else if (tokens.length > 1) {
-      setSelectionState("multiple");
-      setCharacter(loadCharacterFromItem(tokens[0]));
-    } else {
-      const loaded = loadCharacterFromItem(tokens[0]);
-      if (!loaded) {
-        setSelectionState("no-sheet");
+  const handleSelectionChange = useCallback(
+    async (selectedIds: string[]) => {
+      if (!selectedIds || selectedIds.length === 0) {
+        setSelectedItems([]);
+        setSelectionState("none");
         setCharacter(null);
-      } else {
-        setCharacter(loaded);
-        setSelectionState("ready");
+        return;
       }
-    }
-  }, [loadCharacterFromItem]);
+      const items = await OBR.scene.items.getItems(selectedIds);
+      const tokens = items.filter((i) => i.layer === "CHARACTER");
+      setSelectedItems(tokens);
+
+      if (tokens.length === 0) {
+        setSelectionState("none");
+        setCharacter(null);
+      } else if (tokens.length > 1) {
+        setSelectionState("multiple");
+        setCharacter(loadCharacterFromItem(tokens[0]));
+      } else {
+        const loaded = loadCharacterFromItem(tokens[0]);
+        if (!loaded) {
+          setSelectionState("no-sheet");
+          setCharacter(null);
+        } else {
+          setCharacter(loaded);
+          setSelectionState("ready");
+        }
+      }
+    },
+    [loadCharacterFromItem],
+  );
 
   useEffect(() => {
     if (!OBR.isAvailable) return;
@@ -103,8 +115,6 @@ export function useOBR(): UseOBRReturn {
         OBR.player.getName(),
         OBR.player.getRole(),
         OBR.player.getSelection(),
-        OBR.action.setWidth(430),
-        OBR.action.setHeight(700),
       ]);
       setPlayerId(pid);
       setPlayerName(pname);
@@ -112,7 +122,9 @@ export function useOBR(): UseOBRReturn {
       setRole(prole as OBRRole);
       setIsReady(true);
       await handleSelectionChange(initialSelection || []);
-
+      await OBR.action.setWidth(400);
+      await OBR.action.setHeight(800);
+await OBR.action.setTitle("Nimble Sheet");
       OBR.player.onChange(async (player: Player) => {
         await handleSelectionChange(player.selection || []);
       });
@@ -142,7 +154,9 @@ export function useOBR(): UseOBRReturn {
     const updated = { ...current, ...updates, updatedAt: Date.now() };
     setCharacter(updated);
     await OBR.scene.items.updateItems([current.tokenId], (items) => {
-      for (const item of items) { item.metadata[METADATA_KEY] = updated; }
+      for (const item of items) {
+        item.metadata[METADATA_KEY] = updated;
+      }
     });
   };
 
@@ -169,10 +183,17 @@ export function useOBR(): UseOBRReturn {
   };
 
   /** Roll tied to a character sheet */
-  const handleRoll = async (req: DiceRollRequest): Promise<DiceRollResult | null> => {
+  const handleRoll = async (
+    req: DiceRollRequest,
+  ): Promise<DiceRollResult | null> => {
     const current = characterRef.current;
     if (!current) return null;
-    const rolled = rollFormula(req.formula, current, req.mode, req.advantageCount ?? 0);
+    const rolled = rollFormula(
+      req.formula,
+      current,
+      req.mode,
+      req.advantageCount ?? 0,
+    );
     const result: DiceRollResult = {
       ...rolled,
       label: req.label,
@@ -190,18 +211,33 @@ export function useOBR(): UseOBRReturn {
    * Free roll — no character required.
    * Uses a minimal stub so rollFormula works with plain NdX+modifier formulas.
    */
-  const handleFreeRoll = async (req: DiceRollRequest): Promise<DiceRollResult | null> => {
+  const handleFreeRoll = async (
+    req: DiceRollRequest,
+  ): Promise<DiceRollResult | null> => {
     const stub = {
       level: 1,
       stats: { str: 0, dex: 0, int: 0, wil: 0 },
       skills: {
-        arcana: 0, examination: 0, finesse: 0, influence: 0, insight: 0,
-        lore: 0, might: 0, naturecraft: 0, perception: 0, stealth: 0,
+        arcana: 0,
+        examination: 0,
+        finesse: 0,
+        influence: 0,
+        insight: 0,
+        lore: 0,
+        might: 0,
+        naturecraft: 0,
+        perception: 0,
+        stealth: 0,
       },
       hp: { current: 0, max: 0, temp: 0 },
     } as unknown as NimbleCharacter;
 
-    const rolled = rollFormula(req.formula, stub, req.mode, req.advantageCount ?? 0);
+    const rolled = rollFormula(
+      req.formula,
+      stub,
+      req.mode,
+      req.advantageCount ?? 0,
+    );
     const result: DiceRollResult = {
       ...rolled,
       label: req.label,
@@ -228,7 +264,9 @@ export function useOBR(): UseOBRReturn {
   const createSheetForToken = async (item: Item) => {
     const newChar = createDefaultCharacter(item.id, playerIdRef.current);
     await OBR.scene.items.updateItems([item.id], (items) => {
-      for (const i of items) { i.metadata[METADATA_KEY] = newChar; }
+      for (const i of items) {
+        i.metadata[METADATA_KEY] = newChar;
+      }
     });
     setCharacter(newChar);
     setSelectionState("ready");
@@ -241,9 +279,21 @@ export function useOBR(): UseOBRReturn {
   };
 
   return {
-    isReady, selectionState, character, selectedItems,
-    playerId, playerName, role, canEdit, isGM,
-    updateCharacter, handleRoll, handleFreeRoll, rollInitiative, recentRolls,
-    createSheetForToken, claimToken,
+    isReady,
+    selectionState,
+    character,
+    selectedItems,
+    playerId,
+    playerName,
+    role,
+    canEdit,
+    isGM,
+    updateCharacter,
+    handleRoll,
+    handleFreeRoll,
+    rollInitiative,
+    recentRolls,
+    createSheetForToken,
+    claimToken,
   };
 }

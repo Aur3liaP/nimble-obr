@@ -566,15 +566,15 @@ export function SpellsTab({
         <p className="bento-label mb-2">Spell Notes</p>
         {canEdit ? (
           <textarea
-            value={character.notes}
-            onChange={(e) => onUpdate({ notes: e.target.value })}
+            value={character.spellNotes}
+            onChange={(e) => onUpdate({ spellNotes: e.target.value })}
             rows={3}
             placeholder="Concentration, spell-specific rules…"
             className="w-full bg-stone-900/60 border border-stone-700 rounded-lg px-3 py-2 text-xs text-stone-300 outline-none resize-none focus:border-amber-700/60 placeholder-stone-600"
           />
         ) : (
           <p className="text-xs text-stone-400 whitespace-pre-wrap">
-            {character.notes || (
+            {character.spellNotes || (
               <span className="text-stone-600 italic">No notes.</span>
             )}
           </p>

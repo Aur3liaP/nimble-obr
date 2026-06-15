@@ -40,7 +40,7 @@ export function RollLog({ rolls, isGM, currentPlayerId, inline = false }: RollLo
   const last = visible[visible.length - 1];
 
   return (
-    <div className="fixed bottom-3 right-3 z-40 flex flex-col items-end gap-1">
+    <div className="absolute bottom-3 right-3 z-40 flex flex-col items-end gap-1">
       {isOpen && (
         <div className="w-64 max-h-52 overflow-y-auto rounded-xl border border-stone-700 bg-stone-950/95 shadow-2xl shadow-black/60 backdrop-blur-sm">
           <div className="sticky top-0 bg-stone-900 px-3 py-2 border-b border-stone-700 flex items-center justify-between">

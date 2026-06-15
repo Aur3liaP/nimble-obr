@@ -3,6 +3,7 @@ import type { NimbleCharacter, DiceRollRequest, RollMode, DiceType } from "../..
 import { StatGrid } from "../ui/StatBox";
 import { LanguageSelector } from "../ui/LanguageSelector";
 import { DiceRollModal } from "../ui/DiceRollModal";
+import type { Stats } from "../../types/character";
 
 const SKILL_LABELS = {
   arcana: "Arcana", examination: "Examination", finesse: "Finesse",
@@ -16,7 +17,7 @@ const SKILL_STAT = {
   perception: "WIL", stealth: "DEX",
 } as const;
 
-const HIT_DICE_OPTIONS: DiceType[] = ["d6", "d8", "d10", "d12"];
+const HIT_DICE_OPTIONS: DiceType[] = ["d4", "d6", "d8", "d10", "d12"];
 
 interface Props {
   character: NimbleCharacter;
@@ -33,6 +34,28 @@ export function SummaryTab({ character, canEdit, onUpdate, onRoll, isGM }: Props
 
   const handleStatRoll = (label: string, formula: string, saveAdv: "advantage" | "disadvantage" | "none") => {
     setRollPending({ label, formula, saveAdv });
+  };
+
+    const handleStatusChange = (key: keyof Stats, newStatus: "key" | "flaw" | "none") => {
+    let nextKey = character.keyStat;
+    let nextFlaw = character.flawStat;
+
+    if (newStatus === "key") {
+      nextKey = key;
+      if (nextFlaw === key) nextFlaw = null;
+    } 
+    else if (newStatus === "flaw") {
+      nextFlaw = key;
+      if (nextKey === key) nextKey = null;
+    } 
+    else {
+      if (nextKey === key) nextKey = null;
+      if (nextFlaw === key) nextFlaw = null;
+    }
+    onUpdate({
+     keyStat: nextKey,
+     flawStat: nextFlaw
+    });
   };
 
   const confirmRoll = (mode: RollMode, advantageCount: number, hidden: boolean) => {
@@ -153,9 +176,9 @@ export function SummaryTab({ character, canEdit, onUpdate, onRoll, isGM }: Props
               return (
                 <button key={i}
                   onClick={() => canEdit && setWounds(filled ? i : i + 1)}
-                  className={`w-6 h-6 rounded-full border-2 transition-all text-xs ${
-                    fatal ? "border-rose-900 bg-rose-950/30 text-rose-800 text-[8px]"
-                    : filled ? "border-rose-600 bg-rose-700"
+                  className={`w-5 h-5 rounded-full border-2 transition-all text-xs ${
+                    fatal ? "border-rose-900 bg-rose-950/30 text-rose-800 text-[10px]"
+                    : filled ? "border-rose-700 bg-rose-900"
                     : "border-stone-600 bg-stone-800/40"
                   } ${canEdit ? "cursor-pointer hover:scale-110" : "cursor-default"}`}
                 >
@@ -229,8 +252,11 @@ export function SummaryTab({ character, canEdit, onUpdate, onRoll, isGM }: Props
         <StatGrid
           stats={character.stats}
           saveMods={character.saveMods}
+          keyStat={character.keyStat}
+          flawStat={character.flawStat}
           canEdit={canEdit}
           onStatChange={(key, val) => onUpdate({ stats: { ...character.stats, [key]: val } })}
+          onStatusChange={handleStatusChange}
           onRoll={canEdit ? handleStatRoll : undefined}
         />
         {canEdit && (
@@ -257,7 +283,7 @@ export function SummaryTab({ character, canEdit, onUpdate, onRoll, isGM }: Props
                   {canEdit ? (
                     <input type="number" value={val} min={-5} max={10}
                       onChange={(e) => onUpdate({ skills: { ...character.skills, [skillKey]: parseInt(e.target.value) || 0 } })}
-                      className="w-10 text-center text-sm font-bold bg-stone-900 border border-stone-700 rounded text-amber-200 outline-none py-0.5 focus:border-amber-600"
+                      className="w-6 text-center text-sm font-bold bg-stone-900 border border-stone-700 rounded text-amber-200 outline-none py-0.5 focus:border-amber-600"
                     />
                   ) : (
                     <span className="text-sm font-bold text-amber-200 w-8 text-right">

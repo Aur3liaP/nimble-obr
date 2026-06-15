@@ -6,21 +6,49 @@ export type DiceType = "d4" | "d6" | "d8" | "d10" | "d12" | "d20" | "d100";
 export type ActionType = "melee" | "ranged" | "spell" | "ability" | "item";
 export type SaveAdvantage = "advantage" | "disadvantage" | "none";
 export type SpellSchool =
-  | "fire" | "ice" | "lightning" | "wind"
-  | "radiant" | "necrotic" | "terramancy" | "utility";
+  | "fire"
+  | "ice"
+  | "lightning"
+  | "wind"
+  | "radiant"
+  | "necrotic"
+  | "terramancy"
+  | "utility";
 
-export interface HitPoints { current: number; max: number; temp: number; }
-export interface HitDice { current: number; max: number; dice: DiceType; }
+export interface HitPoints {
+  current: number;
+  max: number;
+  temp: number;
+}
+export interface HitDice {
+  current: number;
+  max: number;
+  dice: DiceType;
+}
 
-export interface Stats { str: number; dex: number; int: number; wil: number; }
+export interface Stats {
+  str: number;
+  dex: number;
+  int: number;
+  wil: number;
+}
 export interface SaveMods {
-  str: SaveAdvantage; dex: SaveAdvantage;
-  int: SaveAdvantage; wil: SaveAdvantage;
+  str: SaveAdvantage;
+  dex: SaveAdvantage;
+  int: SaveAdvantage;
+  wil: SaveAdvantage;
 }
 export interface Skills {
-  arcana: number; examination: number; finesse: number;
-  influence: number; insight: number; lore: number;
-  might: number; naturecraft: number; perception: number; stealth: number;
+  arcana: number;
+  examination: number;
+  finesse: number;
+  influence: number;
+  insight: number;
+  lore: number;
+  might: number;
+  naturecraft: number;
+  perception: number;
+  stealth: number;
 }
 
 /**
@@ -90,6 +118,8 @@ export interface NimbleCharacter {
   hitDice: HitDice;
 
   stats: Stats;
+  keyStat: keyof Stats | null;
+  flawStat: keyof Stats | null; 
   saveMods: SaveMods;
   skills: Skills;
 
@@ -99,6 +129,9 @@ export interface NimbleCharacter {
   languages: string[];
   abilities: string[];
   notes: string;
+  battleNotes: string;
+  spellNotes: string;
+  inventoryNotes: string;
 
   actions: CharacterAction[];
   inventory: InventoryItem[];
@@ -140,30 +173,73 @@ export interface DiceRollResult {
 }
 
 export const SKILL_STAT_MAP: Record<keyof Skills, keyof Stats> = {
-  arcana: "int", examination: "int", finesse: "dex",
-  influence: "wil", insight: "wil", lore: "int",
-  might: "str", naturecraft: "wil", perception: "wil", stealth: "dex",
+  arcana: "int",
+  examination: "int",
+  finesse: "dex",
+  influence: "wil",
+  insight: "wil",
+  lore: "int",
+  might: "str",
+  naturecraft: "wil",
+  perception: "wil",
+  stealth: "dex",
 };
 
-export function createDefaultCharacter(tokenId: string, ownerId: string): NimbleCharacter {
+export function createDefaultCharacter(
+  tokenId: string,
+  ownerId: string,
+): NimbleCharacter {
   return {
-    name: "New Hero", ancestry: "", class: "", level: 1,
-    size: "Medium", speed: 6,
+    name: "New Hero",
+    ancestry: "",
+    class: "",
+    level: 1,
+    size: "Medium",
+    speed: 6,
     hp: { current: 10, max: 10, temp: 0 },
-    wounds: 0, maxWounds: 5, mana: 0, maxMana: 0,
+    wounds: 0,
+    maxWounds: 5,
+    mana: 0,
+    maxMana: 0,
     hitDice: { current: 1, max: 1, dice: "d8" },
     stats: { str: 0, dex: 0, int: 0, wil: 0 },
+    keyStat: null,
+    flawStat: null, 
     saveMods: { str: "none", dex: "none", int: "none", wil: "none" },
     skills: {
-      arcana: 0, examination: 0, finesse: 0, influence: 0, insight: 0,
-      lore: 0, might: 0, naturecraft: 0, perception: 0, stealth: 0,
+      arcana: 0,
+      examination: 0,
+      finesse: 0,
+      influence: 0,
+      insight: 0,
+      lore: 0,
+      might: 0,
+      naturecraft: 0,
+      perception: 0,
+      stealth: 0,
     },
-    armor: { name: "Unarmored", value: 0, proficient: true, equipped: false, equippedItemId: undefined, defenseBonus: 0 },
+    armor: {
+      name: "Unarmored",
+      value: 0,
+      proficient: true,
+      equipped: false,
+      equippedItemId: undefined,
+      defenseBonus: 0,
+    },
     initiativeBonus: 0,
     languages: ["Common"],
-    abilities: [], notes: "",
-    actions: [], inventory: [],
-    inventorySlots: 10, gold: 0, silver: 0,
-    tokenId, ownerId, updatedAt: Date.now(),
+    abilities: [],
+    notes: "",
+    battleNotes: "",
+    spellNotes: "",
+    inventoryNotes: "",
+    actions: [],
+    inventory: [],
+    inventorySlots: 10,
+    gold: 0,
+    silver: 0,
+    tokenId,
+    ownerId,
+    updatedAt: Date.now(),
   };
 }

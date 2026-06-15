@@ -188,11 +188,11 @@ export function CombatTab({
                   onClick={() =>
                     canEdit && onUpdate({ wounds: filled ? i : i + 1 })
                   }
-                  className={`w-6 h-6 rounded-full border-2 transition-all text-[8px] ${
+                  className={`w-5 h-5 rounded-full border-2 transition-all text-[10px] ${
                     fatal
                       ? "border-rose-900 bg-rose-950/30 text-rose-800"
                       : filled
-                        ? "border-rose-600 bg-rose-700"
+                        ? "border-rose-700 bg-rose-900"
                         : "border-stone-600 bg-stone-800/40"
                   } ${canEdit ? "cursor-pointer hover:scale-110" : "cursor-default"}`}
                 >
@@ -241,20 +241,20 @@ export function CombatTab({
 
           {/* ── Initiative ───────────────────────────────────────────── */}
           {canEdit && (
-          <div className="flex-1 border-l border-stone-700 pl-1.5">
-            <p className="bento-label mb-2">Initiative</p>
-            <div className="flex items-center gap-2">
-              <div className="flex flex-col items-center px-2 py-1 rounded-lg bg-stone-800/60 border border-stone-700/40">
-                <span className="text-[10px] text-stone-500 uppercase tracking-wider">
-                  Base
-                </span>
-                <span className="text-2xl font-black text-amber-300">
-                  {character.stats.dex >= 0 ? "+" : ""}
-                  {character.stats.dex + character.initiativeBonus}
-                </span>
-                <span className="text-[10px] text-stone-500">DEX</span>
-              </div>
-              
+            <div className="flex-1 border-l border-stone-700 pl-1.5">
+              <p className="bento-label mb-2">Initiative</p>
+              <div className="flex items-center gap-2">
+                <div className="flex flex-col items-center px-2 py-1 rounded-lg bg-stone-800/60 border border-stone-700/40">
+                  <span className="text-[10px] text-stone-500 uppercase tracking-wider">
+                    Base
+                  </span>
+                  <span className="text-2xl font-black text-amber-300">
+                    {character.stats.dex >= 0 ? "+" : ""}
+                    {character.stats.dex + character.initiativeBonus}
+                  </span>
+                  <span className="text-[10px] text-stone-500">DEX</span>
+                </div>
+
                 <div className="flex flex-col gap-1.5 flex-1">
                   <button
                     onClick={() => handleInitiativeRoll("standard")}
@@ -283,9 +283,9 @@ export function CombatTab({
                     />
                   </div>
                 </div>
+              </div>
             </div>
-          </div>
-              )}
+          )}
         </div>
       </div>
 
@@ -509,15 +509,15 @@ export function CombatTab({
         <p className="bento-label mb-2">Combat Notes</p>
         {canEdit ? (
           <textarea
-            value={character.notes}
-            onChange={(e) => onUpdate({ notes: e.target.value })}
+            value={character.battleNotes}
+            onChange={(e) => onUpdate({ battleNotes: e.target.value })}
             rows={3}
             placeholder="Conditions, concentration, special rules…"
             className="w-full bg-stone-900/60 border border-stone-700 rounded-lg px-3 py-2 text-xs text-stone-300 outline-none resize-none focus:border-amber-700/60 placeholder-stone-600"
           />
         ) : (
           <p className="text-xs text-stone-400 whitespace-pre-wrap">
-            {character.notes || (
+            {character.battleNotes || (
               <span className="text-stone-600 italic">No notes.</span>
             )}
           </p>

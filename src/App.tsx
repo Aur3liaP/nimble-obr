@@ -68,12 +68,12 @@ export default function App() {
   const firstItem = selectedItems[0];
 
   return (
-    <div className="flex flex-col h-screen bg-stone-950 text-stone-200 overflow-hidden font-sans">
+    <div className="relative flex flex-col h-full bg-stone-950 text-stone-200 overflow-hidden font-sans pb-7">
 
       {/* ── Header — only when a sheet is open ───────────────────── */}
       {showSheet && character && (
         <header className="shrink-0 px-3 pt-3 pb-0">
-          <div className="bento-card !py-2 !px-3">
+          <div className="bento-card py-2! px-3!">
             <div className="flex items-start justify-between gap-2">
               <div className="min-w-0">
                 <h1 className="text-base font-black text-amber-200 truncate leading-tight">
@@ -115,10 +115,10 @@ export default function App() {
             </div>
             {character.wounds > 0 && (
               <div className="flex items-center gap-1.5 mt-1.5">
-                <span className="text-[9px] text-rose-500 uppercase tracking-wider">Wounds</span>
+                <span className="text-[9px] text-rose-700 uppercase tracking-wider">Wounds</span>
                 <div className="flex gap-1">
                   {Array.from({ length: character.maxWounds + 1 }).map((_, i) => (
-                    <div key={i} className={`w-2 h-2 rounded-full ${i < character.wounds ? "bg-rose-600" : "bg-stone-700"}`} />
+                    <div key={i} className={`w-2 h-2 rounded-full ${i < character.wounds ? "bg-rose-700" : "bg-stone-700"}`} />
                   ))}
                 </div>
               </div>
@@ -163,7 +163,7 @@ export default function App() {
       {showNoSheet && (
         <div className="flex flex-col items-center justify-center gap-4 py-10 px-6 text-center">
           <span className="text-5xl opacity-40">📄</span>
-          <p className="text-sm text-stone-500 max-w-[200px] leading-relaxed">
+          <p className="text-sm text-stone-500 max-w-50 leading-relaxed">
             This token has no character sheet.
           </p>
           {firstItem && (
@@ -202,14 +202,13 @@ export default function App() {
         )}
 
         {/* ── DicePanel + RollLog — always mounted here, never unmounted.
-            Mounted once in <main>, visible in all states.
-            defaultCollapsed=false when no token (main use), true when sheet open. */}
+            Mounted once in <main>, visible in all states. */}
         <div className="px-3 pt-2 pb-3 flex flex-col gap-3">
           <DicePanel
             isGM={isGM}
             playerName={playerName}
             onRoll={handleFreeRoll}
-            defaultCollapsed={showSheet}
+            defaultCollapsed={true}
           />
           {(showNoToken || showNoSheet) && (
             <RollLog rolls={recentRolls} isGM={isGM} currentPlayerId={playerId} inline />

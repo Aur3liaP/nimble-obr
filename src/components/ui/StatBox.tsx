@@ -6,15 +6,16 @@ interface StatBoxProps {
   value: number;
   saveAdvantage: "advantage" | "disadvantage" | "none";
   canEdit: boolean;
-  isKeyStats?: boolean;
+  status?: "none" | "key" | "flaw";
   onChange?: (key: keyof Stats, value: number) => void;
   onRoll?: (label: string, formula: string, saveAdv: "advantage" | "disadvantage" | "none") => void;
+  onStatusChange? : (statkey: keyof Stats, newStatus: "key" | "flaw" | "none") => void
 }
 
 const STAT_LABELS: Record<keyof Stats, string> = { str: "STR", dex: "DEX", int: "INT", wil: "WIL" };
 const STAT_FULL: Record<keyof Stats, string> = { str: "Strength", dex: "Dexterity", int: "Intelligence", wil: "Willpower" };
 
-export function StatBox({ statKey, value, saveAdvantage, canEdit, isKeyStats = false, onChange, onRoll }: StatBoxProps) {
+export function StatBox({ statKey, value, saveAdvantage, canEdit, status = "none", onChange, onRoll, onStatusChange }: StatBoxProps) {
   const [isEditing, setIsEditing] = useState(false);
   const [inputVal, setInputVal] = useState(String(value));
   const displayBonus = value >= 0 ? `+${value}` : String(value);
@@ -26,14 +27,7 @@ export function StatBox({ statKey, value, saveAdvantage, canEdit, isKeyStats = f
   };
 
   return (
-    <div className={`relative flex flex-col items-center gap-1 p-2 rounded-lg border transition-all select-none ${
-      isKeyStats
-        ? "border-amber-500/50 bg-amber-950/30 shadow-amber-900/20 shadow-md"
-        : "border-stone-700/60 bg-stone-900/40"
-    }`}>
-      {isKeyStats && (
-        <span className="absolute -top-2 left-1/2 -translate-x-1/2 text-[9px] font-bold tracking-widest text-amber-400 bg-stone-950 px-1 rounded uppercase">KEY</span>
-      )}
+    <div className={`relative flex flex-col items-center gap-1 p-2 rounded-lg border border-stone-700/60 bg-stone-900/40 transition-all select-none`}>
       {saveAdvantage !== "none" && (
         <span
           className={`absolute top-1 right-1.5 text-[10px] font-bold ${saveAdvantage === "advantage" ? "text-emerald-400" : "text-rose-400"}`}
@@ -55,27 +49,38 @@ export function StatBox({ statKey, value, saveAdvantage, canEdit, isKeyStats = f
           className="w-12 text-center text-lg font-bold bg-stone-800 border border-amber-500 rounded text-amber-100 outline-none py-0.5"
         />
       ) : (
-        <span
-          onDoubleClick={() => { if (canEdit) { setInputVal(String(value)); setIsEditing(true); } }}
-          className={`text-2xl font-bold tabular-nums leading-none ${isKeyStats ? "text-amber-300" : "text-stone-100"} ${canEdit ? "cursor-pointer" : ""}`}
-          title={canEdit ? "Double-click to edit" : undefined}
+        <div className="flex justify-around w-full">
+          <button 
+          onClick={() => onStatusChange?.(statKey, status === "key" ? "none" : "key")}
+          className={`text-lg transition-colors ${status === "key" ? "text-emerald-500" : "text-stone-600 hover:text-stone-400"}`}
         >
-          {displayBonus}
-        </span>
+          {status === "key" ? "▲" : "△"}
+        </button>
+       <span
+            onDoubleClick={() => { if (canEdit) { setInputVal(String(value)); setIsEditing(true); } }}
+            className={`text-2xl font-bold tabular-nums leading-none ${status === "key" ? "text-amber-300" : "text-stone-100"} ${canEdit ? "cursor-pointer" : ""}`}
+            title={canEdit ? "Double-click to edit" : undefined}
+          >
+            {displayBonus}
+          </span>
+          <button 
+          onClick={() => onStatusChange?.(statKey, status === "flaw" ? "none" : "flaw")}
+          className={`text-lg transition-colors ${status === "flaw" ? "text-rose-500" : "text-stone-600 hover:text-stone-400"}`}
+        >
+          {status === "flaw" ? "▼" : "▽"}
+        </button>
+        </div>
       )}
 
       {/* SAVE button — only clickable by owner/GM (canEdit).
           Hidden entirely for read-only viewers to avoid confusion. */}
-      {onRoll ? (
+      {onRoll && (
         <button
           onClick={() => onRoll(`${STAT_FULL[statKey]} Save`, `1d20+${value}`, saveAdvantage)}
           className="mt-0.5 px-2 py-0.5 rounded text-[10px] font-semibold tracking-wide bg-stone-700/60 hover:bg-amber-900/60 text-stone-300 hover:text-amber-200 border border-stone-600/40 hover:border-amber-700/60 transition-all active:scale-95"
         >
           SAVE
         </button>
-      ) : (
-        /* Placeholder to keep box height consistent */
-        <span className="mt-0.5 px-2 py-0.5 text-[10px] text-stone-700 select-none">SAVE</span>
       )}
     </div>
   );
@@ -84,13 +89,15 @@ export function StatBox({ statKey, value, saveAdvantage, canEdit, isKeyStats = f
 interface StatGridProps {
   stats: Stats;
   saveMods: SaveMods;
-  keyStats?: Array<keyof Stats>;
+  keyStat: keyof Stats | null;
+  flawStat: keyof Stats | null;
   canEdit: boolean;
   onStatChange?: (key: keyof Stats, value: number) => void;
+  onStatusChange?: (key: keyof Stats, status: "key" | "flaw" | "none") => void;
   onRoll?: (label: string, formula: string, saveAdv: "advantage" | "disadvantage" | "none") => void;
 }
 
-export function StatGrid({ stats, saveMods, keyStats = [], canEdit, onStatChange, onRoll }: StatGridProps) {
+export function StatGrid({ stats, saveMods, keyStat, flawStat, canEdit, onStatChange, onStatusChange, onRoll }: StatGridProps) {
   return (
     <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
       {(["str", "dex", "int", "wil"] as Array<keyof Stats>).map((key) => (
@@ -100,8 +107,13 @@ export function StatGrid({ stats, saveMods, keyStats = [], canEdit, onStatChange
           value={stats[key]}
           saveAdvantage={saveMods[key]}
           canEdit={canEdit}
-          isKeyStats={keyStats.includes(key)}
+          status={
+            keyStat === key ? "key" : 
+            flawStat === key ? "flaw" : 
+            "none"
+          }
           onChange={canEdit ? onStatChange : undefined}
+          onStatusChange={canEdit ? onStatusChange : undefined}
           // onRoll only passed if canEdit — disables the button for non-owners
           onRoll={canEdit ? onRoll : undefined}
         />

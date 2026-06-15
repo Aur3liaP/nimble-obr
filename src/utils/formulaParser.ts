@@ -22,6 +22,8 @@ import type { NimbleCharacter, Skills, Stats } from "../types/character";
 type FormulaContext = {
   level: number;
   stats: Stats;
+  key: number;
+  flaw: number; 
   skills: Skills;
   hp?: number;
   maxHp?: number;
@@ -31,9 +33,14 @@ type FormulaContext = {
  * Build a flat variable map from a character (or partial context).
  */
 export function buildContext(char: NimbleCharacter): FormulaContext {
+  const keyValue = char.keyStat ? char.stats[char.keyStat] : 0;
+  const flawValue = char.flawStat ? char.stats[char.flawStat] : 0;
+
   return {
     level: char.level,
     stats: char.stats,
+    key: keyValue, 
+    flaw: flawValue,
     skills: char.skills,
     hp: char.hp.current,
     maxHp: char.hp.max,
@@ -52,6 +59,8 @@ function substituteVariables(formula: string, ctx: FormulaContext): string {
   f = f.replace(/\bDEX\b/g, String(ctx.stats.dex));
   f = f.replace(/\bINT\b/g, String(ctx.stats.int));
   f = f.replace(/\bWIL\b/g, String(ctx.stats.wil));
+
+  f = f.replace(/\bKEY\b/g, String(ctx.key));
 
   // Level
   f = f.replace(/\bLEVEL\b/g, String(ctx.level));

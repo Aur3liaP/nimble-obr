@@ -37,7 +37,7 @@ export function DicePanel({ isGM = false, onRoll, defaultCollapsed = false }: Di
     const formula = `${count}d${die.sides}${modStr}`;
     const countPrefix = count > 1 ? `${count}` : "";
     const modLabel = modifier !== 0 ? (modifier > 0 ? `+${modifier}` : `${modifier}`) : "";
-    const label = `${countPrefix}${die.label}${modLabel}`;
+    const label = `Free Roll - ${countPrefix}${die.label}${modLabel}`;
 
     onRoll({
       label,
