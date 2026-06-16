@@ -638,7 +638,7 @@ export const BASE_SPELLS: SpellTemplate[] = [
     range: "8",
     damage: "1d4",
     formula: "1dstepdice(level,4,8,10,12)",
-    description: "Ignores armor. Pulls target 2 spaces closer. HIGH LEVEL: Increment dice /5lvl",
+    description: "Ignores armor. Pulls target 2 spaces closer. High level: Increment dice /5lvl",
     manaCost: 0,
   },
   {

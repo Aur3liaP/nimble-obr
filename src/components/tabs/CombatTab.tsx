@@ -85,10 +85,6 @@ export function CombatTab({
   ];
   const combatActions = character.actions.filter((a) => a.type !== "spell");
 
-  const broadcastAction = (label: string) => {
-    onRoll({ label, formula: "0", mode: "standard", hidden: false });
-  };
-
   const toggleActionUsed = (i: number) => {
     if (canEdit) {
       const next = [...actionsUsed];
@@ -394,18 +390,7 @@ export function CombatTab({
                           })
                       : undefined
                   }
-                  onDelete={
-                    canEdit
-                      ? () =>
-                          onUpdate({
-                            actions: character.actions.filter(
-                              (x) => x.id !== a.id,
-                            ),
-                          })
-                      : undefined
-                  }
                   isGM={isGM}
-                  onBroadcast={broadcastAction}
                 />
               ))}
             {/* Inventory favorites */}
@@ -489,16 +474,7 @@ export function CombatTab({
                       })
                   : undefined
               }
-              onDelete={
-                canEdit
-                  ? () =>
-                      onUpdate({
-                        actions: character.actions.filter((x) => x.id !== a.id),
-                      })
-                  : undefined
-              }
               isGM={isGM}
-              onBroadcast={broadcastAction}
             />
           ))}
         </div>
@@ -611,17 +587,13 @@ function ActionRow({
   canEdit,
   onRoll,
   onToggleFavorite,
-  onDelete,
-  onBroadcast,
 }: {
   action: CharacterAction;
   character: NimbleCharacter;
   canEdit: boolean;
   onRoll?: () => void;
   onToggleFavorite?: () => void;
-  onDelete?: () => void;
   isGM: boolean;
-  onBroadcast: (label: string) => void;
 }) {
   const [expanded, setExpanded] = useState(false);
   const typeStyle = ACTION_COLORS[action.type] || "";
@@ -687,22 +659,6 @@ function ActionRow({
           <p className="text-xs text-stone-400 leading-relaxed">
             {action.description || "No description."}
           </p>
-          {canEdit && onDelete && (
-            <div className="flex gap-3 mt-2">
-              <button
-                onClick={() => onBroadcast(`${action.name} used`)}
-                className="text-[10px] text-sky-400 hover:text-sky-300"
-              >
-                Broadcast use
-              </button>
-              <button
-                onClick={onDelete}
-                className="text-[10px] text-rose-500 hover:text-rose-400"
-              >
-                Delete
-              </button>
-            </div>
-          )}
         </div>
       )}
     </div>

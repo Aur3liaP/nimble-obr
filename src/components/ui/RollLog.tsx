@@ -89,11 +89,34 @@ function RollEntry({ roll, isMine, isGM }: { roll: DiceRollResult; isMine: boole
           {roll.total}{roll.isCritical ? " ⚡" : roll.isFumble ? " 💀" : ""}
         </span>
       </div>
-      <div className="flex items-center gap-1.5 mt-0.5">
-        <span className="text-stone-500 font-mono">[{roll.kept.join(", ")}]</span>
-        {roll.modifier !== 0 && <span className="text-stone-400">{roll.modifier > 0 ? "+" : ""}{roll.modifier}</span>}
+      <div className="flex items-center gap-1.5 mt-0.5 flex-wrap">
+        {roll.rolls.length > roll.kept.length ? (() => {
+          const keptCopy = [...roll.kept];
+          const isKept = roll.rolls.map(v => {
+            const idx = keptCopy.indexOf(v);
+            if (idx !== -1) { keptCopy.splice(idx, 1); return true; }
+            return false;
+          });
+          return (
+            <span className="font-mono text-[10px]">
+              [
+              {roll.rolls.map((d, i) => (
+                <span key={i} className={isKept[i] ? "text-amber-200 font-bold" : "text-stone-600"}>
+                  {i > 0 && ", "}
+                  {d}
+                </span>
+              ))}
+              ]
+            </span>
+          );
+        })() : (
+          <span className="text-stone-500 font-mono text-[10px]">[{roll.kept.join(", ")}]</span>
+        )}
+        {roll.modifier !== 0 && (
+          <span className="text-stone-400 text-[10px]">{roll.modifier > 0 ? "+" : ""}{roll.modifier}</span>
+        )}
       </div>
-      {/* Player name + time — no character name prefix */}
+      {/* Player name + time */}
       <div className="flex items-center gap-1.5 mt-0.5">
         <span className="text-stone-500 text-[10px]">{roll.playerName}</span>
         <span className="text-stone-600 text-[10px]">·</span>
