@@ -63,7 +63,7 @@ const SCHOOLS: SpellSchool[] = [
   "utility",
 ];
 
-// ── Add spell modal — with base list + search + custom ────────────
+// ── Add spell modal ───────────────────────────────────────────────
 
 type AddMode = "list" | "custom";
 
@@ -81,7 +81,6 @@ function AddSpellModal({
   const [filterSchool, setFilterSchool] = useState<SpellSchool | "all">("all");
   const [filterTier, setFilterTier] = useState<number | "all">("all");
 
-  // Custom form state
   const [form, setForm] = useState({
     name: "",
     tier: 0,
@@ -140,7 +139,6 @@ function AddSpellModal({
           <h3 className="text-sm font-bold text-violet-300">
             Add Spell / Cantrip
           </h3>
-          {/* Mode toggle */}
           <div className="flex gap-1 mt-2">
             {(["list", "custom"] as AddMode[]).map((m) => (
               <button
@@ -411,6 +409,9 @@ export function SpellsTab({
   const [addingSpell, setAddingSpell] = useState(false);
   const [filterTier, setFilterTier] = useState<number | "all">("all");
   const [search, setSearch] = useState("");
+  // Expand (desc) vs edit per spell
+  const [expandedId, setExpandedId] = useState<string | null>(null);
+  const [editingId, setEditingId] = useState<string | null>(null);
 
   const spells = character.actions.filter((a) => a.type === "spell");
   const tiers = [...new Set(spells.map((s) => s.spellTier ?? 0))].sort();
@@ -434,6 +435,34 @@ export function SpellsTab({
           a.id === spellId ? { ...a, isFavorite: !a.isFavorite } : a,
         ),
       });
+    }
+  };
+
+  const updateSpell = (id: string, patch: Partial<CharacterAction>) =>
+    onUpdate({
+      actions: character.actions.map((a) =>
+        a.id === id ? { ...a, ...patch } : a,
+      ),
+    });
+
+  const deleteSpell = (id: string) =>
+    onUpdate({ actions: character.actions.filter((a) => a.id !== id) });
+
+  const handleRowClick = (id: string) => {
+    if (editingId === id) {
+      setEditingId(null);
+      setExpandedId(id);
+      return;
+    }
+    setExpandedId((prev) => (prev === id ? null : id));
+  };
+
+  const handleEditToggle = (id: string) => {
+    if (editingId === id) {
+      setEditingId(null);
+    } else {
+      setEditingId(id);
+      setExpandedId(null);
     }
   };
 
@@ -543,6 +572,10 @@ export function SpellsTab({
                 spell={spell}
                 character={character}
                 canEdit={canEdit}
+                isExpanded={expandedId === spell.id}
+                isEditing={editingId === spell.id}
+                onRowClick={() => handleRowClick(spell.id)}
+                onEditToggle={() => handleEditToggle(spell.id)}
                 onRoll={() =>
                   setRollPending({
                     label: spell.name,
@@ -550,11 +583,12 @@ export function SpellsTab({
                   })
                 }
                 onToggleFavorite={() => toggleFavorite(spell.id)}
-                onDelete={() =>
-                  onUpdate({
-                    actions: character.actions.filter((a) => a.id !== spell.id),
-                  })
-                }
+                onDelete={() => {
+                  deleteSpell(spell.id);
+                  setEditingId(null);
+                  setExpandedId(null);
+                }}
+                onUpdate={(patch) => updateSpell(spell.id, patch)}
               />
             ))}
           </div>
@@ -619,18 +653,27 @@ function SpellRow({
   spell,
   character,
   canEdit,
+  isExpanded,
+  isEditing,
+  onRowClick,
+  onEditToggle,
   onRoll,
   onToggleFavorite,
   onDelete,
+  onUpdate,
 }: {
   spell: CharacterAction;
   character: NimbleCharacter;
   canEdit: boolean;
+  isExpanded: boolean;
+  isEditing: boolean;
+  onRowClick: () => void;
+  onEditToggle: () => void;
   onRoll: () => void;
   onToggleFavorite: () => void;
   onDelete: () => void;
+  onUpdate: (patch: Partial<CharacterAction>) => void;
 }) {
-  const [expanded, setExpanded] = useState(false);
   const tier = spell.spellTier ?? 0;
   const school = spell.spellSchool;
   const schoolStyle = school
@@ -643,13 +686,19 @@ function SpellRow({
   );
 
   return (
-    <div className="rounded-lg border border-stone-700/40 bg-stone-900/40 overflow-hidden">
-      <div
-        className="flex items-center gap-2 px-2.5 py-2 cursor-pointer"
-        onClick={() => setExpanded(!expanded)}
-      >
+    <div
+      className={`rounded-lg border overflow-hidden transition-colors ${
+        isEditing
+          ? "border-violet-700/60 bg-violet-950/10"
+          : "border-stone-700/40 bg-stone-900/40"
+      }`}
+    >
+      {/* Main row */}
+      <div className="flex items-center gap-2 px-2.5 py-2">
         <span>{schoolIcon}</span>
-        <div className="flex-1 min-w-0">
+
+        {/* Clickable name area → description */}
+        <div className="flex-1 min-w-0 cursor-pointer" onClick={onRowClick}>
           <div className="flex items-center gap-1.5 flex-wrap">
             <span className="text-xs font-semibold text-stone-200 truncate">
               {spell.name}
@@ -674,11 +723,12 @@ function SpellRow({
             </span>
           )}
         </div>
+
+        {/* Action buttons */}
         <div
           className="flex items-center gap-1"
           onClick={(e) => e.stopPropagation()}
         >
-          {/* Toggle favorite — star filled/outlined */}
           <button
             onClick={onToggleFavorite}
             className={`text-sm transition-colors ${spell.isFavorite ? "text-amber-400" : "text-stone-600 hover:text-stone-400 text-[22px] pb-0.5"}`}
@@ -688,7 +738,7 @@ function SpellRow({
           >
             {spell.isFavorite ? "⭐" : "☆"}
           </button>
-          {(canEdit && (spell.formula || spell.damage)) && (
+          {canEdit && (spell.formula || spell.damage) && (
             <button
               onClick={onRoll}
               className="px-2 py-1 rounded bg-violet-900/50 hover:bg-violet-800/60 text-violet-300 text-[10px] font-bold border border-violet-800/40 transition-all active:scale-95"
@@ -698,32 +748,167 @@ function SpellRow({
           )}
         </div>
       </div>
-      {expanded && (
+
+      {/* Description panel */}
+      {isExpanded && !isEditing && (
         <div className="px-3 pb-2.5 border-t border-stone-700/40 pt-2">
-          {spell.range && (
-            <p className="text-[10px] text-stone-500 mb-1">
-              📍 {spell.range}
-              {spell.actionCost
-                ? ` · ${spell.actionCost} action${spell.actionCost > 1 ? "s" : ""}`
-                : ""}
-            </p>
-          )}
+          <div className="flex justify-between">
+            {spell.range && (
+              <p className="text-[10px] text-stone-500 mb-1">
+                📍 {spell.range}
+                {spell.actionCost
+                  ? ` · ${spell.actionCost} action${spell.actionCost > 1 ? "s" : ""}`
+                  : ""}
+              </p>
+            )}
+            <div className="flex gap-2">
+              {/* Pencil edit */}
+              {canEdit && (
+                <button
+                  onClick={onEditToggle}
+                  title="Edit spell"
+                  className="w-6 h-6 flex items-center justify-center rounded transition-all text-stone-500 hover:text-stone-300 hover:bg-stone-700/60"
+                >
+                  ✏️
+                </button>
+              )}
+              <button onClick={onDelete} className="w-6 h-6 flex items-center justify-center rounded transition-all text-stone-500 hover:text-stone-300 hover:bg-stone-700/60">
+                🗑️
+              </button>
+            </div>
+          </div>
           <p className="text-xs text-stone-400 leading-relaxed">
-            {spell.description || "No description."}
+            {spell.description || (
+              <span className="italic text-stone-600">No description.</span>
+            )}
           </p>
-          {canEdit && (
-            <button
-              onClick={onDelete}
-              className="mt-2 text-[10px] text-rose-500 hover:text-rose-400"
+        </div>
+      )}
+
+      {/* Edit panel */}
+      {isEditing && (
+        <div className="px-3 pb-3 border-t border-violet-800/30 pt-2 flex flex-col gap-2">
+          {/* Name */}
+          <div className="flex flex-col gap-0.5">
+            <span className="text-[10px] text-stone-500 uppercase">Name</span>
+            <input
+              value={spell.name}
+              onChange={(e) => onUpdate({ name: e.target.value })}
+              className="bg-stone-900 border border-stone-700 rounded px-2 py-1 text-xs text-stone-200 outline-none focus:border-violet-600"
+            />
+          </div>
+          {/* Range + formula */}
+          <div className="grid grid-cols-2 gap-2">
+            <div className="flex flex-col gap-0.5">
+              <span className="text-[10px] text-stone-500 uppercase">
+                Range
+              </span>
+              <input
+                value={spell.range ?? ""}
+                onChange={(e) => onUpdate({ range: e.target.value })}
+                placeholder="e.g. 8"
+                className="bg-stone-900 border border-stone-700 rounded px-2 py-1 text-xs text-stone-200 outline-none focus:border-violet-600 placeholder-stone-600"
+              />
+            </div>
+            <div className="flex flex-col gap-0.5">
+              <span className="text-[10px] text-stone-500 uppercase">
+                Formula
+              </span>
+              <input
+                value={spell.formula ?? spell.damage ?? ""}
+                onChange={(e) =>
+                  onUpdate({ formula: e.target.value, damage: e.target.value })
+                }
+                placeholder="e.g. 2d6+INT"
+                className="bg-stone-900 border border-stone-700 rounded px-2 py-1 text-xs text-stone-200 outline-none focus:border-violet-600 placeholder-stone-600"
+              />
+            </div>
+          </div>
+          {/* Tier + mana */}
+          <div className="grid grid-cols-2 gap-2">
+            <div className="flex flex-col gap-0.5">
+              <span className="text-[10px] text-stone-500 uppercase">Tier</span>
+              <select
+                value={spell.spellTier ?? 0}
+                onChange={(e) => {
+                  const t = parseInt(e.target.value);
+                  onUpdate({
+                    spellTier: t,
+                    manaCost: t === 0 ? 0 : (spell.manaCost ?? t),
+                  });
+                }}
+                className="bg-stone-800 border border-stone-700 rounded px-2 py-1 text-xs text-stone-200 outline-none focus:border-violet-600"
+              >
+                {[0, 1, 2, 3, 4, 5, 6, 7, 8, 9].map((t) => (
+                  <option key={t} value={t}>
+                    {TIER_LABELS[t]}
+                  </option>
+                ))}
+              </select>
+            </div>
+            <div className="flex flex-col gap-0.5">
+              <span className="text-[10px] text-stone-500 uppercase">
+                Mana cost
+              </span>
+              <input
+                type="number"
+                value={spell.manaCost ?? 0}
+                min={0}
+                onChange={(e) =>
+                  onUpdate({ manaCost: parseInt(e.target.value) || 0 })
+                }
+                className="bg-stone-900 border border-stone-700 rounded px-2 py-1 text-xs text-stone-200 outline-none focus:border-violet-600"
+              />
+            </div>
+          </div>
+          {/* School */}
+          <div className="flex flex-col gap-0.5">
+            <span className="text-[10px] text-stone-500 uppercase">School</span>
+            <select
+              value={spell.spellSchool ?? ""}
+              onChange={(e) =>
+                onUpdate({
+                  spellSchool: (e.target.value as SpellSchool) || undefined,
+                })
+              }
+              className="bg-stone-800 border border-stone-700 rounded px-2 py-1 text-xs text-stone-200 outline-none focus:border-violet-600"
             >
-              Remove
-            </button>
-          )}
+              <option value="">— none —</option>
+              {SCHOOLS.map((s) => (
+                <option key={s} value={s}>
+                  {SCHOOL_ICONS[s]} {s}
+                </option>
+              ))}
+            </select>
+          </div>
+          {/* Description */}
+          <div className="flex flex-col gap-0.5">
+            <span className="text-[10px] text-stone-500 uppercase">
+              Description
+            </span>
+            <textarea
+              value={spell.description ?? ""}
+              rows={3}
+              onChange={(e) => onUpdate({ description: e.target.value })}
+              className="bg-stone-900 border border-stone-700 rounded px-2 py-1 text-xs text-stone-300 outline-none resize-none focus:border-violet-600"
+            />
+          </div>
+          <div className="flex justify-between">
+          <button
+            onClick={onDelete}
+            className="text-[10px] text-rose-500 hover:text-rose-400 self-start mt-1"
+          >
+            Remove spell
+          </button>
+          <button onClick={onEditToggle} className="rounded px-2 py-1 text-xs bg-violet-900/60 border border-violet-600/60 text-stone-300">OK</button>
+          </div>
         </div>
       )}
     </div>
   );
 }
+
+// ── Tiny form helpers ─────────────────────────────────────────────
 
 function SInput({
   label,
