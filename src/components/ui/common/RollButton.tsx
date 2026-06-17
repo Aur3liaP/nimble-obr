@@ -1,26 +1,31 @@
 /**
- * RollButton — the small 🎲 button that triggers a dice roll modal.
+ * @file RollButton — small 🎲 button that opens the dice roll modal.
  *
- * Used in: SummaryTab (skills), CombatTab (actions, inventory favorites),
- *          SpellsTab (spell rows), InventoryTab (item rows).
- *
- * Props
- * ─────
- * onClick     — called when the button is clicked
- * accent      — color theme matching the tab context
- *               "amber" (default) | "violet" | "emerald"
- * disabled    — shows a muted state, no click
- * className   — extra classes (e.g. opacity-0 group-hover:opacity-100)
+ * Used in SummaryTab (skills), CombatTab (actions, inventory favorites),
+ * SpellsTab (spell rows), and InventoryTab (item rows) — anywhere a
+ * formula can be rolled. Callers are responsible for queuing the actual
+ * roll request and opening {@link DiceRollModal}; this component only
+ * renders the trigger.
  */
 
 type RollAccent = "amber" | "violet" | "emerald";
 
+/** Tailwind color classes per accent theme, matching the tab context the button appears in. */
 const ACCENT_STYLES: Record<RollAccent, string> = {
-  amber:   "bg-amber-900/50 hover:bg-amber-800/60 text-amber-300 border-amber-800/40",
-  violet:  "bg-violet-900/50 hover:bg-violet-800/60 text-violet-300 border-violet-800/40",
-  emerald: "bg-emerald-900/50 hover:bg-emerald-800/60 text-emerald-300 border-emerald-800/40",
+  amber:
+    "bg-amber-900/50 hover:bg-amber-800/60 text-amber-300 border-amber-800/40",
+  violet:
+    "bg-violet-900/50 hover:bg-violet-800/60 text-violet-300 border-violet-800/40",
+  emerald:
+    "bg-emerald-900/50 hover:bg-emerald-800/60 text-emerald-300 border-emerald-800/40",
 };
 
+/**
+ * @property onClick - Called when the button is clicked (not called at all in the `disabled` state).
+ * @property accent - Color theme matching the surrounding tab context.
+ * @property disabled - Renders a muted, non-interactive `<span>` instead of a button (e.g. when there are no hit dice left to spend).
+ * @property className - Extra classes merged onto the root element.
+ */
 interface RollButtonProps {
   onClick: () => void;
   accent?: RollAccent;
@@ -28,6 +33,12 @@ interface RollButtonProps {
   className?: string;
 }
 
+/**
+ * Renders a small 🎲 trigger button. When `disabled`, renders a
+ * non-interactive muted `<span>` instead, since some call sites (e.g.
+ * hit dice with none remaining) need to visually communicate "can't roll
+ * right now" without removing the button from the layout.
+ */
 export function RollButton({
   onClick,
   accent = "amber",

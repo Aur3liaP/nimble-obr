@@ -1,10 +1,18 @@
 /**
- * InventoryTab — refactorisé avec BentoSection, FavoriteButton, RollButton,
- * RowActions, TextAction, FormField, GridFields, ModalShell, NumericStepper.
+ * @file Inventory tab — slot tracker, currency, item list with inline
+ * expand/edit, and the "Add Item" modal (browse official equipment from
+ * {@link BASIC_EQUIPMENTS} or create a custom item).
+ *
+ * Armor items added here (`isArmor: true`) become selectable in the
+ * Combat tab's defense calculator via `character.armor.equippedItemId`.
  */
 
 import { useState, useMemo } from "react";
-import type { NimbleCharacter, InventoryItem, DiceRollRequest } from "../../types/character";
+import type {
+  NimbleCharacter,
+  InventoryItem,
+  DiceRollRequest,
+} from "../../types/character";
 import { DiceRollModal } from "../ui/DiceRollModal";
 import { BASIC_EQUIPMENTS } from "../../data/equipment";
 import { BentoSection } from "../ui/common/BentoSection";
@@ -16,7 +24,13 @@ import { NumericStepper } from "../ui/common/NumericStepper";
 import { ModalShell } from "../ui/common/ModalShell";
 
 // ── Types & helpers ───────────────────────────────────────────────
-
+/**
+ * @property character - The character being displayed/edited.
+ * @property canEdit - Whether the current player may modify this sheet.
+ * @property isGM - Whether the current player is the GM (enables hidden-roll option in the modal).
+ * @property onUpdate - Persists a partial character update.
+ * @property onRoll - Triggers a dice roll request after modal confirmation.
+ */
 interface Props {
   character: NimbleCharacter;
   canEdit: boolean;
@@ -25,30 +39,65 @@ interface Props {
   onRoll: (req: DiceRollRequest) => void;
 }
 
+/** Coarse category used only for filtering the "Add Item" list view (not persisted on the item itself). */
 type ItemCategory = "all" | "armor" | "weapon" | "consumable" | "gear";
+
+/** Which sub-view the "Add Item" modal is showing: browsing the official list, or filling a custom-item form. */
 type AddMode = "list" | "custom";
 
+/** Display labels (with emoji) for each item category filter pill. */
 const CATEGORY_LABELS: Record<ItemCategory, string> = {
-  all: "All", armor: "🛡 Armor", weapon: "⚔️ Weapons",
-  consumable: "🧪 Consumables", gear: "🎒 Gear",
+  all: "All",
+  armor: "🛡 Armor",
+  weapon: "⚔️ Weapons",
+  consumable: "🧪 Consumables",
+  gear: "🎒 Gear",
 };
 
+/** Friendly labels for the standard slot-cost values (0, 0.5, 1, 2). */
 const SLOT_LABEL: Record<string, string> = {
-  "0": "neg.", "0.5": "½ slot", "1": "1 slot", "2": "2 slots",
+  "0": "neg.",
+  "0.5": "½ slot",
+  "1": "1 slot",
+  "2": "2 slots",
 };
 
+/**
+ * Returns a friendly label for a slot cost, falling back to "<n> slots"
+ * for any value not in {@link SLOT_LABEL}.
+ */
 function slotLabel(slots: number): string {
   return SLOT_LABEL[String(slots)] ?? `${slots} slots`;
 }
 
+/**
+ * Heuristically infers a display category for an official equipment
+ * template, since {@link BASIC_EQUIPMENTS} doesn't store one explicitly.
+ * Used only to populate the category filter in the "Add Item" list view.
+ *
+ * @param item - An equipment template from {@link BASIC_EQUIPMENTS}.
+ * @returns "armor" if flagged as armor, "consumable" for potion-like/half-slot
+ * items, "weapon" if it has both an action cost and a damage formula,
+ * otherwise "gear".
+ */
 function guessCategory(item: (typeof BASIC_EQUIPMENTS)[0]): ItemCategory {
   if (item.isArmor) return "armor";
-  if (item.formula && (item.name.toLowerCase().includes("potion") || item.slots === 0.5)) return "consumable";
+  if (
+    item.formula &&
+    (item.name.toLowerCase().includes("potion") || item.slots === 0.5)
+  )
+    return "consumable";
   if (item.actionCost && item.formula) return "weapon";
   return "gear";
 }
 
-function itemIcon(item: { isArmor?: boolean; actionCost?: number; formula?: string; slots: number }): string {
+/** Returns an emoji icon for an item based on its armor/weapon/consumable/gear shape. */
+function itemIcon(item: {
+  isArmor?: boolean;
+  actionCost?: number;
+  formula?: string;
+  slots: number;
+}): string {
   if (item.isArmor) return "🛡";
   if (item.actionCost && item.formula) return "⚔️";
   if (item.slots === 0.5) return "🧪";
@@ -56,30 +105,56 @@ function itemIcon(item: { isArmor?: boolean; actionCost?: number; formula?: stri
 }
 
 // ── AddItemModal ──────────────────────────────────────────────────
-
+/**
+ * Modal for adding an item to the character's inventory, in one of two modes:
+ *
+ * - "list": search/filter {@link BASIC_EQUIPMENTS} by name and category,
+ *   then add a copy as a non-custom {@link InventoryItem}.
+ * - "custom": fill a form (name, slots, formula, description, armor/favorite
+ *   flags) to create a fully custom item, flagged `isCustom: true`.
+ *
+ * @param onAdd - Called with the constructed {@link InventoryItem} when an item is added.
+ * @param onCancel - Called when the modal is dismissed without adding.
+ */
 function AddItemModal({
-  onAdd, onCancel,
+  onAdd,
+  onCancel,
 }: {
   onAdd: (i: InventoryItem) => void;
   onCancel: () => void;
 }) {
-  const [mode, setMode]         = useState<AddMode>("list");
-  const [search, setSearch]     = useState("");
+  const [mode, setMode] = useState<AddMode>("list");
+  const [search, setSearch] = useState("");
   const [filterCat, setFilterCat] = useState<ItemCategory>("all");
 
   const [form, setForm] = useState({
-    name: "", description: "", slots: 1, formula: "", isFavorite: false, isArmor: false,
+    name: "",
+    description: "",
+    slots: 1,
+    formula: "",
+    isFavorite: false,
+    isArmor: false,
   });
-  const setF = (k: string, v: string | number | boolean) => setForm((p) => ({ ...p, [k]: v }));
+  const setF = (k: string, v: string | number | boolean) =>
+    setForm((p) => ({ ...p, [k]: v }));
 
-  const filteredBase = useMemo(() => BASIC_EQUIPMENTS.filter((item) => {
-    const matchSearch = search === "" ||
-      item.name.toLowerCase().includes(search.toLowerCase()) ||
-      (item.description?.toLowerCase().includes(search.toLowerCase()) ?? false);
-    const matchCat = filterCat === "all" || guessCategory(item) === filterCat;
-    return matchSearch && matchCat;
-  }), [search, filterCat]);
+  /** Official equipment list filtered by the current search text and category selection. */
+  const filteredBase = useMemo(
+    () =>
+      BASIC_EQUIPMENTS.filter((item) => {
+        const matchSearch =
+          search === "" ||
+          item.name.toLowerCase().includes(search.toLowerCase()) ||
+          (item.description?.toLowerCase().includes(search.toLowerCase()) ??
+            false);
+        const matchCat =
+          filterCat === "all" || guessCategory(item) === filterCat;
+        return matchSearch && matchCat;
+      }),
+    [search, filterCat],
+  );
 
+  /** Converts a {@link BASIC_EQUIPMENTS} template into a concrete, non-custom {@link InventoryItem} and hands it to `onAdd`. */
   const handleAddFromList = (template: (typeof BASIC_EQUIPMENTS)[0]) => {
     onAdd({
       id: `i-${crypto.randomUUID()}`,
@@ -97,9 +172,9 @@ function AddItemModal({
     });
   };
 
-  const categoryOptions = (["all", "armor", "weapon", "consumable", "gear"] as ItemCategory[]).map(
-    (cat) => ({ value: cat, label: CATEGORY_LABELS[cat] }),
-  );
+  const categoryOptions = (
+    ["all", "armor", "weapon", "consumable", "gear"] as ItemCategory[]
+  ).map((cat) => ({ value: cat, label: CATEGORY_LABELS[cat] }));
 
   const modeTabs = (
     <div className="flex gap-1">
@@ -120,14 +195,20 @@ function AddItemModal({
   );
 
   const cancelFooter = (
-    <button onClick={onCancel} className="w-full py-2 rounded-lg border border-stone-700 text-stone-400 text-sm hover:bg-stone-800 transition-colors">
+    <button
+      onClick={onCancel}
+      className="w-full py-2 rounded-lg border border-stone-700 text-stone-400 text-sm hover:bg-stone-800 transition-colors"
+    >
       Cancel
     </button>
   );
 
   const addCustomFooter = (
     <div className="flex gap-2">
-      <button onClick={onCancel} className="flex-1 py-2 rounded-lg border border-stone-700 text-stone-400 text-sm hover:bg-stone-800 transition-colors">
+      <button
+        onClick={onCancel}
+        className="flex-1 py-2 rounded-lg border border-stone-700 text-stone-400 text-sm hover:bg-stone-800 transition-colors"
+      >
         Cancel
       </button>
       <button
@@ -192,7 +273,9 @@ function AddItemModal({
           {/* Item list */}
           <div className="p-2 flex flex-col gap-1">
             {filteredBase.length === 0 && (
-              <p className="text-xs text-stone-600 italic text-center py-6">No items match your search.</p>
+              <p className="text-xs text-stone-600 italic text-center py-6">
+                No items match your search.
+              </p>
             )}
             {filteredBase.map((item, idx) => (
               <button
@@ -200,20 +283,30 @@ function AddItemModal({
                 onClick={() => handleAddFromList(item)}
                 className="flex items-start gap-2 px-2.5 py-2 rounded-lg border border-stone-700/40 bg-stone-900/40 hover:bg-emerald-950/30 hover:border-emerald-700/40 transition-all text-left w-full group"
               >
-                <span className="mt-0.5 text-sm shrink-0">{itemIcon(item)}</span>
+                <span className="mt-0.5 text-sm shrink-0">
+                  {itemIcon(item)}
+                </span>
                 <div className="flex-1 min-w-0">
                   <div className="flex items-center gap-1.5 flex-wrap">
-                    <span className="text-xs font-semibold text-stone-200">{item.name}</span>
-                    <span className="text-[9px] text-stone-500">{slotLabel(item.slots)}</span>
+                    <span className="text-xs font-semibold text-stone-200">
+                      {item.name}
+                    </span>
+                    <span className="text-[9px] text-stone-500">
+                      {slotLabel(item.slots)}
+                    </span>
                   </div>
                   {item.formula && (
-                    <span className="text-[10px] font-mono text-amber-300/70">{item.formula}</span>
+                    <span className="text-[10px] font-mono text-amber-300/70">
+                      {item.formula}
+                    </span>
                   )}
                   <p className="text-[10px] text-stone-500 mt-0.5 line-clamp-2 leading-relaxed">
                     {item.description}
                   </p>
                 </div>
-                <span className="text-[10px] text-emerald-500 group-hover:text-emerald-300 shrink-0 mt-1">+ Add</span>
+                <span className="text-[10px] text-emerald-500 group-hover:text-emerald-300 shrink-0 mt-1">
+                  + Add
+                </span>
               </button>
             ))}
           </div>
@@ -221,25 +314,57 @@ function AddItemModal({
       ) : (
         /* Custom item form */
         <div className="p-4 flex flex-col gap-3">
-          <FormField label="Name *" value={form.name} onChange={(v) => setF("name", v)} />
+          <FormField
+            label="Name *"
+            value={form.name}
+            onChange={(v) => setF("name", v)}
+          />
           <GridFields>
-            <FormField label="Slots" as="select" value={form.slots} onChange={(v) => setF("slots", parseFloat(v))}>
+            <FormField
+              label="Slots"
+              as="select"
+              value={form.slots}
+              onChange={(v) => setF("slots", parseFloat(v))}
+            >
               <option value={0}>Negligible</option>
               <option value={0.5}>½ slot (×2 per slot)</option>
               <option value={1}>1 slot</option>
               <option value={2}>2 slots</option>
             </FormField>
-            <FormField label="Roll formula" value={form.formula} onChange={(v) => setF("formula", v)} placeholder="e.g. 1d6+DEX" />
+            <FormField
+              label="Roll formula"
+              value={form.formula}
+              onChange={(v) => setF("formula", v)}
+              placeholder="e.g. 1d6+DEX"
+            />
           </GridFields>
-          <FormField label="Description" as="textarea" value={form.description} onChange={(v) => setF("description", v)} rows={2} />
+          <FormField
+            label="Description"
+            as="textarea"
+            value={form.description}
+            onChange={(v) => setF("description", v)}
+            rows={2}
+          />
           <div className="flex gap-4">
             <label className="flex items-center gap-1.5 cursor-pointer">
-              <input type="checkbox" checked={form.isArmor} onChange={(e) => setF("isArmor", e.target.checked)} className="accent-sky-500" />
+              <input
+                type="checkbox"
+                checked={form.isArmor}
+                onChange={(e) => setF("isArmor", e.target.checked)}
+                className="accent-sky-500"
+              />
               <span className="text-[10px] text-stone-400">Is armor</span>
             </label>
             <label className="flex items-center gap-1.5 cursor-pointer">
-              <input type="checkbox" checked={form.isFavorite} onChange={(e) => setF("isFavorite", e.target.checked)} className="accent-amber-500" />
-              <span className="text-[10px] text-stone-400">Add to favorites ⭐</span>
+              <input
+                type="checkbox"
+                checked={form.isFavorite}
+                onChange={(e) => setF("isFavorite", e.target.checked)}
+                className="accent-amber-500"
+              />
+              <span className="text-[10px] text-stone-400">
+                Add to favorites ⭐
+              </span>
             </label>
           </div>
         </div>
@@ -249,24 +374,53 @@ function AddItemModal({
 }
 
 // ── Main InventoryTab ─────────────────────────────────────────────
+/**
+ * Renders the inventory slot tracker (capacity = 10 + STR), gold/silver
+ * currency fields, a search-filtered item list (each row expandable for
+ * description or switchable to an inline edit form), and inventory notes.
+ * Adding an item opens {@link AddItemModal}.
+ */
+export function InventoryTab({
+  character,
+  canEdit,
+  isGM,
+  onUpdate,
+  onRoll,
+}: Props) {
+  const [rollPending, setRollPending] = useState<{
+    label: string;
+    formula: string;
+  } | null>(null);
+  const [addingItem, setAddingItem] = useState(false);
+  const [search, setSearch] = useState("");
+  const [expandedId, setExpandedId] = useState<string | null>(null);
+  const [editingId, setEditingId] = useState<string | null>(null);
 
-export function InventoryTab({ character, canEdit, isGM, onUpdate, onRoll }: Props) {
-  const [rollPending, setRollPending] = useState<{ label: string; formula: string } | null>(null);
-  const [addingItem, setAddingItem]   = useState(false);
-  const [search, setSearch]           = useState("");
-  const [expandedId, setExpandedId]   = useState<string | null>(null);
-  const [editingId, setEditingId]     = useState<string | null>(null);
+  /** Total available inventory slots: base 10 plus the character's STR bonus. */
+  const maxSlots = 10 + character.stats.str;
 
-  const maxSlots  = 10 + character.stats.str;
-  const usedSlots = character.inventory.reduce((s, i) => s + i.slots * i.quantity, 0);
-  const slotPct   = Math.min(100, (usedSlots / maxSlots) * 100);
+  /** Slots currently occupied, summed as `slots × quantity` across all items. */
+  const usedSlots = character.inventory.reduce(
+    (s, i) => s + i.slots * i.quantity,
+    0,
+  );
 
+  /** Used-slot percentage (capped at 100) for the capacity bar. */
+  const slotPct = Math.min(100, (usedSlots / maxSlots) * 100);
+
+  /** Patches a single inventory item by id. */
   const update = (id: string, patch: Partial<InventoryItem>) =>
-    onUpdate({ inventory: character.inventory.map((i) => i.id === id ? { ...i, ...patch } : i) });
+    onUpdate({
+      inventory: character.inventory.map((i) =>
+        i.id === id ? { ...i, ...patch } : i,
+      ),
+    });
 
+  /** Removes an inventory item by id. */
   const remove = (id: string) =>
     onUpdate({ inventory: character.inventory.filter((i) => i.id !== id) });
 
+  /** Inventory items filtered by the current search text (name or description match). */
   const filteredItems = useMemo(() => {
     if (search === "") return character.inventory;
     return character.inventory.filter(
@@ -276,20 +430,28 @@ export function InventoryTab({ character, canEdit, isGM, onUpdate, onRoll }: Pro
     );
   }, [character.inventory, search]);
 
+  /** Toggles an item row's expanded (description) state; closes edit mode first if it was open on this row. */
   const handleRowClick = (id: string) => {
-    if (editingId === id) { setEditingId(null); setExpandedId(id); return; }
-    setExpandedId((prev) => prev === id ? null : id);
+    if (editingId === id) {
+      setEditingId(null);
+      setExpandedId(id);
+      return;
+    }
+    setExpandedId((prev) => (prev === id ? null : id));
   };
 
+  /** Toggles an item row's inline edit mode; closes the expanded description state first if it was open on this row. */
   const handleEditToggle = (id: string) => {
-    if (editingId === id) { setEditingId(null); return; }
+    if (editingId === id) {
+      setEditingId(null);
+      return;
+    }
     setEditingId(id);
     setExpandedId(null);
   };
 
   return (
     <div className="flex flex-col gap-3 p-3">
-
       {/* ── Slots ────────────────────────────────────────────────── */}
       <BentoSection>
         <div className="flex items-center justify-between mb-1.5">
@@ -302,7 +464,11 @@ export function InventoryTab({ character, canEdit, isGM, onUpdate, onRoll }: Pro
         <div className="h-2 bg-stone-800 rounded-full overflow-hidden">
           <div
             className={`h-full rounded-full transition-all ${
-              slotPct >= 100 ? "bg-rose-600" : slotPct >= 75 ? "bg-amber-500" : "bg-emerald-500"
+              slotPct >= 100
+                ? "bg-rose-600"
+                : slotPct >= 75
+                  ? "bg-amber-500"
+                  : "bg-emerald-500"
             }`}
             style={{ width: `${slotPct}%` }}
           />
@@ -326,8 +492,22 @@ export function InventoryTab({ character, canEdit, isGM, onUpdate, onRoll }: Pro
       {/* ── Currency ─────────────────────────────────────────────── */}
       <BentoSection>
         <div className="flex items-center gap-4">
-          <CurrencyField label="Gold"   emoji="🪙" value={character.gold}   canEdit={canEdit} onChange={(v) => onUpdate({ gold: v })}   textColor="text-amber-300" />
-          <CurrencyField label="Silver" emoji="🥈" value={character.silver} canEdit={canEdit} onChange={(v) => onUpdate({ silver: v })} textColor="text-slate-300" />
+          <CurrencyField
+            label="Gold"
+            emoji="🪙"
+            value={character.gold}
+            canEdit={canEdit}
+            onChange={(v) => onUpdate({ gold: v })}
+            textColor="text-amber-300"
+          />
+          <CurrencyField
+            label="Silver"
+            emoji="🥈"
+            value={character.silver}
+            canEdit={canEdit}
+            onChange={(v) => onUpdate({ silver: v })}
+            textColor="text-slate-300"
+          />
         </div>
       </BentoSection>
 
@@ -372,10 +552,26 @@ export function InventoryTab({ character, canEdit, isGM, onUpdate, onRoll }: Pro
                 isEditing={editingId === item.id}
                 onRowClick={() => handleRowClick(item.id)}
                 onEditToggle={() => handleEditToggle(item.id)}
-                onRoll={item.formula ? () => setRollPending({ label: item.name, formula: item.formula! }) : undefined}
-                onToggleFavorite={() => update(item.id, { isFavorite: !item.isFavorite })}
-                onSetQuantity={(q) => update(item.id, { quantity: Math.max(0, q) })}
-                onDelete={() => { remove(item.id); setEditingId(null); setExpandedId(null); }}
+                onRoll={
+                  item.formula
+                    ? () =>
+                        setRollPending({
+                          label: item.name,
+                          formula: item.formula!,
+                        })
+                    : undefined
+                }
+                onToggleFavorite={() =>
+                  update(item.id, { isFavorite: !item.isFavorite })
+                }
+                onSetQuantity={(q) =>
+                  update(item.id, { quantity: Math.max(0, q) })
+                }
+                onDelete={() => {
+                  remove(item.id);
+                  setEditingId(null);
+                  setExpandedId(null);
+                }}
                 onUpdate={(patch) => update(item.id, patch)}
               />
             ))}
@@ -395,14 +591,19 @@ export function InventoryTab({ character, canEdit, isGM, onUpdate, onRoll }: Pro
           />
         ) : (
           <p className="text-xs text-stone-400 whitespace-pre-wrap">
-            {character.inventoryNotes || <span className="text-stone-600 italic">No notes.</span>}
+            {character.inventoryNotes || (
+              <span className="text-stone-600 italic">No notes.</span>
+            )}
           </p>
         )}
       </BentoSection>
 
       {addingItem && (
         <AddItemModal
-          onAdd={(item) => { onUpdate({ inventory: [...character.inventory, item] }); setAddingItem(false); }}
+          onAdd={(item) => {
+            onUpdate({ inventory: [...character.inventory, item] });
+            setAddingItem(false);
+          }}
           onCancel={() => setAddingItem(false)}
         />
       )}
@@ -412,7 +613,13 @@ export function InventoryTab({ character, canEdit, isGM, onUpdate, onRoll }: Pro
           formula={rollPending.formula}
           isGM={isGM}
           onConfirm={(mode, ac, hidden) => {
-            onRoll({ label: rollPending.label, formula: rollPending.formula, mode, advantageCount: ac, hidden });
+            onRoll({
+              label: rollPending.label,
+              formula: rollPending.formula,
+              mode,
+              advantageCount: ac,
+              hidden,
+            });
             setRollPending(null);
           }}
           onCancel={() => setRollPending(null)}
@@ -423,11 +630,35 @@ export function InventoryTab({ character, canEdit, isGM, onUpdate, onRoll }: Pro
 }
 
 // ── ItemRow ───────────────────────────────────────────────────────
-
+/**
+ * One row in the inventory list, with three possible states: collapsed
+ * (name + slot cost + resolved formula), expanded (adds description),
+ * or editing (inline form for name/formula/description/slots/armor flag).
+ *
+ * @param item - The item to render.
+ * @param canEdit - Gates quantity stepper, favorite toggle, roll button, edit, and delete.
+ * @param isExpanded - Whether the description panel is open.
+ * @param isEditing - Whether the inline edit form is open.
+ * @param onRowClick - Called when the row body is clicked (toggles expand).
+ * @param onEditToggle - Called when edit mode is toggled.
+ * @param onRoll - Called when the roll button is clicked; omitted entirely if the item has no formula.
+ * @param onToggleFavorite - Called when the favorite star is clicked.
+ * @param onSetQuantity - Called with the new quantity from the stepper.
+ * @param onDelete - Called when "Remove item" is clicked.
+ * @param onUpdate - Called with a partial patch when an edit field changes.
+ */
 function ItemRow({
-  item, canEdit, isExpanded, isEditing,
-  onRowClick, onEditToggle, onRoll, onToggleFavorite,
-  onSetQuantity, onDelete, onUpdate,
+  item,
+  canEdit,
+  isExpanded,
+  isEditing,
+  onRowClick,
+  onEditToggle,
+  onRoll,
+  onToggleFavorite,
+  onSetQuantity,
+  onDelete,
+  onUpdate,
 }: {
   item: InventoryItem;
   canEdit: boolean;
@@ -443,19 +674,31 @@ function ItemRow({
   onUpdate: (patch: Partial<InventoryItem>) => void;
 }) {
   return (
-    <div className={`rounded-lg border overflow-hidden transition-colors ${
-      isEditing ? "border-emerald-700/60 bg-emerald-950/10" : "border-stone-700/40 bg-stone-900/40"
-    }`}>
+    <div
+      className={`rounded-lg border overflow-hidden transition-colors ${
+        isEditing
+          ? "border-emerald-700/60 bg-emerald-950/10"
+          : "border-stone-700/40 bg-stone-900/40"
+      }`}
+    >
       {/* Main row */}
       <div className="flex items-center gap-2 px-2.5 py-2">
         <div className="flex-1 min-w-0 cursor-pointer" onClick={onRowClick}>
           <div className="flex items-center gap-2">
-            <span className="text-xs font-semibold text-stone-200 truncate">{item.name}</span>
-            <span className="text-[9px] text-stone-500 shrink-0">{slotLabel(item.slots)}</span>
-            {item.isArmor && <span className="text-[9px] text-sky-400 shrink-0">🛡</span>}
+            <span className="text-xs font-semibold text-stone-200 truncate">
+              {item.name}
+            </span>
+            <span className="text-[9px] text-stone-500 shrink-0">
+              {slotLabel(item.slots)}
+            </span>
+            {item.isArmor && (
+              <span className="text-[9px] text-sky-400 shrink-0">🛡</span>
+            )}
           </div>
           {item.formula && (
-            <span className="text-[10px] font-mono text-amber-300/70">{item.formula}</span>
+            <span className="text-[10px] font-mono text-amber-300/70">
+              {item.formula}
+            </span>
           )}
         </div>
 
@@ -473,9 +716,18 @@ function ItemRow({
           )}
         </div>
 
-        <div className="flex items-center gap-1" onClick={(e) => e.stopPropagation()}>
-          <FavoriteButton isFavorite={item.isFavorite ?? false} canEdit={canEdit} onToggle={onToggleFavorite} />
-          {canEdit && onRoll && <RollButton onClick={onRoll} accent="emerald" />}
+        <div
+          className="flex items-center gap-1"
+          onClick={(e) => e.stopPropagation()}
+        >
+          <FavoriteButton
+            isFavorite={item.isFavorite ?? false}
+            canEdit={canEdit}
+            onToggle={onToggleFavorite}
+          />
+          {canEdit && onRoll && (
+            <RollButton onClick={onRoll} accent="emerald" />
+          )}
         </div>
       </div>
 
@@ -483,7 +735,9 @@ function ItemRow({
       {isExpanded && !isEditing && (
         <div className="px-3 pb-2.5 border-t border-stone-700/40 pt-2 flex justify-between items-start gap-2">
           <p className="text-xs text-stone-400 leading-relaxed flex-1">
-            {item.description || <span className="italic text-stone-600">No description.</span>}
+            {item.description || (
+              <span className="italic text-stone-600">No description.</span>
+            )}
           </p>
           <RowActions
             onEdit={canEdit ? onEditToggle : undefined}
@@ -496,11 +750,31 @@ function ItemRow({
       {/* Edit panel */}
       {isEditing && (
         <div className="px-3 pb-3 border-t border-emerald-800/30 pt-2 flex flex-col gap-2">
-          <FormField label="Name" value={item.name} onChange={(v) => onUpdate({ name: v })} />
-          <FormField label="Roll formula" value={item.formula ?? ""} onChange={(v) => onUpdate({ formula: v || undefined })} placeholder="e.g. 1d6+STR" />
-          <FormField label="Description" as="textarea" value={item.description ?? ""} onChange={(v) => onUpdate({ description: v })} rows={2} />
+          <FormField
+            label="Name"
+            value={item.name}
+            onChange={(v) => onUpdate({ name: v })}
+          />
+          <FormField
+            label="Roll formula"
+            value={item.formula ?? ""}
+            onChange={(v) => onUpdate({ formula: v || undefined })}
+            placeholder="e.g. 1d6+STR"
+          />
+          <FormField
+            label="Description"
+            as="textarea"
+            value={item.description ?? ""}
+            onChange={(v) => onUpdate({ description: v })}
+            rows={2}
+          />
           <GridFields>
-            <FormField label="Slots" as="select" value={item.slots} onChange={(v) => onUpdate({ slots: parseFloat(v) })}>
+            <FormField
+              label="Slots"
+              as="select"
+              value={item.slots}
+              onChange={(v) => onUpdate({ slots: parseFloat(v) })}
+            >
               <option value={0}>Negligible</option>
               <option value={0.5}>½ slot</option>
               <option value={1}>1 slot</option>
@@ -517,7 +791,11 @@ function ItemRow({
             </div>
           </GridFields>
           <div className="flex justify-between items-center mt-1">
-            <TextAction onClick={onDelete} label="Remove item" variant="danger" />
+            <TextAction
+              onClick={onDelete}
+              label="Remove item"
+              variant="danger"
+            />
             <TextAction onClick={onEditToggle} label="OK" variant="confirm" />
           </div>
         </div>
@@ -527,22 +805,41 @@ function ItemRow({
 }
 
 // ── CurrencyField ─────────────────────────────────────────────────
-
+/**
+ * Labeled currency input (Gold/Silver) showing an emoji, the current
+ * value, and either an editable number input or a static span depending
+ * on `canEdit`.
+ */
 function CurrencyField({
-  label, emoji, value, canEdit, onChange, textColor,
+  label,
+  emoji,
+  value,
+  canEdit,
+  onChange,
+  textColor,
 }: {
-  label: string; emoji: string; value: number; canEdit: boolean;
-  onChange: (v: number) => void; textColor: string;
+  label: string;
+  emoji: string;
+  value: number;
+  canEdit: boolean;
+  onChange: (v: number) => void;
+  textColor: string;
 }) {
   return (
     <div className="flex items-center gap-2">
       <span className="text-xl">{emoji}</span>
       <div className="flex flex-col gap-0.5">
-        <span className="text-[10px] text-stone-500 uppercase tracking-wider">{label}</span>
+        <span className="text-[10px] text-stone-500 uppercase tracking-wider">
+          {label}
+        </span>
         {canEdit ? (
           <input
-            type="number" value={value} min={0}
-            onChange={(e) => onChange(Math.max(0, parseInt(e.target.value) || 0))}
+            type="number"
+            value={value}
+            min={0}
+            onChange={(e) =>
+              onChange(Math.max(0, parseInt(e.target.value) || 0))
+            }
             className={`w-20 bg-transparent border-b border-stone-700 focus:border-amber-600 outline-none text-lg font-bold text-center transition-colors ${textColor}`}
           />
         ) : (

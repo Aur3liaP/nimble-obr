@@ -1,22 +1,22 @@
 /**
- * NumericStepper — a −  value  + control.
+ * @file NumericStepper — a "− value +" control.
  *
  * Used in:
- *   DicePanel   — dice count, modifier, extra dice
- *   DiceRollModal — extra dice count
- *   InventoryTab  — item quantity
- *
- * Props
- * ─────
- * value        — current number
- * onChange     — called with the new value (already clamped)
- * min / max    — clamp bounds (default −Infinity / +Infinity)
- * label        — optional tiny label above the stepper
- * displayFn    — optional formatter for the displayed value (e.g. "+3" for modifiers)
- * valueClass   — Tailwind text color class for the value (default "text-stone-200")
- * compact      — if true, uses smaller padding on the buttons (for inline usage)
+ * - DicePanel (dice count, modifier, extra dice for adv/disadv)
+ * - DiceRollModal (extra dice count)
+ * - InventoryTab (item quantity)
  */
 
+/**
+ * @property value - Current number.
+ * @property onChange - Called with the new value (already clamped to min/max).
+ * @property min - Lower clamp bound, defaults to -Infinity.
+ * @property max - Upper clamp bound, defaults to +Infinity.
+ * @property label - Optional tiny label shown above the stepper.
+ * @property displayFn - Optional formatter for the displayed value (e.g. to show "+3" for modifiers instead of "3").
+ * @property valueClass - Tailwind text color class for the value, defaults to "text-stone-200".
+ * @property compact - Uses smaller button/text sizing, for inline usage (e.g. inside a row).
+ */
 interface NumericStepperProps {
   value: number;
   onChange: (v: number) => void;
@@ -28,6 +28,10 @@ interface NumericStepperProps {
   compact?: boolean;
 }
 
+/**
+ * Renders a decrement button, the current (optionally formatted) value,
+ * and an increment button, clamping every change to `[min, max]`.
+ */
 export function NumericStepper({
   value,
   onChange,
@@ -52,12 +56,18 @@ export function NumericStepper({
   return (
     <div className="flex flex-col gap-0.5">
       {label && (
-        <span className="text-[10px] text-stone-500 uppercase tracking-wide">{label}</span>
+        <span className="text-[10px] text-stone-500 uppercase tracking-wide">
+          {label}
+        </span>
       )}
       <div className="flex items-center gap-1.5">
-        <button onClick={dec} className={btnClass}>−</button>
+        <button onClick={dec} className={btnClass}>
+          −
+        </button>
         <span className={valClass}>{displayFn ? displayFn(value) : value}</span>
-        <button onClick={inc} className={btnClass}>+</button>
+        <button onClick={inc} className={btnClass}>
+          +
+        </button>
       </div>
     </div>
   );

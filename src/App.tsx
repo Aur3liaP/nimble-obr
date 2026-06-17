@@ -1,3 +1,13 @@
+/**
+ * @file Root component of the Nimble OBR extension panel.
+ *
+ * Owns the tab navigation and renders one shared layout across every
+ * selection state (no token / no sheet / ready), so that the
+ * {@link DicePanel} and {@link RollLog} are mounted exactly once and never
+ * lose their internal state (collapsed/mode/count) when the selection or
+ * roll log changes.
+ */
+
 import { useState } from "react";
 import { useOBR } from "./hooks/useOBR";
 import { SummaryTab } from "./components/tabs/SummaryTab";
@@ -8,15 +18,21 @@ import { RollLog } from "./components/ui/RollLog";
 import { DicePanel } from "./components/ui/DicePanel";
 import type { DiceRollRequest, RollMode } from "./types/character";
 
+/** Identifiers for the four character sheet tabs. */
+/** Tab definitions (id, label, icon) rendered in the tab bar. */
 type TabId = "summary" | "combat" | "spells" | "inventory";
-
 const TABS: { id: TabId; label: string; icon: string }[] = [
-  { id: "summary",   label: "Summary",   icon: "📋" },
-  { id: "combat",    label: "Combat",    icon: "⚔️" },
-  { id: "spells",    label: "Spells",    icon: "✨" },
+  { id: "summary", label: "Summary", icon: "📋" },
+  { id: "combat", label: "Combat", icon: "⚔️" },
+  { id: "spells", label: "Spells", icon: "✨" },
   { id: "inventory", label: "Inventory", icon: "🎒" },
 ];
 
+/**
+ * Renders the extension panel: header (character name/HP/role), tab bar,
+ * and the active tab's content, plus the always-mounted dice panel and
+ * roll log. All character data and permissions come from {@link useOBR}.
+ */
 export default function App() {
   const {
     isReady,
@@ -51,7 +67,8 @@ export default function App() {
   }
 
   const onRoll = (req: DiceRollRequest) => handleRoll(req);
-  const onRollInitiative = (mode: RollMode = "standard") => rollInitiative(mode);
+  const onRollInitiative = (mode: RollMode = "standard") =>
+    rollInitiative(mode);
   const isOwner = character ? character.ownerId === playerId : false;
   const isUnclaimed = character ? !character.ownerId : false;
 
@@ -69,7 +86,6 @@ export default function App() {
 
   return (
     <div className="relative flex flex-col h-full bg-stone-950 text-stone-200 overflow-hidden font-sans pb-7">
-
       {/* ── Header — only when a sheet is open ───────────────────── */}
       {showSheet && character && (
         <header className="shrink-0 px-3 pt-3 pb-0">
@@ -80,20 +96,31 @@ export default function App() {
                   {character.name}
                 </h1>
                 <p className="text-[10px] text-stone-500 truncate">
-                  {[character.ancestry, character.class, character.level ? `Lv.${character.level}` : ""]
-                    .filter(Boolean).join(" · ")}
+                  {[
+                    character.ancestry,
+                    character.class,
+                    character.level ? `Lv.${character.level}` : "",
+                  ]
+                    .filter(Boolean)
+                    .join(" · ")}
                 </p>
               </div>
               <div className="flex flex-col items-end gap-1 shrink-0">
-                <span className={`px-2 py-0.5 rounded-full text-[10px] font-bold border ${
-                  character.hp.current === 0
-                    ? "border-rose-700 bg-rose-950/60 text-rose-300"
-                    : character.hp.current <= character.hp.max * 0.5
-                      ? "border-amber-700/60 bg-amber-950/30 text-amber-300"
-                      : "border-emerald-800/50 bg-emerald-950/30 text-emerald-300"
-                }`}>
+                <span
+                  className={`px-2 py-0.5 rounded-full text-[10px] font-bold border ${
+                    character.hp.current === 0
+                      ? "border-rose-700 bg-rose-950/60 text-rose-300"
+                      : character.hp.current <= character.hp.max * 0.5
+                        ? "border-amber-700/60 bg-amber-950/30 text-amber-300"
+                        : "border-emerald-800/50 bg-emerald-950/30 text-emerald-300"
+                  }`}
+                >
                   ♥ {character.hp.current}/{character.hp.max}
-                  {character.hp.temp > 0 && <span className="text-sky-300 ml-1">+{character.hp.temp}</span>}
+                  {character.hp.temp > 0 && (
+                    <span className="text-sky-300 ml-1">
+                      +{character.hp.temp}
+                    </span>
+                  )}
                 </span>
                 <div className="flex items-center gap-1">
                   {isGM && (
@@ -102,24 +129,35 @@ export default function App() {
                     </span>
                   )}
                   {!isGM && !isOwner && (
-                    <button onClick={claimToken}
-                      className="px-2 py-0.5 rounded text-[9px] font-semibold border border-sky-700/60 bg-sky-950/40 text-sky-300 hover:bg-sky-900/50 transition-colors">
+                    <button
+                      onClick={claimToken}
+                      className="px-2 py-0.5 rounded text-[9px] font-semibold border border-sky-700/60 bg-sky-950/40 text-sky-300 hover:bg-sky-900/50 transition-colors"
+                    >
                       {isUnclaimed ? "Claim" : "Take over"}
                     </button>
                   )}
                   {isOwner && !isGM && (
-                    <span className="px-1.5 py-0.5 rounded text-[9px] text-stone-500 border border-stone-800">mine</span>
+                    <span className="px-1.5 py-0.5 rounded text-[9px] text-stone-500 border border-stone-800">
+                      mine
+                    </span>
                   )}
                 </div>
               </div>
             </div>
             {character.wounds > 0 && (
               <div className="flex items-center gap-1.5 mt-1.5">
-                <span className="text-[9px] text-rose-700 uppercase tracking-wider">Wounds</span>
+                <span className="text-[9px] text-rose-700 uppercase tracking-wider">
+                  Wounds
+                </span>
                 <div className="flex gap-1">
-                  {Array.from({ length: character.maxWounds + 1 }).map((_, i) => (
-                    <div key={i} className={`w-2 h-2 rounded-full ${i < character.wounds ? "bg-rose-700" : "bg-stone-700"}`} />
-                  ))}
+                  {Array.from({ length: character.maxWounds + 1 }).map(
+                    (_, i) => (
+                      <div
+                        key={i}
+                        className={`w-2 h-2 rounded-full ${i < character.wounds ? "bg-rose-700" : "bg-stone-700"}`}
+                      />
+                    ),
+                  )}
                 </div>
               </div>
             )}
@@ -132,12 +170,15 @@ export default function App() {
         <>
           <div className="shrink-0 flex gap-1 px-3 pt-2">
             {TABS.map((tab) => (
-              <button key={tab.id} onClick={() => setActiveTab(tab.id)}
+              <button
+                key={tab.id}
+                onClick={() => setActiveTab(tab.id)}
                 className={`flex-1 flex flex-col items-center py-1.5 rounded-t-lg border-b-2 text-[10px] font-semibold tracking-wide transition-all duration-150 ${
                   activeTab === tab.id
                     ? "border-amber-600 bg-stone-800/80 text-amber-300"
                     : "border-transparent text-stone-500 hover:text-stone-300 hover:bg-stone-900/40"
-                }`}>
+                }`}
+              >
                 <span className="text-base leading-none">{tab.icon}</span>
                 <span className="mt-0.5">{tab.label}</span>
               </button>
@@ -167,8 +208,10 @@ export default function App() {
             This token has no character sheet.
           </p>
           {firstItem && (
-            <button onClick={() => createSheetForToken(firstItem)}
-              className="px-4 py-2 rounded-lg bg-amber-800 hover:bg-amber-700 text-amber-100 text-sm font-semibold transition-colors">
+            <button
+              onClick={() => createSheetForToken(firstItem)}
+              className="px-4 py-2 rounded-lg bg-amber-800 hover:bg-amber-700 text-amber-100 text-sm font-semibold transition-colors"
+            >
               Create sheet
             </button>
           )}
@@ -177,26 +220,45 @@ export default function App() {
 
       {/* ── Scrollable content area ───────────────────────────────── */}
       <main className="flex-1 overflow-y-auto scrollbar-thin">
-
         {/* Sheet tabs */}
         {showSheet && character && (
           <>
             {activeTab === "summary" && (
-              <SummaryTab character={character} canEdit={canEdit}
-                onUpdate={updateCharacter} onRoll={onRoll} isGM={isGM} />
+              <SummaryTab
+                character={character}
+                canEdit={canEdit}
+                onUpdate={updateCharacter}
+                onRoll={onRoll}
+                isGM={isGM}
+              />
             )}
             {activeTab === "combat" && (
-              <CombatTab character={character} canEdit={canEdit} isGM={isGM}
-                onUpdate={updateCharacter} onRoll={onRoll}
-                onRollInitiative={onRollInitiative} />
+              <CombatTab
+                character={character}
+                canEdit={canEdit}
+                isGM={isGM}
+                onUpdate={updateCharacter}
+                onRoll={onRoll}
+                onRollInitiative={onRollInitiative}
+              />
             )}
             {activeTab === "spells" && (
-              <SpellsTab character={character} canEdit={canEdit} isGM={isGM}
-                onUpdate={updateCharacter} onRoll={onRoll} />
+              <SpellsTab
+                character={character}
+                canEdit={canEdit}
+                isGM={isGM}
+                onUpdate={updateCharacter}
+                onRoll={onRoll}
+              />
             )}
             {activeTab === "inventory" && (
-              <InventoryTab character={character} canEdit={canEdit} isGM={isGM}
-                onUpdate={updateCharacter} onRoll={onRoll} />
+              <InventoryTab
+                character={character}
+                canEdit={canEdit}
+                isGM={isGM}
+                onUpdate={updateCharacter}
+                onRoll={onRoll}
+              />
             )}
           </>
         )}
@@ -211,7 +273,12 @@ export default function App() {
             defaultCollapsed={true}
           />
           {(showNoToken || showNoSheet) && (
-            <RollLog rolls={recentRolls} isGM={isGM} currentPlayerId={playerId} inline />
+            <RollLog
+              rolls={recentRolls}
+              isGM={isGM}
+              currentPlayerId={playerId}
+              inline
+            />
           )}
         </div>
       </main>

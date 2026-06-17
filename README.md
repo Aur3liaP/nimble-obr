@@ -6,10 +6,44 @@ Extension Owlbear Rodeo pour jouer au TTRPG **Nimble**. Fiche de personnage inte
 
 ## Stack technique
 
-- **React 18** + **TypeScript**
+- **React 19** + **TypeScript**
 - **Vite** (dev server + build)
-- **Tailwind CSS v3**
-- **@owlbear-rodeo/sdk**
+- **Tailwind CSS v4**
+- **@owlbear-rodeo/sdk** (v3.1.0)
+
+---
+
+## 🤖 AI-Augmented Engineering
+
+Ce projet a été développé avec une approche **AI-Augmented Engineering** (développement assisté par LLM), et sert aussi de terrain d'entraînement personnel à l'utilisation avancée de l'IA en contexte professionnel.
+
+### Ce qui a été fait "à la main"
+
+- Architecture générale du projet (structure des dossiers, séparation types/hooks/composants/utils).
+- Définition du schéma de données (`NimbleCharacter` et types associés).
+- Maquette de design de base (layout bento, palette, placement des éléments).
+- Toutes les décisions de game design et de règles métier (calculs de formules, permissions, comportement des onglets).
+
+### Ce qui a été fait avec l'aide de l'IA (Claude)
+
+- Génération et itération du code des composants React/Tailwind à partir de specs détaillées.
+- Refactoring progressif (extraction de composants communs : `BentoSection`, `FormField`, `RollButton`, etc.) pour réduire la duplication entre les onglets.
+- Documentation du code (JSDoc) sur l'ensemble des fichiers.
+- Debug de comportements complexes liés au SDK OBR (synchronisation multi-clients, permissions `canEdit`, gestion du roll log partagé).
+
+### Méthode : Context Injection & RAG manuel
+
+Le point clé de cette approche a été de **structurer une base de connaissances dédiée** pour l'IA, afin de garantir la cohérence des réponses sur la durée du projet :
+
+- **Contexte technique persistant** : stack, contraintes du SDK OBR (pas de backend, sauvegarde via metadata, namespace dédié `com.nimble-obr.nimble/character_sheet`), conventions de code du projet.
+- **Contexte game design** : règles officielles du jeu Nimble (extraites du PDF de référence) injectées en contexte pour la génération du JSON des sorts/objets/équipements, afin que les données générées respectent fidèlement les règles publiées.
+- **Mémoire de session** : au fil des itérations (V1 → V2 → V3), le contexte d'avancement (bugs corrigés, fichiers clés, décisions prises) a été reporté entre les sessions de travail pour éviter les régressions et garder une cohérence d'architecture.
+
+Cette méthode s'apparente à du **RAG (Retrieval-Augmented Generation) manuel** : plutôt que de laisser le modèle "deviner" le contexte ou règle quoi que ce soit depuis ses connaissances génériques sur OBR ou Nimble, les informations de référence exactes (documentation SDK, règles du jeu) sont injectées explicitement à chaque étape pertinente.
+
+### Limites assumées
+
+L'IA n'a pas pris de décision d'architecture ou de design sans validation. Chaque étape (nouveau composant, refactor, correction de bug) a été testée manuellement en environnement OBR multi-joueurs (un compte MJ + plusieurs comptes joueurs simultanés) avant d'être validée, en particulier pour tout ce qui touche aux **permissions** (`canEdit`, `ownerId`) qui sont critiques pour la sécurité fonctionnelle de l'outil.
 
 ---
 
@@ -36,96 +70,48 @@ cd nimble-obr
 npm install @owlbear-rodeo/sdk
 ```
 
-### 3. Installer Tailwind CSS v3
+### 3. Installer Tailwind CSS v4
 
 ```bash
 npm install tailwindcss @tailwindcss/vite
 ```
 
-### 4. Configurer Tailwind
+### 4. Installer le plugin SSL (requis par OBR en dev local)
 
-Dans **`vite.config.ts`**, remplace le contenu par :
+```bash
+npm install -D @vitejs/plugin-basic-ssl
+```
 
-```js
-import { defineConfig } from "vite";
-import react from "@vitejs/plugin-react";
+### 5. Configurer Vite pour l'extension OBR
+
+Dans **`vite.config.ts`** :
+
+```ts
+import { defineConfig } from 'vite'
+import react from '@vitejs/plugin-react'
 import tailwindcss from "@tailwindcss/vite";
+import basicSsl from '@vitejs/plugin-basic-ssl'
 
-// https://vite.dev/config/
 export default defineConfig({
-  plugins: [react(), tailwindcss()],
-});
+  plugins: [react(), tailwindcss(), basicSsl()],
+  server: {
+    // HTTPS requis par OBR pour le développement local
+    https: {},
+    port: 5173,
+    cors: true,
+  },
+  // Le manifest OBR doit être servi depuis /public
+  publicDir: 'public',
+})
 ```
 
-### 5. Injecter les directives Tailwind dans le CSS global
+> **Pourquoi HTTPS ?** OBR charge les extensions dans une iframe et impose une origine HTTPS même en local. Vite génère un certificat auto-signé — accepte l'exception de sécurité dans ton navigateur la première fois.
 
-Dans **`src/index.css`**, remplace tout le contenu par :
+### 6. Injecter les directives Tailwind dans le CSS global
 
-```css
-@import "tailwindcss";
+Dans **`src/index.css`**, voir le contenu actuel du fichier (design tokens "Nimble", reset pour iframe OBR, scrollbar fine, etc.)
 
-/* ── Nimble design tokens ─────────────────────────────────── */
-
-@layer components {
-  /* Bento card — la brique de base du layout */
-  .bento-card {
-    @apply rounded-xl border border-stone-700/60 bg-stone-900/50 p-3 backdrop-blur-sm;
-  }
-
-  /* Label de section à l'intérieur d'une bento-card */
-  .bento-label {
-    @apply text-[10px] font-semibold uppercase tracking-widest text-stone-500;
-  }
-}
-
-/* Scrollbar fine pour l'onglet de contenu */
-.scrollbar-thin {
-  scrollbar-width: thin;
-  scrollbar-color: #44403c transparent;
-}
-.scrollbar-thin::-webkit-scrollbar {
-  width: 4px;
-}
-.scrollbar-thin::-webkit-scrollbar-track {
-  background: transparent;
-}
-.scrollbar-thin::-webkit-scrollbar-thumb {
-  background-color: #44403c;
-  border-radius: 2px;
-}
-
-/* ── Base resets pour l'environnement OBR iframe ─────────────── */
-* {
-  box-sizing: border-box;
-}
- 
-html, body, #root {
-  height: 100%;
-  margin: 0;
-  padding: 0;
-  overflow: hidden;
-}
- 
-body {
-  font-family: ui-sans-serif, system-ui, -apple-system, sans-serif;
-  -webkit-font-smoothing: antialiased;
-  background: #0c0a09; /* stone-950 */
-}
- 
-/* Remove number input spinners (they clutter the stat boxes) */
-input[type="number"]::-webkit-inner-spin-button,
-input[type="number"]::-webkit-outer-spin-button {
-  -webkit-appearance: none;
-  margin: 0;
-}
-input[type="number"] {
-  -moz-appearance: textfield;
-  appearance: textfield;
-}
- 
-```
-
-### 6. Vérifier `src/main.tsx`
+### 7. Vérifier `src/main.tsx`
 
 ```tsx
 import { StrictMode } from 'react'
@@ -140,52 +126,31 @@ createRoot(document.getElementById('root')!).render(
 )
 ```
 
-### 7. Configurer Vite pour l'extension OBR
-
-Dans **`vite.config.ts`**, remplace le contenu par :
-
-```ts
-import { defineConfig } from 'vite'
-import react from '@vitejs/plugin-react'
-import tailwindcss from "@tailwindcss/vite";
-
-export default defineConfig({
-  plugins: [react(), tailwindcss()],
-  server: {
-    // HTTPS requis par OBR pour le développement local
-    https: true,
-    port: 5173,
-    cors: true,
-  },
-  // Le manifest OBR doit être servi depuis /public
-  publicDir: 'public',
-})
-```
-
-> **Pourquoi HTTPS ?** OBR charge les extensions dans une iframe et impose une origine HTTPS même en local. Vite génère un certificat auto-signé — accepte l'exception de sécurité dans ton navigateur la première fois.
-
 ---
 
-## Copier les fichiers du projet
-
-Place les fichiers générés dans la structure suivante :
+## Structure du projet
 
 ```
 nimble-obr/
 ├── public/
 │   ├── manifest.json          ← manifest de l'extension OBR
-│   └── icon.svg               ← icône (à créer, voir ci-dessous)
+│   └── icon.svg                ← icône de l'extension
 ├── src/
 │   ├── types/
-│   │   └── character.ts
+│   │   └── character.ts        ← types du domaine (NimbleCharacter, etc.)
 │   ├── utils/
-│   │   └── formulaParser.ts
+│   │   └── formulaParser.ts    ← parseur de formules + moteur de dés
+│   ├── data/
+│   │   ├── spells.ts           ← sorts officiels (BASE_SPELLS)
+│   │   └── equipment.ts        ← équipement officiel (BASIC_EQUIPMENTS)
 │   ├── hooks/
-│   │   └── useOBR.ts
+│   │   └── useOBR.ts           ← intégration SDK OBR (état, permissions, rolls)
 │   ├── components/
 │   │   ├── ui/
+│   │   │   ├── common/         ← composants réutilisables (BentoSection, FormField, RollButton…)
 │   │   │   ├── StatBox.tsx
 │   │   │   ├── DiceRollModal.tsx
+│   │   │   ├── DicePanel.tsx
 │   │   │   ├── RollLog.tsx
 │   │   │   └── LanguageSelector.tsx
 │   │   └── tabs/
@@ -200,15 +165,6 @@ nimble-obr/
 ├── vite.config.ts
 ├── tsconfig.json
 └── package.json
-```
-
-### Icône minimale (public/icon.svg)
-
-```svg
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100">
-  <rect width="100" height="100" rx="16" fill="#1c1917"/>
-  <text x="50" y="68" text-anchor="middle" font-size="56" font-family="serif">🎲</text>
-</svg>
 ```
 
 ---
@@ -259,13 +215,17 @@ com.nimble-obr.nimble/character_sheet
 
 Ce namespace unique évite les conflits avec d'autres extensions. Toute modification appelle `OBR.scene.items.updateItems()`, ce qui la propage instantanément à tous les clients connectés.
 
+L'historique des lancés de dés (visibles par toute la table) est stocké séparément dans les **metadata de la scène**, sous une clé dérivée du même namespace, et plafonné à 20 entrées.
+
 ### Qui peut modifier quoi ?
 
 | Rôle | Peut modifier |
 |------|--------------|
-| Joueur — propriétaire du token | Sa propre fiche |
-| GM | Toutes les fiches |
-| Joueur — autre token | Lecture seule |
+| Joueur — propriétaire du token (`ownerId`) | Sa propre fiche |
+| GM | Toutes les fiches, indépendamment de `ownerId` |
+| Joueur — autre token | Lecture seule (boutons d'édition masqués, pas seulement désactivés) |
+
+Cette permission (`canEdit`) est calculée une seule fois dans `useOBR` et propagée explicitement en props à chaque composant interactif — elle ne se propage jamais "automatiquement" via le contexte React, ce qui a nécessité une vérification systématique de chaque nouveau composant ajouté.
 
 ---
 
@@ -277,13 +237,16 @@ Le parser de formules (`src/utils/formulaParser.ts`) supporte :
 |---------|---------|----------|
 | Dés | `1d8`, `2d6` | tirage aléatoire |
 | Stats | `STR`, `DEX`, `INT`, `WIL` | valeur du personnage |
+| Stat clé / défaut | `KEY`, `FLAW` | valeur de la stat marquée clé/défaut |
 | Compétences | `MIGHT`, `STEALTH`, `ARCANA`… | valeur de la compétence |
 | Niveau | `LEVEL` | niveau actuel |
 | Maths | `+`, `-`, `*`, `/` | opérations de base |
-| Arrondi | `floor(LEVEL/5)` | arrondi inférieur |
+| Arrondi | `floor(LEVEL/5)`, `ceil(...)` | arrondi inférieur/supérieur |
+| Min/Max | `min(a, b)`, `max(a, b)` | valeur min/max |
+| Dés dynamiques | `incrementdice(1, level)d12`, `stepdice(level, 4, 8, 10, 12)` | dés évolutifs avec le niveau |
 | Combiné | `1d10 + STR + floor(LEVEL/5) * 5` | formule avancée |
 
-> `eval()` n'est **jamais** utilisé — le parser est un descent récursif maison.
+> `eval()` n'est **jamais** utilisé — le parser est un descent récursif maison, pour éviter tout risque d'exécution de code arbitraire via une formule tapée par un joueur ou le MJ.
 
 ---
 
@@ -291,7 +254,7 @@ Le parser de formules (`src/utils/formulaParser.ts`) supporte :
 
 - [ ] Onglet traduction FR/EN
 - [ ] Sélection de classe avec pré-remplissage des stats de départ
-- [ ] Partage du log de dés via OBR broadcast
+- [ ] Panneau d'extension repositionnable / détachable (recherche en cours sur le SDK OBR)
 - [ ] Thème clair "parchemin" optionnel
 - [ ] Import/export JSON de la fiche
 - [ ] Raccourcis clavier pour les lancers fréquents
@@ -302,5 +265,5 @@ Le parser de formules (`src/utils/formulaParser.ts`) supporte :
 
 - [OBR SDK docs](https://extensions.owlbear.rodeo/docs)
 - [Vite docs](https://vitejs.dev)
-- [Tailwind CSS v3](https://v3.tailwindcss.com)
-- [Nimble TTRPG](https://nimble-ttrpg.com) *(lien à confirmer)*
+- [Tailwind CSS v4](https://tailwindcss.com)
+- [Nimble TTRPG](https://nimble-ttrpg.com)

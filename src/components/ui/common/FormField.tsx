@@ -1,40 +1,48 @@
 /**
- * FormField — label above a form control.
+ * @file FormField — label above a form control, with three variants via
+ * the `as` prop: "input" (text/number), "textarea", "select", or "custom"
+ * (just the label, with arbitrary children below it).
  *
- * Three variants via `as` prop:
- *   "input"    — single-line text/number input
- *   "textarea" — multiline textarea
- *   "select"   — <select> with children as <option> elements
- *   "custom"   — just renders the label above whatever `children` you pass
+ * The shared input/select/textarea visual style ({@link FIELD_BASE}) is
+ * applied automatically so every form across the AddSpellModal,
+ * AddItemModal, AddActionModal, and inline edit panels stays consistent.
  *
- * The shared input/select/textarea style is applied automatically.
- * Forward `inputProps` / `selectProps` / `textareaProps` for native attrs.
+ * @example
+ * ```tsx
+ * <FormField label="Name" value={form.name} onChange={(v) => set("name", v)} />
  *
- * Usage:
- *   <FormField label="Name" value={form.name} onChange={(v) => set("name", v)} />
- *   <FormField label="Type" as="select" value={form.type} onChange={(v) => set("type", v)}>
- *     <option value="melee">Melee</option>
- *   </FormField>
- *   <FormField label="Notes" as="textarea" value={form.notes} onChange={(v) => set("notes", v)} rows={3} />
+ * <FormField label="Type" as="select" value={form.type} onChange={(v) => set("type", v)}>
+ *   <option value="melee">Melee</option>
+ * </FormField>
+ *
+ * <FormField label="Notes" as="textarea" value={form.notes} onChange={(v) => set("notes", v)} rows={3} />
+ * ```
  */
 
-import type { ReactNode, SelectHTMLAttributes, TextareaHTMLAttributes, InputHTMLAttributes } from "react";
+import type {
+  ReactNode,
+  TextareaHTMLAttributes,
+  InputHTMLAttributes,
+} from "react";
 
-type Variant = "input" | "textarea" | "select" | "custom";
-
-// Shared visual class applied to every native form element
+/** Shared Tailwind classes applied to every native input/textarea/select rendered by this component. */
 const FIELD_BASE =
   "bg-stone-900/60 border border-stone-700 rounded px-2 py-1 text-xs text-stone-200 outline-none " +
   "focus:border-amber-600 placeholder-stone-600 w-full transition-colors";
 
-const FIELD_SELECT = FIELD_BASE.replace("focus:border-amber-600", "focus:border-amber-600") + " bg-stone-800";
+/** Same as {@link FIELD_BASE} with an extra opaque background, since `<select>` needs a solid backdrop for its native dropdown to read correctly. */
+const FIELD_SELECT =
+  FIELD_BASE.replace("focus:border-amber-600", "focus:border-amber-600") +
+  " bg-stone-800";
 
+/** Props shared by every variant. */
 interface FormFieldBaseProps {
   label: string;
   /** Extra classes on the wrapper div */
   className?: string;
 }
 
+/** Props for the default "input" variant (text/number/etc. single-line input). */
 interface InputFieldProps extends FormFieldBaseProps {
   as?: "input";
   value: string | number;
@@ -46,6 +54,7 @@ interface InputFieldProps extends FormFieldBaseProps {
   disabled?: boolean;
 }
 
+/** Props for the "textarea" variant. */
 interface TextareaFieldProps extends FormFieldBaseProps {
   as: "textarea";
   value: string;
@@ -55,6 +64,7 @@ interface TextareaFieldProps extends FormFieldBaseProps {
   disabled?: boolean;
 }
 
+/** Props for the "select" variant; `children` should be `<option>` elements. */
 interface SelectFieldProps extends FormFieldBaseProps {
   as: "select";
   value: string | number;
@@ -63,6 +73,7 @@ interface SelectFieldProps extends FormFieldBaseProps {
   children: ReactNode;
 }
 
+/** Props for the "custom" variant — renders only the label, with arbitrary `children` below it (no styled control applied). */
 interface CustomFieldProps extends FormFieldBaseProps {
   as: "custom";
   children: ReactNode;
@@ -74,12 +85,18 @@ type FormFieldProps =
   | SelectFieldProps
   | CustomFieldProps;
 
+/**
+ * Renders a label followed by the form control matching `props.as`
+ * (defaults to a plain text/number input when `as` is omitted).
+ */
 export function FormField(props: FormFieldProps) {
   const { label, className = "" } = props;
 
   return (
     <div className={`flex flex-col gap-0.5 ${className}`}>
-      <span className="text-[10px] text-stone-500 uppercase tracking-wide">{label}</span>
+      <span className="text-[10px] text-stone-500 uppercase tracking-wide">
+        {label}
+      </span>
 
       {(!props.as || props.as === "input") && (
         <input
@@ -100,7 +117,9 @@ export function FormField(props: FormFieldProps) {
           placeholder={(props as TextareaFieldProps).placeholder}
           rows={(props as TextareaFieldProps).rows ?? 3}
           disabled={(props as TextareaFieldProps).disabled}
-          onChange={(e) => (props as TextareaFieldProps).onChange(e.target.value)}
+          onChange={(e) =>
+            (props as TextareaFieldProps).onChange(e.target.value)
+          }
           className={`${FIELD_BASE} resize-none`}
         />
       )}
@@ -124,15 +143,18 @@ export function FormField(props: FormFieldProps) {
 }
 
 /**
- * GridFields — convenience wrapper that puts 2 FormFields side by side.
+ * Lays out its children (typically two or three {@link FormField}s) side
+ * by side in a responsive grid.
  *
- * Usage:
- *   <GridFields>
- *     <FormField label="Range" ... />
- *     <FormField label="Damage" ... />
- *   </GridFields>
+ * @param cols - Number of grid columns, 2 (default) or 3.
  */
-export function GridFields({ children, cols = 2 }: { children: ReactNode; cols?: 2 | 3 }) {
+export function GridFields({
+  children,
+  cols = 2,
+}: {
+  children: ReactNode;
+  cols?: 2 | 3;
+}) {
   const colClass = cols === 3 ? "grid-cols-3" : "grid-cols-2";
   return <div className={`grid ${colClass} gap-2`}>{children}</div>;
 }

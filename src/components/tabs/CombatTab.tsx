@@ -1,6 +1,11 @@
 /**
- * CombatTab
- * BentoSection, InlineNumberField, FavoriteButton, RollButton, RowActions, FormField.
+ * @file Combat tab — HP/wounds quick view, action economy tracker,
+ * initiative roll, derived defense, favorited actions/items, and the
+ * full action list.
+ *
+ * Defense is computed dynamically from whichever inventory item is
+ * equipped as armor (see {@link computeDefense}), not from a static value,
+ * so changing armor in the Inventory tab is immediately reflected here.
  */
 
 import { useState } from "react";
@@ -21,42 +26,80 @@ import { TextAction } from "../ui/common/RowActions";
 import { FormField, GridFields } from "../ui/common/FormField";
 
 // ── Types ─────────────────────────────────────────────────────────
-
+/**
+ * @property character - The character being displayed/edited.
+ * @property canEdit - Whether the current player may modify this sheet.
+ * @property isGM - Whether the current player is the GM.
+ * @property onUpdate - Persists a partial character update.
+ * @property onRoll - Triggers a dice roll request after modal confirmation.
+ * @property onRollInitiative - Rolls initiative via the shared `useOBR` logic; resolves to the roll result (or void/null) so this tab can derive the resulting action count.
+ */
 interface Props {
   character: NimbleCharacter;
   canEdit: boolean;
   isGM: boolean;
   onUpdate: (u: Partial<NimbleCharacter>) => void;
   onRoll: (req: DiceRollRequest) => void;
-  onRollInitiative: (mode?: RollMode) => Promise<{ total: number } | null> | void;
+  onRollInitiative: (
+    mode?: RollMode,
+  ) => Promise<{ total: number } | null> | void;
 }
 
+/** Minimal pending-roll shape used by this tab's dice modal (label + formula only — no save advantage needed here). */
 type RollPending = { label: string; formula: string };
 
 // ── Helpers ───────────────────────────────────────────────────────
 
+/** Tailwind color classes per action type, used for the type badge on each action row. */
 const ACTION_COLORS = {
-  melee:   "text-rose-300 border-rose-800/60 bg-rose-950/30",
-  ranged:  "text-sky-300 border-sky-800/60 bg-sky-950/30",
-  spell:   "text-violet-300 border-violet-800/60 bg-violet-950/30",
+  melee: "text-rose-300 border-rose-800/60 bg-rose-950/30",
+  ranged: "text-sky-300 border-sky-800/60 bg-sky-950/30",
+  spell: "text-violet-300 border-violet-800/60 bg-violet-950/30",
   ability: "text-amber-300 border-amber-800/60 bg-amber-950/30",
-  item:    "text-emerald-300 border-emerald-800/60 bg-emerald-950/30",
+  item: "text-emerald-300 border-emerald-800/60 bg-emerald-950/30",
 } as const;
 
+/** Emoji icon per action type, shown at the start of each action row. */
 const ACTION_ICONS = {
-  melee: "⚔️", ranged: "🏹", spell: "✨", ability: "⚡", item: "🎒",
+  melee: "⚔️",
+  ranged: "🏹",
+  spell: "✨",
+  ability: "⚡",
+  item: "🎒",
 } as const;
 
+/**
+ * Derives the character's current defense value.
+ *
+ * If an inventory item is equipped as armor (`character.armor.equippedItemId`
+ * pointing at an item with `isArmor: true`), its formula is evaluated and
+ * the flat `defenseBonus` is added on top. Otherwise, defense falls back to
+ * DEX + the flat bonus (unarmored).
+ *
+ * @param character - The character to compute defense for.
+ * @returns The resolved numeric defense value.
+ */
 function computeDefense(character: NimbleCharacter): number {
   const armorItem = character.inventory.find(
     (i) => i.id === character.armor.equippedItemId && i.isArmor,
   );
   if (armorItem?.formula) {
-    return evalFormula(armorItem.formula, character) + (character.armor.defenseBonus ?? 0);
+    return (
+      evalFormula(armorItem.formula, character) +
+      (character.armor.defenseBonus ?? 0)
+    );
   }
   return character.stats.dex + (character.armor.defenseBonus ?? 0);
 }
 
+/**
+ * Converts an initiative roll total into the number of actions available
+ * on the first combat turn, per the Nimble rules: below 10 → 1 action,
+ * 10–19 → 2 actions, 20+ → 3 actions.
+ *
+ * @param total - The resolved initiative roll total.
+ * @returns The number of actions (1–3) granted for the first turn.
+ */
 function initiativeToActions(total: number): number {
   if (total < 10) return 1;
   if (total < 20) return 2;
@@ -65,21 +108,38 @@ function initiativeToActions(total: number): number {
 
 // ── Main component ────────────────────────────────────────────────
 
-export function CombatTab({ character, canEdit, isGM, onUpdate, onRoll, onRollInitiative }: Props) {
+/**
+ * Renders the combat-facing view of a character: HP/wounds shortcuts,
+ * a 3-action turn tracker with manual toggle/reset, an initiative roller
+ * that auto-sets the action tracker from the result, derived defense with
+ * an armor-item selector, favorited actions/items for quick access, the
+ * full action list, and combat notes.
+ */
+export function CombatTab({
+  character,
+  canEdit,
+  isGM,
+  onUpdate,
+  onRoll,
+  onRollInitiative,
+}: Props) {
   const [rollPending, setRollPending] = useState<RollPending | null>(null);
-  const [addingAction, setAddingAction]   = useState(false);
-  const [actionsUsed, setActionsUsed]     = useState([false, false, false]);
+  const [addingAction, setAddingAction] = useState(false);
+  const [actionsUsed, setActionsUsed] = useState([false, false, false]);
   const [initiativeResult, setInitiativeResult] = useState<number | null>(null);
 
   const defenseValue = computeDefense(character);
   const armorItems = character.inventory.filter((i) => i.isArmor);
-  const equippedArmorItem = armorItems.find((i) => i.id === character.armor.equippedItemId);
+  const equippedArmorItem = armorItems.find(
+    (i) => i.id === character.armor.equippedItemId,
+  );
   const combatActions = character.actions.filter((a) => a.type !== "spell");
   const favorites = [
     ...character.actions.filter((a) => a.isFavorite),
     ...character.inventory.filter((i) => i.isFavorite && i.formula),
   ];
 
+  /** Flips the used/unused state of one of the three action tokens (no-op for non-editors). */
   const toggleActionUsed = (i: number) => {
     if (!canEdit) return;
     const next = [...actionsUsed];
@@ -87,6 +147,13 @@ export function CombatTab({ character, canEdit, isGM, onUpdate, onRoll, onRollIn
     setActionsUsed(next);
   };
 
+  /**
+   * Rolls initiative, then automatically marks actions as used/unused on
+   * the turn tracker to reflect how many actions the result grants
+   * (see {@link initiativeToActions}).
+   *
+   * @param mode - Roll mode, defaults to "standard".
+   */
   const handleInitiativeRoll = async (mode: RollMode = "standard") => {
     const result = await onRollInitiative(mode);
     if (result && typeof result.total === "number") {
@@ -96,13 +163,16 @@ export function CombatTab({ character, canEdit, isGM, onUpdate, onRoll, onRollIn
     }
   };
 
-  const updateActions = (updated: CharacterAction[]) => onUpdate({ actions: updated });
+  /** Replaces the character's full actions array (shorthand for `onUpdate({ actions: ... })`). */
+  const updateActions = (updated: CharacterAction[]) =>
+    onUpdate({ actions: updated });
 
-  const setRoll = (label: string, formula: string) => setRollPending({ label, formula });
+  /** Queues a roll for confirmation in the shared {@link DiceRollModal}. */
+  const setRoll = (label: string, formula: string) =>
+    setRollPending({ label, formula });
 
   return (
     <div className="flex flex-col gap-3 p-3">
-
       {/* ── Quick HP / Wounds ─────────────────────────────────────── */}
       <BentoSection>
         <div className="grid grid-cols-2 gap-3">
@@ -111,19 +181,33 @@ export function CombatTab({ character, canEdit, isGM, onUpdate, onRoll, onRollIn
             <p className="bento-label">HP</p>
             <div className="flex items-baseline gap-1 mt-1">
               <InlineNumberField
-                value={character.hp.current} canEdit={canEdit}
-                min={0} max={character.hp.max + character.hp.temp}
-                onChange={(v) => onUpdate({ hp: { ...character.hp, current: Math.max(0, v) } })}
-                size="2xl" colorClass="text-emerald-300"
+                value={character.hp.current}
+                canEdit={canEdit}
+                min={0}
+                max={character.hp.max + character.hp.temp}
+                onChange={(v) =>
+                  onUpdate({ hp: { ...character.hp, current: Math.max(0, v) } })
+                }
+                size="2xl"
+                colorClass="text-emerald-300"
               />
-              <span className="text-stone-500 text-xs">/ {character.hp.max}</span>
+              <span className="text-stone-500 text-xs">
+                / {character.hp.max}
+              </span>
             </div>
             <div className="flex items-center gap-1.5 mt-1">
-              <span className="text-[10px] text-stone-500 uppercase tracking-wider">Temp</span>
+              <span className="text-[10px] text-stone-500 uppercase tracking-wider">
+                Temp
+              </span>
               <InlineNumberField
-                value={character.hp.temp} canEdit={canEdit} min={0}
-                onChange={(v) => onUpdate({ hp: { ...character.hp, temp: Math.max(0, v) } })}
-                size="sm" colorClass="text-sky-300"
+                value={character.hp.temp}
+                canEdit={canEdit}
+                min={0}
+                onChange={(v) =>
+                  onUpdate({ hp: { ...character.hp, temp: Math.max(0, v) } })
+                }
+                size="sm"
+                colorClass="text-sky-300"
               />
             </div>
             <div className="h-1.5 bg-stone-800 rounded-full overflow-hidden mt-1.5">
@@ -132,9 +216,11 @@ export function CombatTab({ character, canEdit, isGM, onUpdate, onRoll, onRollIn
                 style={{
                   width: `${Math.min(100, (character.hp.current / character.hp.max) * 100)}%`,
                   background:
-                    character.hp.current <= character.hp.max * 0.25 ? "#ef4444"
-                    : character.hp.current <= character.hp.max * 0.5 ? "#f59e0b"
-                    : "#34d399",
+                    character.hp.current <= character.hp.max * 0.25
+                      ? "#ef4444"
+                      : character.hp.current <= character.hp.max * 0.5
+                        ? "#f59e0b"
+                        : "#34d399",
                 }}
               />
             </div>
@@ -146,17 +232,22 @@ export function CombatTab({ character, canEdit, isGM, onUpdate, onRoll, onRollIn
             <div className="flex flex-wrap gap-1.5 mt-2">
               {Array.from({ length: character.maxWounds + 1 }).map((_, i) => {
                 const filled = i < character.wounds;
-                const fatal  = i === character.maxWounds;
+                const fatal = i === character.maxWounds;
                 return (
                   <button
                     key={i}
-                    onClick={() => canEdit && onUpdate({ wounds: filled ? i : i + 1 })}
+                    onClick={() =>
+                      canEdit && onUpdate({ wounds: filled ? i : i + 1 })
+                    }
                     className={`
                       w-5 h-5 rounded-full border-2 transition-all text-[10px]
-                      ${fatal
-                        ? "border-rose-900 bg-rose-950/30 text-rose-800"
-                        : filled ? "border-rose-700 bg-rose-900"
-                        : "border-stone-600 bg-stone-800/40"}
+                      ${
+                        fatal
+                          ? "border-rose-900 bg-rose-950/30 text-rose-800"
+                          : filled
+                            ? "border-rose-700 bg-rose-900"
+                            : "border-stone-600 bg-stone-800/40"
+                      }
                       ${canEdit ? "cursor-pointer hover:scale-110" : "cursor-default"}
                     `}
                   >
@@ -192,9 +283,11 @@ export function CombatTab({ character, canEdit, isGM, onUpdate, onRoll, onRollIn
                   onClick={() => toggleActionUsed(i)}
                   className={`
                     flex-1 py-2 rounded-lg border-2 font-bold text-sm transition-all
-                    ${used
-                      ? "border-stone-700 bg-stone-800/40 text-stone-600"
-                      : "border-amber-600 bg-amber-950/40 text-amber-300 shadow-amber-900/30 shadow-md"}
+                    ${
+                      used
+                        ? "border-stone-700 bg-stone-800/40 text-stone-600"
+                        : "border-amber-600 bg-amber-950/40 text-amber-300 shadow-amber-900/30 shadow-md"
+                    }
                   `}
                 >
                   {used ? "✓" : `${i + 1}`}
@@ -212,7 +305,9 @@ export function CombatTab({ character, canEdit, isGM, onUpdate, onRoll, onRollIn
               <p className="bento-label mb-2">Initiative</p>
               <div className="flex items-center gap-2">
                 <div className="flex flex-col items-center px-2 py-1 rounded-lg bg-stone-800/60 border border-stone-700/40">
-                  <span className="text-[10px] text-stone-500 uppercase tracking-wider">Base</span>
+                  <span className="text-[10px] text-stone-500 uppercase tracking-wider">
+                    Base
+                  </span>
                   <span className="text-2xl font-black text-amber-300">
                     {character.stats.dex >= 0 ? "+" : ""}
                     {character.stats.dex + character.initiativeBonus}
@@ -228,7 +323,8 @@ export function CombatTab({ character, canEdit, isGM, onUpdate, onRoll, onRollIn
                   </button>
                   {initiativeResult !== null && (
                     <p className="text-[10px] text-amber-400 text-center">
-                      Result: {initiativeResult} → {initiativeToActions(initiativeResult)} action
+                      Result: {initiativeResult} →{" "}
+                      {initiativeToActions(initiativeResult)} action
                       {initiativeToActions(initiativeResult) > 1 ? "s" : ""}
                     </p>
                   )}
@@ -237,7 +333,11 @@ export function CombatTab({ character, canEdit, isGM, onUpdate, onRoll, onRollIn
                     <input
                       type="number"
                       value={character.initiativeBonus}
-                      onChange={(e) => onUpdate({ initiativeBonus: parseInt(e.target.value) || 0 })}
+                      onChange={(e) =>
+                        onUpdate({
+                          initiativeBonus: parseInt(e.target.value) || 0,
+                        })
+                      }
                       className="w-8 text-center text-xs bg-stone-900 border border-stone-700 rounded py-0.5 text-stone-200 outline-none focus:border-amber-600"
                     />
                   </div>
@@ -252,15 +352,26 @@ export function CombatTab({ character, canEdit, isGM, onUpdate, onRoll, onRollIn
       <BentoSection>
         <div className="flex items-center justify-between mb-2">
           <p className="bento-label">Defense</p>
-          <span className="text-3xl font-black text-sky-300">{defenseValue}</span>
+          <span className="text-3xl font-black text-sky-300">
+            {defenseValue}
+          </span>
         </div>
         <div className="flex flex-col gap-2">
           <div className="flex flex-col gap-0.5">
-            <span className="text-[10px] text-stone-500">Armor (from inventory)</span>
+            <span className="text-[10px] text-stone-500">
+              Armor (from inventory)
+            </span>
             {canEdit ? (
               <select
                 value={character.armor.equippedItemId ?? ""}
-                onChange={(e) => onUpdate({ armor: { ...character.armor, equippedItemId: e.target.value || undefined } })}
+                onChange={(e) =>
+                  onUpdate({
+                    armor: {
+                      ...character.armor,
+                      equippedItemId: e.target.value || undefined,
+                    },
+                  })
+                }
                 className="bg-stone-800 border border-stone-700 rounded px-2 py-1.5 text-xs text-stone-200 outline-none focus:border-sky-600"
               >
                 <option value="">— Unarmored (DEX only) —</option>
@@ -282,10 +393,19 @@ export function CombatTab({ character, canEdit, isGM, onUpdate, onRoll, onRollIn
               <input
                 type="number"
                 value={character.armor.defenseBonus ?? 0}
-                onChange={(e) => onUpdate({ armor: { ...character.armor, defenseBonus: parseInt(e.target.value) || 0 } })}
+                onChange={(e) =>
+                  onUpdate({
+                    armor: {
+                      ...character.armor,
+                      defenseBonus: parseInt(e.target.value) || 0,
+                    },
+                  })
+                }
                 className="w-14 text-center text-xs bg-stone-900 border border-stone-700 rounded py-0.5 text-stone-200 outline-none focus:border-sky-600"
               />
-              <span className="text-[10px] text-stone-600">class/race/ability</span>
+              <span className="text-[10px] text-stone-600">
+                class/race/ability
+              </span>
             </div>
           )}
           <p className="text-[10px] text-stone-600 italic">
@@ -300,33 +420,49 @@ export function CombatTab({ character, canEdit, isGM, onUpdate, onRoll, onRollIn
       {favorites.length > 0 && (
         <BentoSection label="⭐ Favorites">
           <div className="flex flex-col gap-1.5">
-            {character.actions.filter((a) => a.isFavorite).map((a) => (
-              <ActionRow
-                key={a.id}
-                action={a}
-                character={character}
-                canEdit={canEdit}
-                isGM={isGM}
-                onRoll={() => setRoll(a.name, a.formula || a.damage)}
-                onToggleFavorite={() => updateActions(
-                  character.actions.map((x) => x.id === a.id ? { ...x, isFavorite: !x.isFavorite } : x)
-                )}
-                onDelete={() => updateActions(character.actions.filter((x) => x.id !== a.id))}
-              />
-            ))}
-            {character.inventory.filter((i) => i.isFavorite && i.formula).map((item) => (
-              <InventoryFavoriteRow
-                key={item.id}
-                item={item}
-                canEdit={canEdit}
-                onRoll={() => setRoll(item.name, item.formula!)}
-                onToggleFavorite={() => onUpdate({
-                  inventory: character.inventory.map((x) =>
-                    x.id === item.id ? { ...x, isFavorite: !x.isFavorite } : x
-                  ),
-                })}
-              />
-            ))}
+            {character.actions
+              .filter((a) => a.isFavorite)
+              .map((a) => (
+                <ActionRow
+                  key={a.id}
+                  action={a}
+                  character={character}
+                  canEdit={canEdit}
+                  isGM={isGM}
+                  onRoll={() => setRoll(a.name, a.formula || a.damage)}
+                  onToggleFavorite={() =>
+                    updateActions(
+                      character.actions.map((x) =>
+                        x.id === a.id ? { ...x, isFavorite: !x.isFavorite } : x,
+                      ),
+                    )
+                  }
+                  onDelete={() =>
+                    updateActions(
+                      character.actions.filter((x) => x.id !== a.id),
+                    )
+                  }
+                />
+              ))}
+            {character.inventory
+              .filter((i) => i.isFavorite && i.formula)
+              .map((item) => (
+                <InventoryFavoriteRow
+                  key={item.id}
+                  item={item}
+                  canEdit={canEdit}
+                  onRoll={() => setRoll(item.name, item.formula!)}
+                  onToggleFavorite={() =>
+                    onUpdate({
+                      inventory: character.inventory.map((x) =>
+                        x.id === item.id
+                          ? { ...x, isFavorite: !x.isFavorite }
+                          : x,
+                      ),
+                    })
+                  }
+                />
+              ))}
           </div>
         </BentoSection>
       )}
@@ -359,10 +495,16 @@ export function CombatTab({ character, canEdit, isGM, onUpdate, onRoll, onRollIn
               canEdit={canEdit}
               isGM={isGM}
               onRoll={() => setRoll(a.name, a.formula || a.damage)}
-              onToggleFavorite={() => updateActions(
-                character.actions.map((x) => x.id === a.id ? { ...x, isFavorite: !x.isFavorite } : x)
-              )}
-              onDelete={() => updateActions(character.actions.filter((x) => x.id !== a.id))}
+              onToggleFavorite={() =>
+                updateActions(
+                  character.actions.map((x) =>
+                    x.id === a.id ? { ...x, isFavorite: !x.isFavorite } : x,
+                  ),
+                )
+              }
+              onDelete={() =>
+                updateActions(character.actions.filter((x) => x.id !== a.id))
+              }
             />
           ))}
         </div>
@@ -380,14 +522,19 @@ export function CombatTab({ character, canEdit, isGM, onUpdate, onRoll, onRollIn
           />
         ) : (
           <p className="text-xs text-stone-400 whitespace-pre-wrap">
-            {character.battleNotes || <span className="text-stone-600 italic">No notes.</span>}
+            {character.battleNotes || (
+              <span className="text-stone-600 italic">No notes.</span>
+            )}
           </p>
         )}
       </BentoSection>
 
       {addingAction && (
         <AddActionModal
-          onAdd={(a) => { onUpdate({ actions: [...character.actions, a] }); setAddingAction(false); }}
+          onAdd={(a) => {
+            onUpdate({ actions: [...character.actions, a] });
+            setAddingAction(false);
+          }}
           onCancel={() => setAddingAction(false)}
         />
       )}
@@ -397,7 +544,13 @@ export function CombatTab({ character, canEdit, isGM, onUpdate, onRoll, onRollIn
           formula={rollPending.formula}
           isGM={isGM}
           onConfirm={(mode, ac, hidden) => {
-            onRoll({ label: rollPending.label, formula: rollPending.formula, mode, advantageCount: ac, hidden });
+            onRoll({
+              label: rollPending.label,
+              formula: rollPending.formula,
+              mode,
+              advantageCount: ac,
+              hidden,
+            });
             setRollPending(null);
           }}
           onCancel={() => setRollPending(null)}
@@ -408,9 +561,17 @@ export function CombatTab({ character, canEdit, isGM, onUpdate, onRoll, onRollIn
 }
 
 // ── InventoryFavoriteRow ──────────────────────────────────────────
+/**
+ * Compact row for a favorited inventory item shown in the Combat tab's
+ * Favorites section — same favorite/roll affordances as the Inventory
+ * tab's `ItemRow`, but without expand/edit/delete (those live in Inventory).
+ */
 
 function InventoryFavoriteRow({
-  item, canEdit, onRoll, onToggleFavorite,
+  item,
+  canEdit,
+  onRoll,
+  onToggleFavorite,
 }: {
   item: InventoryItem;
   canEdit: boolean;
@@ -422,13 +583,24 @@ function InventoryFavoriteRow({
       <div className="flex items-center gap-2 px-2.5 py-2">
         <span>🎒</span>
         <div className="flex-1 min-w-0">
-          <span className="text-xs font-semibold text-stone-200 truncate">{item.name}</span>
+          <span className="text-xs font-semibold text-stone-200 truncate">
+            {item.name}
+          </span>
           {item.formula && (
-            <span className="text-[10px] font-mono text-amber-300/80 ml-2">{item.formula}</span>
+            <span className="text-[10px] font-mono text-amber-300/80 ml-2">
+              {item.formula}
+            </span>
           )}
         </div>
-        <div className="flex items-center gap-1" onClick={(e) => e.stopPropagation()}>
-          <FavoriteButton isFavorite={item.isFavorite ?? false} canEdit={canEdit} onToggle={onToggleFavorite} />
+        <div
+          className="flex items-center gap-1"
+          onClick={(e) => e.stopPropagation()}
+        >
+          <FavoriteButton
+            isFavorite={item.isFavorite ?? false}
+            canEdit={canEdit}
+            onToggle={onToggleFavorite}
+          />
           {canEdit && onRoll && <RollButton onClick={onRoll} />}
         </div>
       </div>
@@ -437,9 +609,25 @@ function InventoryFavoriteRow({
 }
 
 // ── ActionRow ─────────────────────────────────────────────────────
-
+/**
+ * Expandable row for one combat action (melee/ranged/ability/item — spells
+ * are excluded, they live in the Spells tab). Click to expand/collapse the
+ * description; favorite toggle and roll button are always visible.
+ *
+ * @param action - The action to render.
+ * @param character - Used to resolve the formula's display string (variables substituted, dice kept).
+ * @param canEdit - Gates the favorite toggle, roll button, and delete action.
+ * @param onRoll - Called when the roll button is clicked.
+ * @param onToggleFavorite - Called when the favorite star is clicked.
+ * @param onDelete - Called when "Delete" is clicked in the expanded panel.
+ */
 function ActionRow({
-  action, character, canEdit, onRoll, onToggleFavorite, onDelete,
+  action,
+  character,
+  canEdit,
+  onRoll,
+  onToggleFavorite,
+  onDelete,
 }: {
   action: CharacterAction;
   character: NimbleCharacter;
@@ -452,7 +640,10 @@ function ActionRow({
   const [expanded, setExpanded] = useState(false);
   const typeStyle = ACTION_COLORS[action.type] ?? "";
   const icon = ACTION_ICONS[action.type] ?? "⚡";
-  const resolvedFormula = resolveFormulaDisplay(action.formula || action.damage, character);
+  const resolvedFormula = resolveFormulaDisplay(
+    action.formula || action.damage,
+    character,
+  );
 
   return (
     <div className="rounded-lg border border-stone-700/40 bg-stone-900/40 overflow-hidden">
@@ -463,19 +654,30 @@ function ActionRow({
         <span>{icon}</span>
         <div className="flex-1 min-w-0">
           <div className="flex items-center gap-2">
-            <span className="text-xs font-semibold text-stone-200 truncate">{action.name}</span>
-            <span className={`text-[9px] font-bold uppercase px-1.5 py-0.5 rounded border ${typeStyle}`}>
+            <span className="text-xs font-semibold text-stone-200 truncate">
+              {action.name}
+            </span>
+            <span
+              className={`text-[9px] font-bold uppercase px-1.5 py-0.5 rounded border ${typeStyle}`}
+            >
               {action.type}
             </span>
           </div>
           <div className="flex items-center gap-3 mt-0.5">
-            <span className="text-[10px] text-stone-500">📍 {action.range || "—"}</span>
+            <span className="text-[10px] text-stone-500">
+              📍 {action.range || "—"}
+            </span>
             {resolvedFormula && (
-              <span className="text-[10px] font-mono text-amber-300/80">{resolvedFormula}</span>
+              <span className="text-[10px] font-mono text-amber-300/80">
+                {resolvedFormula}
+              </span>
             )}
           </div>
         </div>
-        <div className="flex items-center gap-1" onClick={(e) => e.stopPropagation()}>
+        <div
+          className="flex items-center gap-1"
+          onClick={(e) => e.stopPropagation()}
+        >
           <FavoriteButton
             isFavorite={action.isFavorite}
             canEdit={canEdit}
@@ -502,40 +704,80 @@ function ActionRow({
 }
 
 // ── AddActionModal ────────────────────────────────────────────────
-
+/**
+ * Simple modal form for creating a new custom combat action (name, type,
+ * range, damage formula, description). Spells are added separately via
+ * the Spells tab's own modal, which has school/tier/mana fields.
+ *
+ * @param onAdd - Called with the fully-constructed {@link CharacterAction} on submit.
+ * @param onCancel - Called when the modal is dismissed without adding.
+ */
 function AddActionModal({
-  onAdd, onCancel,
+  onAdd,
+  onCancel,
 }: {
   onAdd: (a: CharacterAction) => void;
   onCancel: () => void;
 }) {
   const [form, setForm] = useState({
-    name: "", type: "melee" as CharacterAction["type"],
-    range: "", damage: "", description: "",
+    name: "",
+    type: "melee" as CharacterAction["type"],
+    range: "",
+    damage: "",
+    description: "",
   });
   const set = (k: string, v: string) => setForm((p) => ({ ...p, [k]: v }));
 
   return (
     <div
       className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 backdrop-blur-sm"
-      onClick={(e) => { if (e.target === e.currentTarget) onCancel(); }}
+      onClick={(e) => {
+        if (e.target === e.currentTarget) onCancel();
+      }}
     >
       <div className="w-80 rounded-xl border border-stone-700 bg-stone-900 shadow-2xl overflow-hidden">
         <div className="bg-stone-800 px-4 py-3 border-b border-stone-700">
           <h3 className="text-sm font-bold text-amber-200">New Action</h3>
         </div>
         <div className="p-4 flex flex-col gap-3">
-          <FormField label="Name *" value={form.name} onChange={(v) => set("name", v)} />
-          <FormField label="Type" as="select" value={form.type} onChange={(v) => set("type", v)}>
+          <FormField
+            label="Name *"
+            value={form.name}
+            onChange={(v) => set("name", v)}
+          />
+          <FormField
+            label="Type"
+            as="select"
+            value={form.type}
+            onChange={(v) => set("type", v)}
+          >
             {["melee", "ranged", "ability", "item"].map((t) => (
-              <option key={t} value={t}>{t}</option>
+              <option key={t} value={t}>
+                {t}
+              </option>
             ))}
           </FormField>
           <GridFields>
-            <FormField label="Range" value={form.range} onChange={(v) => set("range", v)} placeholder="e.g. 1, range 6" />
-            <FormField label="Damage" value={form.damage} onChange={(v) => set("damage", v)} placeholder="e.g. 1d8+STR" />
+            <FormField
+              label="Range"
+              value={form.range}
+              onChange={(v) => set("range", v)}
+              placeholder="e.g. 1, range 6"
+            />
+            <FormField
+              label="Damage"
+              value={form.damage}
+              onChange={(v) => set("damage", v)}
+              placeholder="e.g. 1d8+STR"
+            />
           </GridFields>
-          <FormField label="Description" as="textarea" value={form.description} onChange={(v) => set("description", v)} rows={2} />
+          <FormField
+            label="Description"
+            as="textarea"
+            value={form.description}
+            onChange={(v) => set("description", v)}
+            rows={2}
+          />
         </div>
         <div className="flex gap-2 px-4 pb-4">
           <button
@@ -547,7 +789,13 @@ function AddActionModal({
           <button
             onClick={() => {
               if (!form.name) return;
-              onAdd({ id: `a-${Date.now()}`, ...form, formula: form.damage, isFavorite: false, isCustom: true });
+              onAdd({
+                id: `a-${Date.now()}`,
+                ...form,
+                formula: form.damage,
+                isFavorite: false,
+                isCustom: true,
+              });
             }}
             className="flex-1 py-2 rounded-lg bg-amber-700 hover:bg-amber-600 text-amber-100 text-sm font-bold transition-colors"
           >

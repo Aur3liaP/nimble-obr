@@ -1,6 +1,11 @@
 /**
- * SpellsTab — refactorisé avec BentoSection, FavoriteButton, RollButton,
- * RowActions, TextAction, FormField, GridFields, TabPills, ModalShell.
+ * @file Spells tab — mana tracker, search/tier filtering, spell list with
+ * inline expand/edit, and the "Add Spell" modal (browse official spells
+ * from {@link BASE_SPELLS} or create a custom one).
+ *
+ * Spells are stored as {@link CharacterAction} entries with `type: "spell"`
+ * mixed into the same `character.actions` array used by the Combat tab;
+ * this tab simply filters to that subset.
  */
 
 import { useState, useMemo } from "react";
@@ -22,37 +27,66 @@ import { TabPills } from "../ui/common/TabPills";
 import { ModalShell } from "../ui/common/ModalShell";
 
 // ── Constants ─────────────────────────────────────────────────────
-
+/** Display labels for spell tiers (0 = Cantrips, 1–9 = Tier I–IX). */
 const TIER_LABELS: Record<number, string> = {
-  0: "Cantrips", 1: "Tier I",   2: "Tier II",  3: "Tier III",
-  4: "Tier IV",  5: "Tier V",   6: "Tier VI",  7: "Tier VII",
-  8: "Tier VIII",9: "Tier IX",
+  0: "Cantrips",
+  1: "Tier I",
+  2: "Tier II",
+  3: "Tier III",
+  4: "Tier IV",
+  5: "Tier V",
+  6: "Tier VI",
+  7: "Tier VII",
+  8: "Tier VIII",
+  9: "Tier IX",
 };
 
+/** Tailwind color classes per spell school, used for school badges throughout this tab. */
 const SCHOOL_STYLES: Record<SpellSchool, string> = {
-  fire:       "text-orange-300 border-orange-800/60 bg-orange-950/30",
-  ice:        "text-cyan-300 border-cyan-800/60 bg-cyan-950/30",
-  lightning:  "text-yellow-300 border-yellow-800/60 bg-yellow-950/30",
-  wind:       "text-teal-300 border-teal-800/60 bg-teal-950/30",
-  radiant:    "text-amber-300 border-amber-800/60 bg-amber-950/30",
-  necrotic:   "text-purple-300 border-purple-800/60 bg-purple-950/30",
+  fire: "text-orange-300 border-orange-800/60 bg-orange-950/30",
+  ice: "text-cyan-300 border-cyan-800/60 bg-cyan-950/30",
+  lightning: "text-yellow-300 border-yellow-800/60 bg-yellow-950/30",
+  wind: "text-teal-300 border-teal-800/60 bg-teal-950/30",
+  radiant: "text-amber-300 border-amber-800/60 bg-amber-950/30",
+  necrotic: "text-purple-300 border-purple-800/60 bg-purple-950/30",
   terramancy: "text-lime-300 border-lime-800/60 bg-lime-950/30",
-  utility:    "text-stone-300 border-stone-600/60 bg-stone-800/30",
+  utility: "text-stone-300 border-stone-600/60 bg-stone-800/30",
 };
 
 const SCHOOL_ICONS: Record<SpellSchool, string> = {
-  fire: "🔥", ice: "❄️", lightning: "⚡", wind: "💨",
-  radiant: "✨", necrotic: "💀", terramancy: "🌿", utility: "🔮",
+  fire: "🔥",
+  ice: "❄️",
+  lightning: "⚡",
+  wind: "💨",
+  radiant: "✨",
+  necrotic: "💀",
+  terramancy: "🌿",
+  utility: "🔮",
 };
 
+/** All spell schools, in the fixed order used by filters and the custom-spell form. */
 const SCHOOLS: SpellSchool[] = [
-  "fire", "ice", "lightning", "wind", "radiant", "necrotic", "terramancy", "utility",
+  "fire",
+  "ice",
+  "lightning",
+  "wind",
+  "radiant",
+  "necrotic",
+  "terramancy",
+  "utility",
 ];
 
+/** All spell tiers from 0 (cantrip) to 9, in ascending order. */
 const TIERS = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9];
 
 // ── Types ─────────────────────────────────────────────────────────
-
+/**
+ * @property character - The character being displayed/edited.
+ * @property canEdit - Whether the current player may modify this sheet.
+ * @property isGM - Whether the current player is the GM (enables hidden-roll option in the modal).
+ * @property onUpdate - Persists a partial character update.
+ * @property onRoll - Triggers a dice roll request after modal confirmation.
+ */
 interface Props {
   character: NimbleCharacter;
   canEdit: boolean;
@@ -61,10 +95,22 @@ interface Props {
   onRoll: (req: DiceRollRequest) => void;
 }
 
+/** Which sub-view the "Add Spell" modal is showing: browsing the official list, or filling a custom-spell form. */
 type AddMode = "list" | "custom";
 
 // ── AddSpellModal ─────────────────────────────────────────────────
-
+/**
+ * Modal for adding a spell to the character, in one of two modes:
+ *
+ * - "list": search/filter {@link BASE_SPELLS} by name, school, and tier,
+ *   then add a copy as a non-custom {@link CharacterAction}.
+ * - "custom": fill a form (name, tier, school, range, formula, description)
+ *   to create a fully custom spell, flagged `isCustom: true`.
+ *
+ * @param existingIds - IDs of spells the character already knows (currently unused, reserved for future duplicate-detection UI).
+ * @param onAdd - Called with the constructed {@link CharacterAction} when a spell is added.
+ * @param onCancel - Called when the modal is dismissed without adding.
+ */
 function AddSpellModal({
   existingIds,
   onAdd,
@@ -74,30 +120,47 @@ function AddSpellModal({
   onAdd: (s: CharacterAction) => void;
   onCancel: () => void;
 }) {
-  const [mode, setMode]               = useState<AddMode>("list");
-  const [search, setSearch]           = useState("");
+  const [mode, setMode] = useState<AddMode>("list");
+  const [search, setSearch] = useState("");
   const [filterSchool, setFilterSchool] = useState<SpellSchool | "all">("all");
-  const [filterTier, setFilterTier]   = useState<number | "all">("all");
+  const [filterTier, setFilterTier] = useState<number | "all">("all");
 
   const [form, setForm] = useState({
-    name: "", tier: 0, manaCost: 0,
+    name: "",
+    tier: 0,
+    manaCost: 0,
     school: "" as SpellSchool | "",
-    range: "", damage: "", description: "",
+    range: "",
+    damage: "",
+    description: "",
   });
-  const setF = (k: string, v: string | number) => setForm((p) => ({ ...p, [k]: v }));
+  const setF = (k: string, v: string | number) =>
+    setForm((p) => ({ ...p, [k]: v }));
 
   // Suppress unused warning — kept for future duplicate detection
   void existingIds;
 
-  const filteredBase = useMemo(() => BASE_SPELLS.filter((s) => {
-    const matchSearch =
-      s.name.toLowerCase().includes(search.toLowerCase()) ||
-      (s.description?.toLowerCase().includes(search.toLowerCase()) ?? false);
-    const matchSchool = filterSchool === "all" || s.spellSchool === filterSchool;
-    const matchTier   = filterTier   === "all" || s.spellTier   === filterTier;
-    return matchSearch && matchSchool && matchTier;
-  }), [search, filterSchool, filterTier]);
+  /** Official spell list filtered by the current search text, school, and tier selections. */
+  const filteredBase = useMemo(
+    () =>
+      BASE_SPELLS.filter((s) => {
+        const matchSearch =
+          s.name.toLowerCase().includes(search.toLowerCase()) ||
+          (s.description?.toLowerCase().includes(search.toLowerCase()) ??
+            false);
+        const matchSchool =
+          filterSchool === "all" || s.spellSchool === filterSchool;
+        const matchTier = filterTier === "all" || s.spellTier === filterTier;
+        return matchSearch && matchSchool && matchTier;
+      }),
+    [search, filterSchool, filterTier],
+  );
 
+  /**
+   * Converts a {@link BASE_SPELLS} template into a concrete, non-custom
+   * {@link CharacterAction} and hands it to `onAdd`. Mana cost defaults to
+   * the spell's tier when not explicitly set (cantrips are always free).
+   */
   const handleAddFromList = (template: (typeof BASE_SPELLS)[0]) => {
     onAdd({
       id: `sp-${crypto.randomUUID()}`,
@@ -111,7 +174,9 @@ function AddSpellModal({
       isCustom: false,
       spellTier: template.spellTier,
       spellSchool: template.spellSchool as SpellSchool | undefined,
-      manaCost: template.manaCost ?? (template.spellTier === 0 ? 0 : template.spellTier),
+      manaCost:
+        template.manaCost ??
+        (template.spellTier === 0 ? 0 : template.spellTier),
       actionCost: template.actionCost,
     });
   };
@@ -119,7 +184,10 @@ function AddSpellModal({
   // Tier pills options
   const tierOptions = [
     { value: "all" as const, label: "All" },
-    ...TIERS.map((t) => ({ value: t as number | "all", label: TIER_LABELS[t] })),
+    ...TIERS.map((t) => ({
+      value: t as number | "all",
+      label: TIER_LABELS[t],
+    })),
   ];
 
   const modeTabs = (
@@ -151,7 +219,10 @@ function AddSpellModal({
 
   const addCustomFooter = (
     <div className="flex gap-2">
-      <button onClick={onCancel} className="flex-1 py-2 rounded-lg border border-stone-700 text-stone-400 text-sm hover:bg-stone-800 transition-colors">
+      <button
+        onClick={onCancel}
+        className="flex-1 py-2 rounded-lg border border-stone-700 text-stone-400 text-sm hover:bg-stone-800 transition-colors"
+      >
         Cancel
       </button>
       <button
@@ -201,12 +272,16 @@ function AddSpellModal({
             <div className="flex gap-1.5 flex-wrap">
               <select
                 value={filterSchool}
-                onChange={(e) => setFilterSchool(e.target.value as SpellSchool | "all")}
+                onChange={(e) =>
+                  setFilterSchool(e.target.value as SpellSchool | "all")
+                }
                 className="bg-stone-800 border border-stone-700 rounded px-1.5 py-1 text-[10px] text-stone-300 outline-none focus:border-violet-600"
               >
                 <option value="all">All schools</option>
                 {SCHOOLS.map((s) => (
-                  <option key={s} value={s}>{SCHOOL_ICONS[s]} {s}</option>
+                  <option key={s} value={s}>
+                    {SCHOOL_ICONS[s]} {s}
+                  </option>
                 ))}
               </select>
               <TabPills
@@ -221,11 +296,15 @@ function AddSpellModal({
           {/* Spell list */}
           <div className="p-2 flex flex-col gap-1">
             {filteredBase.length === 0 && (
-              <p className="text-xs text-stone-600 italic text-center py-6">No spells match your search.</p>
+              <p className="text-xs text-stone-600 italic text-center py-6">
+                No spells match your search.
+              </p>
             )}
             {filteredBase.map((spell, idx) => {
               const school = spell.spellSchool as SpellSchool | undefined;
-              const schoolStyle = school ? SCHOOL_STYLES[school] : "text-violet-300 border-violet-800/60";
+              const schoolStyle = school
+                ? SCHOOL_STYLES[school]
+                : "text-violet-300 border-violet-800/60";
               const icon = school ? SCHOOL_ICONS[school] : "✨";
               return (
                 <button
@@ -236,22 +315,35 @@ function AddSpellModal({
                   <span className="mt-0.5 shrink-0">{icon}</span>
                   <div className="flex-1 min-w-0">
                     <div className="flex items-center gap-1.5 flex-wrap">
-                      <span className="text-xs font-semibold text-stone-200">{spell.name}</span>
-                      <span className={`text-[9px] font-bold uppercase px-1.5 py-0.5 rounded border ${schoolStyle}`}>
-                        {school ?? (spell.spellTier === 0 ? "cantrip" : TIER_LABELS[spell.spellTier ?? 0])}
+                      <span className="text-xs font-semibold text-stone-200">
+                        {spell.name}
+                      </span>
+                      <span
+                        className={`text-[9px] font-bold uppercase px-1.5 py-0.5 rounded border ${schoolStyle}`}
+                      >
+                        {school ??
+                          (spell.spellTier === 0
+                            ? "cantrip"
+                            : TIER_LABELS[spell.spellTier ?? 0])}
                       </span>
                       {(spell.spellTier ?? 0) > 0 && (
-                        <span className="text-[9px] text-violet-400">T{spell.spellTier}</span>
+                        <span className="text-[9px] text-violet-400">
+                          T{spell.spellTier}
+                        </span>
                       )}
                     </div>
                     {spell.formula && (
-                      <span className="text-[10px] font-mono text-amber-300/70">{spell.formula}</span>
+                      <span className="text-[10px] font-mono text-amber-300/70">
+                        {spell.formula}
+                      </span>
                     )}
                     <p className="text-[10px] text-stone-500 mt-0.5 line-clamp-2 leading-relaxed">
                       {spell.description}
                     </p>
                   </div>
-                  <span className="text-[10px] text-violet-500 group-hover:text-violet-300 shrink-0 mt-1">+ Add</span>
+                  <span className="text-[10px] text-violet-500 group-hover:text-violet-300 shrink-0 mt-1">
+                    + Add
+                  </span>
                 </button>
               );
             })}
@@ -260,27 +352,71 @@ function AddSpellModal({
       ) : (
         /* Custom spell form */
         <div className="p-4 flex flex-col gap-3">
-          <FormField label="Name *" value={form.name} onChange={(v) => setF("name", v)} />
+          <FormField
+            label="Name *"
+            value={form.name}
+            onChange={(v) => setF("name", v)}
+          />
           <GridFields>
-            <FormField label="Tier" as="select" value={form.tier}
-              onChange={(v) => { const t = parseInt(v); setF("tier", t); setF("manaCost", t); }}>
-              {TIERS.map((t) => <option key={t} value={t}>{TIER_LABELS[t]}</option>)}
+            <FormField
+              label="Tier"
+              as="select"
+              value={form.tier}
+              onChange={(v) => {
+                const t = parseInt(v);
+                setF("tier", t);
+                setF("manaCost", t);
+              }}
+            >
+              {TIERS.map((t) => (
+                <option key={t} value={t}>
+                  {TIER_LABELS[t]}
+                </option>
+              ))}
             </FormField>
-            <FormField label="School" as="select" value={form.school} onChange={(v) => setF("school", v)}>
+            <FormField
+              label="School"
+              as="select"
+              value={form.school}
+              onChange={(v) => setF("school", v)}
+            >
               <option value="">— none —</option>
-              {SCHOOLS.map((s) => <option key={s} value={s}>{SCHOOL_ICONS[s]} {s}</option>)}
+              {SCHOOLS.map((s) => (
+                <option key={s} value={s}>
+                  {SCHOOL_ICONS[s]} {s}
+                </option>
+              ))}
             </FormField>
           </GridFields>
           <GridFields>
-            <FormField label="Range" value={form.range} onChange={(v) => setF("range", v)} placeholder="e.g. range 6" />
-            <FormField label="Damage / Formula" value={form.damage} onChange={(v) => setF("damage", v)} placeholder="e.g. 2d6+INT" />
+            <FormField
+              label="Range"
+              value={form.range}
+              onChange={(v) => setF("range", v)}
+              placeholder="e.g. range 6"
+            />
+            <FormField
+              label="Damage / Formula"
+              value={form.damage}
+              onChange={(v) => setF("damage", v)}
+              placeholder="e.g. 2d6+INT"
+            />
           </GridFields>
           {form.tier > 0 && (
-            <FormField label="Mana cost" type="number" value={form.manaCost}
-              onChange={(v) => setF("manaCost", parseInt(v) || 0)} />
+            <FormField
+              label="Mana cost"
+              type="number"
+              value={form.manaCost}
+              onChange={(v) => setF("manaCost", parseInt(v) || 0)}
+            />
           )}
-          <FormField label="Description" as="textarea" value={form.description}
-            onChange={(v) => setF("description", v)} rows={3} />
+          <FormField
+            label="Description"
+            as="textarea"
+            value={form.description}
+            onChange={(v) => setF("description", v)}
+            rows={3}
+          />
         </div>
       )}
     </ModalShell>
@@ -288,67 +424,124 @@ function AddSpellModal({
 }
 
 // ── Main SpellsTab ────────────────────────────────────────────────
-
-export function SpellsTab({ character, canEdit, isGM, onUpdate, onRoll }: Props) {
-  const [rollPending, setRollPending] = useState<{ label: string; formula: string } | null>(null);
+/**
+ * Renders the mana tracker, a search/tier-filtered list of known spells
+ * (each row expandable for description, or switchable to an inline edit
+ * form), and spell-specific notes. Adding a spell opens {@link AddSpellModal}.
+ */
+export function SpellsTab({
+  character,
+  canEdit,
+  isGM,
+  onUpdate,
+  onRoll,
+}: Props) {
+  const [rollPending, setRollPending] = useState<{
+    label: string;
+    formula: string;
+  } | null>(null);
   const [addingSpell, setAddingSpell] = useState(false);
-  const [filterTier, setFilterTier]   = useState<number | "all">("all");
-  const [search, setSearch]           = useState("");
-  const [expandedId, setExpandedId]   = useState<string | null>(null);
-  const [editingId, setEditingId]     = useState<string | null>(null);
+  const [filterTier, setFilterTier] = useState<number | "all">("all");
+  const [search, setSearch] = useState("");
+  const [expandedId, setExpandedId] = useState<string | null>(null);
+  const [editingId, setEditingId] = useState<string | null>(null);
 
+  /** Subset of `character.actions` with `type === "spell"`. */
   const spells = character.actions.filter((a) => a.type === "spell");
-  const tiers  = [...new Set(spells.map((s) => s.spellTier ?? 0))].sort();
 
-  const visible = useMemo(() => spells.filter((s) => {
-    const matchTier   = filterTier === "all" || (s.spellTier ?? 0) === filterTier;
-    const matchSearch = search === "" ||
-      s.name.toLowerCase().includes(search.toLowerCase()) ||
-      (s.description?.toLowerCase().includes(search.toLowerCase()) ?? false);
-    return matchTier && matchSearch;
-  }), [spells, filterTier, search]);
+  /** Distinct tiers present among the character's known spells, sorted ascending — used to build the tier filter pills (hidden if there's only one tier). */
+  const tiers = [...new Set(spells.map((s) => s.spellTier ?? 0))].sort();
 
+  /** Known spells filtered by the active tier and search text. */
+  const visible = useMemo(
+    () =>
+      spells.filter((s) => {
+        const matchTier =
+          filterTier === "all" || (s.spellTier ?? 0) === filterTier;
+        const matchSearch =
+          search === "" ||
+          s.name.toLowerCase().includes(search.toLowerCase()) ||
+          (s.description?.toLowerCase().includes(search.toLowerCase()) ??
+            false);
+        return matchTier && matchSearch;
+      }),
+    [spells, filterTier, search],
+  );
+
+  /** Patches a single spell within `character.actions` by id. */
   const updateSpell = (id: string, patch: Partial<CharacterAction>) =>
-    onUpdate({ actions: character.actions.map((a) => a.id === id ? { ...a, ...patch } : a) });
+    onUpdate({
+      actions: character.actions.map((a) =>
+        a.id === id ? { ...a, ...patch } : a,
+      ),
+    });
 
+  /** Removes a spell from `character.actions` by id. */
   const deleteSpell = (id: string) =>
     onUpdate({ actions: character.actions.filter((a) => a.id !== id) });
 
+  /** Toggles a spell row's expanded (description) state; closes edit mode first if it was open on this row. */
   const handleRowClick = (id: string) => {
-    if (editingId === id) { setEditingId(null); setExpandedId(id); return; }
-    setExpandedId((prev) => prev === id ? null : id);
+    if (editingId === id) {
+      setEditingId(null);
+      setExpandedId(id);
+      return;
+    }
+    setExpandedId((prev) => (prev === id ? null : id));
   };
 
+  /** Toggles a spell row's inline edit mode; closes the expanded description state first if it was open on this row. */
   const handleEditToggle = (id: string) => {
-    if (editingId === id) { setEditingId(null); return; }
+    if (editingId === id) {
+      setEditingId(null);
+      return;
+    }
     setEditingId(id);
     setExpandedId(null);
   };
 
   // Tier filter pills — only shown when there are multiple tiers
-  const tierPillOptions = tiers.length > 1
-    ? [{ value: "all" as number | "all", label: "All" }, ...tiers.map((t) => ({ value: t as number | "all", label: TIER_LABELS[t] ?? `Tier ${t}` }))]
-    : [];
+  const tierPillOptions =
+    tiers.length > 1
+      ? [
+          { value: "all" as number | "all", label: "All" },
+          ...tiers.map((t) => ({
+            value: t as number | "all",
+            label: TIER_LABELS[t] ?? `Tier ${t}`,
+          })),
+        ]
+      : [];
 
   return (
     <div className="flex flex-col gap-3 p-3">
-
       {/* ── Mana ─────────────────────────────────────────────────── */}
       <BentoSection>
         <div className="flex items-center gap-4">
           <div className="flex flex-col items-center px-4 py-2 rounded-lg bg-violet-950/40 border border-violet-800/40">
-            <span className="text-[10px] text-violet-400 uppercase tracking-wider">Mana</span>
+            <span className="text-[10px] text-violet-400 uppercase tracking-wider">
+              Mana
+            </span>
             <div className="flex items-baseline gap-1">
               <input
-                type="number" value={character.mana} min={0} max={character.maxMana}
+                type="number"
+                value={character.mana}
+                min={0}
+                max={character.maxMana}
                 disabled={!canEdit}
-                onChange={(e) => onUpdate({ mana: Math.max(0, parseInt(e.target.value) || 0) })}
+                onChange={(e) =>
+                  onUpdate({ mana: Math.max(0, parseInt(e.target.value) || 0) })
+                }
                 className="w-14 text-center text-3xl font-black bg-transparent text-violet-200 outline-none border-b border-violet-800 focus:border-violet-500 disabled:border-transparent"
               />
               <span className="text-stone-500 text-sm"> / </span>
               <input
-                type="number" value={character.maxMana} min={0} disabled={!canEdit}
-                onChange={(e) => onUpdate({ maxMana: parseInt(e.target.value) || 0 })}
+                type="number"
+                value={character.maxMana}
+                min={0}
+                disabled={!canEdit}
+                onChange={(e) =>
+                  onUpdate({ maxMana: parseInt(e.target.value) || 0 })
+                }
                 className="w-10 text-center text-base font-semibold bg-transparent text-violet-300 outline-none border-b border-stone-700 focus:border-violet-500 disabled:border-transparent"
               />
             </div>
@@ -357,7 +550,9 @@ export function SpellsTab({ character, canEdit, isGM, onUpdate, onRoll }: Props)
             <div className="h-2 bg-stone-800 rounded-full overflow-hidden">
               <div
                 className="h-full rounded-full transition-all bg-gradient-to-r from-violet-700 to-violet-400"
-                style={{ width: `${character.maxMana > 0 ? (character.mana / character.maxMana) * 100 : 0}%` }}
+                style={{
+                  width: `${character.maxMana > 0 ? (character.mana / character.maxMana) * 100 : 0}%`,
+                }}
               />
             </div>
             <p className="text-[10px] text-stone-500 mt-1">
@@ -401,7 +596,9 @@ export function SpellsTab({ character, canEdit, isGM, onUpdate, onRoll }: Props)
       >
         {visible.length === 0 ? (
           <p className="text-xs text-stone-600 italic text-center py-6">
-            {spells.length === 0 ? "No spells known." : "No spells match your search."}
+            {spells.length === 0
+              ? "No spells known."
+              : "No spells match your search."}
           </p>
         ) : (
           <div className="flex flex-col gap-1.5">
@@ -415,13 +612,26 @@ export function SpellsTab({ character, canEdit, isGM, onUpdate, onRoll }: Props)
                 isEditing={editingId === spell.id}
                 onRowClick={() => handleRowClick(spell.id)}
                 onEditToggle={() => handleEditToggle(spell.id)}
-                onRoll={() => setRollPending({ label: spell.name, formula: spell.formula || spell.damage })}
-                onToggleFavorite={() => onUpdate({
-                  actions: character.actions.map((a) =>
-                    a.id === spell.id ? { ...a, isFavorite: !a.isFavorite } : a
-                  ),
-                })}
-                onDelete={() => { deleteSpell(spell.id); setEditingId(null); setExpandedId(null); }}
+                onRoll={() =>
+                  setRollPending({
+                    label: spell.name,
+                    formula: spell.formula || spell.damage,
+                  })
+                }
+                onToggleFavorite={() =>
+                  onUpdate({
+                    actions: character.actions.map((a) =>
+                      a.id === spell.id
+                        ? { ...a, isFavorite: !a.isFavorite }
+                        : a,
+                    ),
+                  })
+                }
+                onDelete={() => {
+                  deleteSpell(spell.id);
+                  setEditingId(null);
+                  setExpandedId(null);
+                }}
                 onUpdate={(patch) => updateSpell(spell.id, patch)}
               />
             ))}
@@ -441,7 +651,9 @@ export function SpellsTab({ character, canEdit, isGM, onUpdate, onRoll }: Props)
           />
         ) : (
           <p className="text-xs text-stone-400 whitespace-pre-wrap">
-            {character.spellNotes || <span className="text-stone-600 italic">No notes.</span>}
+            {character.spellNotes || (
+              <span className="text-stone-600 italic">No notes.</span>
+            )}
           </p>
         )}
       </BentoSection>
@@ -449,7 +661,10 @@ export function SpellsTab({ character, canEdit, isGM, onUpdate, onRoll }: Props)
       {addingSpell && (
         <AddSpellModal
           existingIds={new Set(spells.map((s) => s.id))}
-          onAdd={(s) => { onUpdate({ actions: [...character.actions, s] }); setAddingSpell(false); }}
+          onAdd={(s) => {
+            onUpdate({ actions: [...character.actions, s] });
+            setAddingSpell(false);
+          }}
           onCancel={() => setAddingSpell(false)}
         />
       )}
@@ -459,7 +674,13 @@ export function SpellsTab({ character, canEdit, isGM, onUpdate, onRoll }: Props)
           formula={rollPending.formula}
           isGM={isGM}
           onConfirm={(mode, ac, hidden) => {
-            onRoll({ label: rollPending.label, formula: rollPending.formula, mode, advantageCount: ac, hidden });
+            onRoll({
+              label: rollPending.label,
+              formula: rollPending.formula,
+              mode,
+              advantageCount: ac,
+              hidden,
+            });
             setRollPending(null);
           }}
           onCancel={() => setRollPending(null)}
@@ -470,10 +691,35 @@ export function SpellsTab({ character, canEdit, isGM, onUpdate, onRoll }: Props)
 }
 
 // ── SpellRow ──────────────────────────────────────────────────────
-
+/**
+ * One row in the spell list, with three possible states: collapsed
+ * (name + badges + resolved formula), expanded (adds range/description),
+ * or editing (full inline form for every spell field).
+ *
+ * @param spell - The spell to render.
+ * @param character - Used to resolve the formula's display string.
+ * @param canEdit - Gates favorite toggle, roll button, edit, and delete.
+ * @param isExpanded - Whether the description panel is open.
+ * @param isEditing - Whether the inline edit form is open.
+ * @param onRowClick - Called when the row body is clicked (toggles expand).
+ * @param onEditToggle - Called when edit mode is toggled.
+ * @param onRoll - Called when the roll button is clicked.
+ * @param onToggleFavorite - Called when the favorite star is clicked.
+ * @param onDelete - Called when "Remove spell" is clicked.
+ * @param onUpdate - Called with a partial patch when an edit field changes.
+ */
 function SpellRow({
-  spell, character, canEdit, isExpanded, isEditing,
-  onRowClick, onEditToggle, onRoll, onToggleFavorite, onDelete, onUpdate,
+  spell,
+  character,
+  canEdit,
+  isExpanded,
+  isEditing,
+  onRowClick,
+  onEditToggle,
+  onRoll,
+  onToggleFavorite,
+  onDelete,
+  onUpdate,
 }: {
   spell: CharacterAction;
   character: NimbleCharacter;
@@ -487,40 +733,64 @@ function SpellRow({
   onDelete: () => void;
   onUpdate: (patch: Partial<CharacterAction>) => void;
 }) {
-  const tier        = spell.spellTier ?? 0;
-  const school      = spell.spellSchool;
+  const tier = spell.spellTier ?? 0;
+  const school = spell.spellSchool;
   const schoolStyle = school
     ? SCHOOL_STYLES[school]
     : "text-violet-300 border-violet-800/60 bg-violet-950/30";
-  const schoolIcon  = school ? SCHOOL_ICONS[school] : "✨";
-  const resolvedFormula = resolveFormulaDisplay(spell.formula || spell.damage, character);
+  const schoolIcon = school ? SCHOOL_ICONS[school] : "✨";
+  const resolvedFormula = resolveFormulaDisplay(
+    spell.formula || spell.damage,
+    character,
+  );
 
   return (
-    <div className={`rounded-lg border overflow-hidden transition-colors ${
-      isEditing ? "border-violet-700/60 bg-violet-950/10" : "border-stone-700/40 bg-stone-900/40"
-    }`}>
+    <div
+      className={`rounded-lg border overflow-hidden transition-colors ${
+        isEditing
+          ? "border-violet-700/60 bg-violet-950/10"
+          : "border-stone-700/40 bg-stone-900/40"
+      }`}
+    >
       {/* Main row */}
       <div className="flex items-center gap-2 px-2.5 py-2">
         <span>{schoolIcon}</span>
 
         <div className="flex-1 min-w-0 cursor-pointer" onClick={onRowClick}>
           <div className="flex items-center gap-1.5 flex-wrap">
-            <span className="text-xs font-semibold text-stone-200 truncate">{spell.name}</span>
-            <span className={`text-[9px] font-bold uppercase px-1.5 py-0.5 rounded border ${schoolStyle}`}>
+            <span className="text-xs font-semibold text-stone-200 truncate">
+              {spell.name}
+            </span>
+            <span
+              className={`text-[9px] font-bold uppercase px-1.5 py-0.5 rounded border ${schoolStyle}`}
+            >
               {school ?? (tier === 0 ? "cantrip" : TIER_LABELS[tier])}
             </span>
-            {tier > 0 && <span className="text-[9px] text-violet-400">T{tier}</span>}
+            {tier > 0 && (
+              <span className="text-[9px] text-violet-400">T{tier}</span>
+            )}
             {spell.manaCost != null && spell.manaCost > 0 && (
-              <span className="text-[9px] text-violet-400">✦{spell.manaCost}</span>
+              <span className="text-[9px] text-violet-400">
+                ✦{spell.manaCost}
+              </span>
             )}
           </div>
           {resolvedFormula && (
-            <span className="text-[10px] font-mono text-amber-300/80">{resolvedFormula}</span>
+            <span className="text-[10px] font-mono text-amber-300/80">
+              {resolvedFormula}
+            </span>
           )}
         </div>
 
-        <div className="flex items-center gap-1" onClick={(e) => e.stopPropagation()}>
-          <FavoriteButton isFavorite={spell.isFavorite} canEdit={canEdit} onToggle={onToggleFavorite} />
+        <div
+          className="flex items-center gap-1"
+          onClick={(e) => e.stopPropagation()}
+        >
+          <FavoriteButton
+            isFavorite={spell.isFavorite}
+            canEdit={canEdit}
+            onToggle={onToggleFavorite}
+          />
           {canEdit && (spell.formula || spell.damage) && (
             <RollButton onClick={onRoll} accent="violet" />
           )}
@@ -535,7 +805,9 @@ function SpellRow({
               {spell.range && (
                 <p className="text-[10px] text-stone-500 mb-1">
                   📍 {spell.range}
-                  {spell.actionCost ? ` · ${spell.actionCost} action${spell.actionCost > 1 ? "s" : ""}` : ""}
+                  {spell.actionCost
+                    ? ` · ${spell.actionCost} action${spell.actionCost > 1 ? "s" : ""}`
+                    : ""}
                 </p>
               )}
             </div>
@@ -546,7 +818,9 @@ function SpellRow({
             />
           </div>
           <p className="text-xs text-stone-400 leading-relaxed">
-            {spell.description || <span className="italic text-stone-600">No description.</span>}
+            {spell.description || (
+              <span className="italic text-stone-600">No description.</span>
+            )}
           </p>
         </div>
       )}
@@ -554,31 +828,79 @@ function SpellRow({
       {/* Edit panel */}
       {isEditing && (
         <div className="px-3 pb-3 border-t border-violet-800/30 pt-2 flex flex-col gap-2">
-          <FormField label="Name" value={spell.name} onChange={(v) => onUpdate({ name: v })} />
+          <FormField
+            label="Name"
+            value={spell.name}
+            onChange={(v) => onUpdate({ name: v })}
+          />
           <GridFields>
-            <FormField label="Range" value={spell.range ?? ""} onChange={(v) => onUpdate({ range: v })} placeholder="e.g. 8" />
-            <FormField label="Formula" value={spell.formula ?? spell.damage ?? ""} onChange={(v) => onUpdate({ formula: v, damage: v })} placeholder="e.g. 2d6+INT" />
+            <FormField
+              label="Range"
+              value={spell.range ?? ""}
+              onChange={(v) => onUpdate({ range: v })}
+              placeholder="e.g. 8"
+            />
+            <FormField
+              label="Formula"
+              value={spell.formula ?? spell.damage ?? ""}
+              onChange={(v) => onUpdate({ formula: v, damage: v })}
+              placeholder="e.g. 2d6+INT"
+            />
           </GridFields>
           <GridFields>
-            <FormField label="Tier" as="select" value={spell.spellTier ?? 0}
+            <FormField
+              label="Tier"
+              as="select"
+              value={spell.spellTier ?? 0}
               onChange={(v) => {
                 const t = parseInt(v);
-                onUpdate({ spellTier: t, manaCost: t === 0 ? 0 : (spell.manaCost ?? t) });
-              }}>
-              {TIERS.map((t) => <option key={t} value={t}>{TIER_LABELS[t]}</option>)}
+                onUpdate({
+                  spellTier: t,
+                  manaCost: t === 0 ? 0 : (spell.manaCost ?? t),
+                });
+              }}
+            >
+              {TIERS.map((t) => (
+                <option key={t} value={t}>
+                  {TIER_LABELS[t]}
+                </option>
+              ))}
             </FormField>
-            <FormField label="Mana cost" type="number" value={spell.manaCost ?? 0}
-              onChange={(v) => onUpdate({ manaCost: parseInt(v) || 0 })} />
+            <FormField
+              label="Mana cost"
+              type="number"
+              value={spell.manaCost ?? 0}
+              onChange={(v) => onUpdate({ manaCost: parseInt(v) || 0 })}
+            />
           </GridFields>
-          <FormField label="School" as="select" value={spell.spellSchool ?? ""}
-            onChange={(v) => onUpdate({ spellSchool: (v as SpellSchool) || undefined })}>
+          <FormField
+            label="School"
+            as="select"
+            value={spell.spellSchool ?? ""}
+            onChange={(v) =>
+              onUpdate({ spellSchool: (v as SpellSchool) || undefined })
+            }
+          >
             <option value="">— none —</option>
-            {SCHOOLS.map((s) => <option key={s} value={s}>{SCHOOL_ICONS[s]} {s}</option>)}
+            {SCHOOLS.map((s) => (
+              <option key={s} value={s}>
+                {SCHOOL_ICONS[s]} {s}
+              </option>
+            ))}
           </FormField>
-          <FormField label="Description" as="textarea" value={spell.description ?? ""}
-            onChange={(v) => onUpdate({ description: v })} rows={3} />
+          <FormField
+            label="Description"
+            as="textarea"
+            value={spell.description ?? ""}
+            onChange={(v) => onUpdate({ description: v })}
+            rows={3}
+          />
           <div className="flex justify-between items-center mt-1">
-            <TextAction onClick={onDelete} label="Remove spell" variant="danger" />
+            <TextAction
+              onClick={onDelete}
+              label="Remove spell"
+              variant="danger"
+            />
             <TextAction onClick={onEditToggle} label="OK" variant="confirm" />
           </div>
         </div>

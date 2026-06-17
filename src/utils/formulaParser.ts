@@ -1,16 +1,19 @@
 /**
- * Safe formula evaluator for Nimble character sheet.
+ * @file Safe formula evaluator for the Nimble character sheet.
  *
  * Supports:
  *  - Stat references: STR, DEX, INT, WIL (case-insensitive)
  *  - Skill references: MIGHT, STEALTH, etc.
- *  - Level: LEVEL
- *  - Dice notation: NdX (e.g. 1d8, 2d6) — returns avg for formula display,
- *    actual rolling is delegated to handleRoll / OBR dice
- *  - Math: +  -  *  /  floor()  ceil()  Math.floor()  Math.ceil()
+ *  - LEVEL, KEY (key stat value), FLAW (flaw stat value)
+ *  - Dice notation: NdX (e.g. 1d8, 2d6) — averaged for display/modifier math;
+ *    actual random rolling is done separately by {@link rollFormula}
+ *  - Math: + - * / floor() ceil() min() max()
+ *  - Custom helpers: incrementdice(base, level), stepdice(level, d1, d2, d3, d4)
  *  - Parentheses
  *
- * We deliberately avoid eval() and use a tiny recursive descent parser.
+ * Deliberately avoids eval() — uses a small hand-written recursive descent
+ * parser instead, so formulas typed by players/GMs can never execute
+ * arbitrary JS.
  */
 
 import type { NimbleCharacter, Skills, Stats } from "../types/character";
@@ -30,7 +33,11 @@ type FormulaContext = {
 };
 
 /**
- * Build a flat variable map from a character (or partial context).
+ * Flattens a character into the variable map used by formula substitution.
+ *
+ * @param char - The character to build a formula context from.
+ * @returns A {@link FormulaContext} exposing level, stats, key/flaw stat
+ * values, skills, and current/max HP for variable substitution.
  */
 export function buildContext(char: NimbleCharacter): FormulaContext {
   const keyValue = char.keyStat ? char.stats[char.keyStat] : 0;
@@ -48,8 +55,15 @@ export function buildContext(char: NimbleCharacter): FormulaContext {
 }
 
 /**
- * Replace named variables in a formula string with numeric values.
- * Returns the substituted string ready for arithmetic parsing.
+ * Replaces all known variable tokens (STR, DEX, LEVEL, skill names, HP…)
+ * in a formula string with their numeric values from the given context.
+ * Also normalizes `Math.floor(`/`Math.ceil(`/`Math.min(`/`Math.max(` to the
+ * lowercase tokens the parser understands.
+ *
+ * @param formula - Raw formula string as typed by the user (e.g. "1d8+STR").
+ * @param ctx - Context built by {@link buildContext}.
+ * @returns The formula with variables replaced, lowercased, ready for
+ * dice/arithmetic parsing.
  */
 function substituteVariables(formula: string, ctx: FormulaContext): string {
   let f = formula.trim().toUpperCase();
@@ -88,7 +102,6 @@ function substituteVariables(formula: string, ctx: FormulaContext): string {
   f = f.replace(/MATH\.MAX\(/g, "max(");
   f = f.toLowerCase(); // parser works in lowercase
 
-
   // Custom
   f = f.replace(/\bINCREMENTDICE\(/g, "incrementdice(");
   f = f.replace(/\bSTEPDICE\(/g, "stepdice(");
@@ -115,8 +128,15 @@ export function diceToAverage(formula: string): string {
 }
 
 /**
- * Extract the dice part and modifier separately from a formula like "1d8+STR".
- * Returns { diceNotation, modifier } where modifier is the numeric bonus.
+ * Splits a formula into its leading dice notation and its numeric modifier.
+ *
+ * @example parseDamageFormula("1d8+STR+2", ctx) // → { diceNotation: "1d8", modifier: <STR+2> }
+ *
+ * @param formula - Raw formula (may contain variables and dice).
+ * @param ctx - Context used to resolve variables before splitting.
+ * @returns The dice part (e.g. "1d8") and the resolved numeric modifier.
+ * If there is no leading dice notation, `diceNotation` is empty and the
+ * whole formula is evaluated as the modifier.
  */
 export function parseDamageFormula(
   formula: string,
@@ -141,10 +161,21 @@ export function parseDamageFormula(
   return { diceNotation, modifier: isNaN(modifier) ? 0 : modifier };
 }
 
-// ─────────────────────────────────────────────────────────────────
-// Tiny recursive descent arithmetic parser (no eval, no regex exec)
-// Supports: numbers, +  -  *  /  (  )  floor(  ceil(
-// ─────────────────────────────────────────────────────────────────
+/**
+ * Minimal recursive-descent arithmetic parser (no `eval`).
+ *
+ * Grammar (informal):
+ * ```
+ * expr    := term (('+' | '-') term)*
+ * term    := unary (('*' | '/') unary)*
+ * unary   := '-' primary | primary
+ * primary := number | '(' expr ')' | floor(expr) | ceil(expr)
+ *          | min(expr, expr) | max(expr, expr)
+ *          | incrementdice(base, level) | stepdice(level, d1, d2, d3, d4)
+ * ```
+ *
+ * Used internally by {@link safeEval}; not exported.
+ */
 
 class Parser {
   private readonly input: string;
@@ -258,7 +289,7 @@ class Parser {
       return parseFloat(this.input.slice(start, this.pos)) || 0;
     }
 
-    // Min & Max 
+    // Min & Max
     if (this.input.startsWith("min(", this.pos)) {
       this.pos += 4;
       const a = this.parseExpr();
@@ -317,14 +348,17 @@ class Parser {
       return d1;
     }
 
-
     return 0; // Unknown token — return 0 gracefully
   }
 }
 
 /**
- * Safely evaluate a pure arithmetic string (no dice, no variables).
- * Returns NaN on parse failure.
+ * Safely evaluates a pure arithmetic expression (variables/dice must
+ * already be substituted) using {@link Parser} instead of `eval`.
+ *
+ * @param expr - Arithmetic-only string (digits, `+ - * / ( ) , a-z`).
+ * @returns The computed number, or `NaN` if the expression fails a basic
+ * character whitelist check or otherwise fails to parse.
  */
 export function safeEval(expr: string): number {
   try {
@@ -340,30 +374,38 @@ export function safeEval(expr: string): number {
   }
 }
 
+/**
+ * Resolves the project's two custom dynamic-dice helpers into plain NdX
+ * notation before the rest of the pipeline (averaging / rolling) runs.
+ *
+ * - `1dstepdice(level, d1, d2, d3, d4)` → picks the die size based on level
+ *   breakpoints (5/10/15).
+ * - `incrementdice(base, level)dSIDES` → increases dice count by
+ *   `floor(level / 5)` on top of `base`.
+ *
+ * @param formula - Formula string with variables already substituted.
+ * @returns The formula with custom dice helpers expanded to plain `NdX`.
+ */
 function resolveDynamicDice(formula: string): string {
-  formula = formula.replace(
-    /1dstepdice\(([^)]+)\)/gi,
-    (_match, args) => {
-      const [level, d1, d2, d3, d4] =
-        args.split(",").map((v: string) => Number(v.trim()));
+  formula = formula.replace(/1dstepdice\(([^)]+)\)/gi, (_match, args) => {
+    const [level, d1, d2, d3, d4] = args
+      .split(",")
+      .map((v: string) => Number(v.trim()));
 
-      if (level >= 15) return `1d${d4}`;
-      if (level >= 10) return `1d${d3}`;
-      if (level >= 5) return `1d${d2}`;
+    if (level >= 15) return `1d${d4}`;
+    if (level >= 10) return `1d${d3}`;
+    if (level >= 5) return `1d${d2}`;
 
-      return `1d${d1}`;
-    }
-  );
+    return `1d${d1}`;
+  });
 
   formula = formula.replace(
     /incrementdice\((\d+),(\d+)\)d(\d+)/gi,
     (_match, base, level, sides) => {
-
-      const count =
-        Number(base) + Math.floor(Number(level) / 5);
+      const count = Number(base) + Math.floor(Number(level) / 5);
 
       return `${count}d${sides}`;
-    }
+    },
   );
 
   return formula;
@@ -374,11 +416,14 @@ function resolveDynamicDice(formula: string): string {
 // ─────────────────────────────────────────────────────────────────
 
 /**
- * Evaluate a formula that may contain variables (STR, DEX, LEVEL…)
- * and dice notation (treated as average).
+ * Evaluates a formula to a single number for a given character, treating
+ * any dice notation as its statistical average (not a real roll).
  *
- * @example
- *   evalFormula("1d10 + STR + floor(LEVEL / 2)", char) → 7
+ * @example evalFormula("1d10 + STR + floor(LEVEL / 2)", char) // → 7
+ *
+ * @param formula - Formula string (variables + optional dice notation).
+ * @param char - Character providing stats/skills/level context.
+ * @returns The resolved numeric value, or 0 on any parse error.
  */
 export function evalFormula(formula: string, char: NimbleCharacter): number {
   const ctx = buildContext(char);
@@ -386,7 +431,9 @@ export function evalFormula(formula: string, char: NimbleCharacter): number {
 }
 
 /**
- * Same as evalFormula but accepts a raw context (useful in hooks/tests).
+ * Same as {@link evalFormula} but takes a pre-built {@link FormulaContext}
+ * directly, useful for tests or call sites that don't have a full
+ * `NimbleCharacter` (e.g. free rolls).
  */
 export function evalFormulaWithContext(
   formula: string,
@@ -404,8 +451,14 @@ export function evalFormulaWithContext(
 }
 
 /**
- * Resolve a formula to a display string, e.g. "1d8+3".
- * Variables are substituted but dice are kept for display purposes.
+ * Resolves a formula to a human-readable display string for the UI,
+ * substituting variables but *keeping* dice notation intact (e.g.
+ * "1d8 + STR + 2" → "1d8+5"), so players see what they're about to roll.
+ *
+ * @param formula - Raw formula as stored on the action/spell/item.
+ * @param char - Character providing the variable values.
+ * @returns A simplified display string, or the original formula if nothing
+ * could be resolved.
  */
 export function resolveFormulaDisplay(
   formula: string,
@@ -435,21 +488,36 @@ export function resolveFormulaDisplay(
 // Dice rolling utilities (non-OBR, pure JS — for local instant rolls)
 // ─────────────────────────────────────────────────────────────────
 
-/** Roll a single die with N sides */
+/** Rolls a single die with the given number of sides using `Math.random`. */
 export function rollDie(sides: number): number {
   return Math.floor(Math.random() * sides) + 1;
 }
 
 /**
- * Roll NdX and return individual results.
- * e.g. rollDice(2, 6) → [3, 5]
+ * Rolls `count` independent dice with `sides` faces each.
+ * @returns An array of individual results, e.g. `rollDice(2, 6)` → `[3, 5]`.
  */
 export function rollDice(count: number, sides: number): number[] {
   return Array.from({ length: count }, () => rollDie(sides));
 }
 
 /**
- * Parse and roll a formula like "2d6+STR", returning the full breakdown.
+ * Fully resolves and rolls a formula for a character, including
+ * advantage/disadvantage handling and critical/fumble detection.
+ *
+ * Advantage adds `extraDice` additional dice and keeps the highest
+ * `count` results; disadvantage keeps the lowest. A roll is critical if
+ * the first kept die shows the maximum face value, and a fumble if it
+ * shows 1.
+ *
+ * @param formula - Raw formula, e.g. "2d6+STR".
+ * @param char - Character providing variable values.
+ * @param mode - "standard" | "advantage" | "disadvantage".
+ * @param extraDice - Number of extra dice to roll for advantage/disadvantage
+ * (ignored in standard mode).
+ * @returns Full breakdown: dice notation, all rolls, kept rolls, modifier,
+ * total, and critical/fumble flags. If the formula has no dice (a flat
+ * modifier), `rolls`/`kept` are empty and `total` equals the modifier.
  */
 export function rollFormula(
   formula: string,

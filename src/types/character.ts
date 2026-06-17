@@ -1,6 +1,14 @@
-// ─────────────────────────────────────────────────────────────────
-// Nimble Character Sheet – Core Types
-// ─────────────────────────────────────────────────────────────────
+/**
+ * @file Core domain types for the Nimble character sheet.
+ *
+ * Defines the full shape of a character (`NimbleCharacter`) as stored in
+ * OBR item metadata under {@link METADATA_KEY}, along with supporting
+ * types for dice rolls, actions, and inventory.
+ *
+ * This file has no dependencies on React or the OBR SDK — it is pure
+ * data modeling, shared by the formula parser, the `useOBR` hook, and
+ * every tab component.
+ */
 
 export type DiceType = "d4" | "d6" | "d8" | "d10" | "d12" | "d20" | "d100";
 export type ActionType = "melee" | "ranged" | "spell" | "ability" | "item";
@@ -52,11 +60,15 @@ export interface Skills {
 }
 
 /**
- * Armor is now driven by an inventory item selection.
- * - equippedItemId: id of the InventoryItem (isArmor:true) currently worn
- * - defenseBonus: flat extra bonus from class/race/ability
- * Legacy fields (name, value, proficient, equipped) kept for migration safety but
- * the defense calculation uses equippedItemId + defenseBonus instead.
+ * Defense/armor configuration for a character.
+ *
+ * Defense is no longer a flat manual value: it is derived from whichever
+ * inventory item (with `isArmor: true`) is referenced by `equippedItemId`,
+ * plus a flat `defenseBonus` (class features, racial traits, etc.).
+ *
+ * @remarks Legacy fields `name`, `value`, `proficient`, `equipped` are kept
+ * for backward-compatibility with older saved sheets but are not used by
+ * the current defense calculation (see `computeDefense` in CombatTab).
  */
 export interface Armor {
   name: string;
@@ -102,6 +114,16 @@ export interface InventoryItem {
   actionCost?: number;
 }
 
+/**
+ * Full persisted state of a single Nimble character sheet.
+ *
+ * This entire object is stored as-is in the OBR item metadata under
+ * {@link METADATA_KEY} and is read/written via `OBR.scene.items.updateItems`.
+ * Any player or the GM with edit rights can trigger an update; OBR then
+ * syncs the change to every connected client in real time.
+ *
+ * @see createDefaultCharacter for the initial state given to a fresh token.
+ */
 export interface NimbleCharacter {
   name: string;
   ancestry: string;
@@ -119,7 +141,7 @@ export interface NimbleCharacter {
 
   stats: Stats;
   keyStat: keyof Stats | null;
-  flawStat: keyof Stats | null; 
+  flawStat: keyof Stats | null;
   saveMods: SaveMods;
   skills: Skills;
 
@@ -144,6 +166,11 @@ export interface NimbleCharacter {
   updatedAt: number;
 }
 
+/**
+ * Namespaced metadata key under which the character sheet is stored on
+ * an OBR scene item. Using a reverse-domain-style namespace avoids
+ * collisions with metadata written by other OBR extensions.
+ */
 export const METADATA_KEY = "com.nimble-obr.nimble/character_sheet";
 
 export type RollMode = "standard" | "advantage" | "disadvantage";
@@ -157,6 +184,10 @@ export interface DiceRollRequest {
   hidden?: boolean;
 }
 
+/**
+ * Result of a resolved dice roll, broadcast to the table via scene metadata
+ * (or kept client-side only when `hidden` is true and the roller is the GM).
+ */
 export interface DiceRollResult {
   label: string;
   formula: string;
@@ -185,6 +216,15 @@ export const SKILL_STAT_MAP: Record<keyof Skills, keyof Stats> = {
   stealth: "dex",
 };
 
+/**
+ * Builds a brand-new {@link NimbleCharacter} with sensible defaults,
+ * used when a player or GM attaches a sheet to a token that doesn't have
+ * one yet.
+ *
+ * @param tokenId - ID of the OBR scene item this sheet is attached to.
+ * @param ownerId - OBR player ID who will own (and be able to edit) this sheet.
+ * @returns A fresh character at level 1 with zeroed stats and empty inventory.
+ */
 export function createDefaultCharacter(
   tokenId: string,
   ownerId: string,
@@ -204,7 +244,7 @@ export function createDefaultCharacter(
     hitDice: { current: 1, max: 1, dice: "d8" },
     stats: { str: 0, dex: 0, int: 0, wil: 0 },
     keyStat: null,
-    flawStat: null, 
+    flawStat: null,
     saveMods: { str: "none", dex: "none", int: "none", wil: "none" },
     skills: {
       arcana: 0,

@@ -1,5 +1,10 @@
 /**
- * DicePanel — refactorisé avec NumericStepper.
+ * @file Standalone "Free Roll" dice panel.
+ *
+ * Lets any player or the GM roll arbitrary NdX(+modifier) formulas without
+ * needing a character sheet open — useful for quick checks, loot rolls,
+ * or anything not tied to a specific action/spell/item. Always mounted in
+ * `App.tsx` regardless of selection state.
  */
 
 import { useState } from "react";
@@ -13,6 +18,8 @@ interface DicePanelProps {
   defaultCollapsed?: boolean;
 }
 
+/** Visual + numeric definition of one selectable die face. */
+/** The full set of dice offered by the free-roll grid (d4 through d100). */
 type DieOption = {
   sides: number;
   label: string;
@@ -22,34 +29,93 @@ type DieOption = {
 };
 
 const DICE: DieOption[] = [
-  { sides: 4,   label: "d4",   color: "text-pink-300",    bg: "bg-pink-950/40",    border: "border-pink-800/60" },
-  { sides: 6,   label: "d6",   color: "text-orange-300",  bg: "bg-orange-950/40",  border: "border-orange-800/60" },
-  { sides: 8,   label: "d8",   color: "text-amber-300",   bg: "bg-amber-950/40",   border: "border-amber-800/60" },
-  { sides: 10,  label: "d10",  color: "text-yellow-300",  bg: "bg-yellow-950/40",  border: "border-yellow-800/60" },
-  { sides: 12,  label: "d12",  color: "text-lime-300",    bg: "bg-lime-950/40",    border: "border-lime-800/60" },
-  { sides: 20,  label: "d20",  color: "text-emerald-300", bg: "bg-emerald-950/40", border: "border-emerald-800/60" },
-  { sides: 100, label: "d100", color: "text-sky-300",     bg: "bg-sky-950/40",     border: "border-sky-800/60" },
+  {
+    sides: 4,
+    label: "d4",
+    color: "text-pink-300",
+    bg: "bg-pink-950/40",
+    border: "border-pink-800/60",
+  },
+  {
+    sides: 6,
+    label: "d6",
+    color: "text-orange-300",
+    bg: "bg-orange-950/40",
+    border: "border-orange-800/60",
+  },
+  {
+    sides: 8,
+    label: "d8",
+    color: "text-amber-300",
+    bg: "bg-amber-950/40",
+    border: "border-amber-800/60",
+  },
+  {
+    sides: 10,
+    label: "d10",
+    color: "text-yellow-300",
+    bg: "bg-yellow-950/40",
+    border: "border-yellow-800/60",
+  },
+  {
+    sides: 12,
+    label: "d12",
+    color: "text-lime-300",
+    bg: "bg-lime-950/40",
+    border: "border-lime-800/60",
+  },
+  {
+    sides: 20,
+    label: "d20",
+    color: "text-emerald-300",
+    bg: "bg-emerald-950/40",
+    border: "border-emerald-800/60",
+  },
+  {
+    sides: 100,
+    label: "d100",
+    color: "text-sky-300",
+    bg: "bg-sky-950/40",
+    border: "border-sky-800/60",
+  },
 ];
 
 const MODE_STYLES: Record<RollMode, string> = {
-  standard:    "border-amber-500 bg-amber-900/50 text-amber-300",
-  advantage:   "border-emerald-500 bg-emerald-900/50 text-emerald-300",
-  disadvantage:"border-rose-500 bg-rose-900/50 text-rose-300",
+  standard: "border-amber-500 bg-amber-900/50 text-amber-300",
+  advantage: "border-emerald-500 bg-emerald-900/50 text-emerald-300",
+  disadvantage: "border-rose-500 bg-rose-900/50 text-rose-300",
 };
 
 const MODE_LABELS: Record<RollMode, string> = {
-  standard:    "⬡ Std",
-  advantage:   "▲ Adv.",
-  disadvantage:"▼ Dis.",
+  standard: "⬡ Std",
+  advantage: "▲ Adv.",
+  disadvantage: "▼ Dis.",
 };
 
+/** Returns a small unicode/symbol glyph used to represent a given die's shape in the UI. */
 function dieFace(sides: number): string {
   const faces: Record<number, string> = {
-    4: "△", 6: "⬡", 8: "◇", 10: "⬟", 12: "⬠", 20: "⬣", 100: "%",
+    4: "△",
+    6: "⬡",
+    8: "◇",
+    10: "⬟",
+    12: "⬠",
+    20: "⬣",
+    100: "%",
   };
   return faces[sides] ?? "◻";
 }
 
+/**
+ * Collapsible panel offering a quick-roll grid (d4–d100), dice count,
+ * flat modifier, advantage/disadvantage mode, and a GM-only hidden-roll
+ * toggle.
+ *
+ * @param isGM - Enables the hidden-roll checkbox when true.
+ * @param playerName - Currently unused directly here but kept for future label use.
+ * @param onRoll - Callback invoked with a constructed {@link DiceRollRequest} on each die click.
+ * @param defaultCollapsed - Whether the panel starts collapsed.
+ */
 export function DicePanel({
   isGM = false,
   onRoll,
@@ -63,10 +129,12 @@ export function DicePanel({
   const [hidden, setHidden] = useState(false);
 
   const handleRoll = (die: DieOption) => {
-    const modStr = modifier !== 0 ? (modifier > 0 ? `+${modifier}` : `${modifier}`) : "";
+    const modStr =
+      modifier !== 0 ? (modifier > 0 ? `+${modifier}` : `${modifier}`) : "";
     const formula = `${count}d${die.sides}${modStr}`;
     const countPrefix = count > 1 ? `${count}` : "";
-    const modLabel = modifier !== 0 ? (modifier > 0 ? `+${modifier}` : `${modifier}`) : "";
+    const modLabel =
+      modifier !== 0 ? (modifier > 0 ? `+${modifier}` : `${modifier}`) : "";
 
     onRoll({
       label: `Free Roll - ${countPrefix}${die.label}${modLabel}`,
@@ -107,7 +175,9 @@ export function DicePanel({
                   ${die.color} ${die.bg} ${die.border}
                 `}
               >
-                <span className="text-base leading-none">{dieFace(die.sides)}</span>
+                <span className="text-base leading-none">
+                  {dieFace(die.sides)}
+                </span>
                 <span className="mt-1 text-[10px]">{die.label}</span>
               </button>
             ))}
@@ -133,28 +203,32 @@ export function DicePanel({
                 modifier > 0
                   ? "text-emerald-300"
                   : modifier < 0
-                  ? "text-rose-300"
-                  : "text-stone-400"
+                    ? "text-rose-300"
+                    : "text-stone-400"
               }
             />
           </div>
 
           {/* Mode selector */}
           <div className="flex gap-1.5">
-            {(["standard", "advantage", "disadvantage"] as RollMode[]).map((m) => (
-              <button
-                key={m}
-                onClick={() => setMode(m)}
-                className={`
+            {(["standard", "advantage", "disadvantage"] as RollMode[]).map(
+              (m) => (
+                <button
+                  key={m}
+                  onClick={() => setMode(m)}
+                  className={`
                   flex-1 py-1.5 px-1 rounded-lg text-[10px] font-semibold border transition-all
-                  ${mode === m
-                    ? MODE_STYLES[m]
-                    : "border-stone-700 bg-stone-800/50 text-stone-400 hover:border-stone-500"}
+                  ${
+                    mode === m
+                      ? MODE_STYLES[m]
+                      : "border-stone-700 bg-stone-800/50 text-stone-400 hover:border-stone-500"
+                  }
                 `}
-              >
-                {MODE_LABELS[m]}
-              </button>
-            ))}
+                >
+                  {MODE_LABELS[m]}
+                </button>
+              ),
+            )}
           </div>
 
           {/* Extra dice — NumericStepper pour le 3e bloc −/+/value */}
@@ -183,7 +257,9 @@ export function DicePanel({
                 onChange={(e) => setHidden(e.target.checked)}
                 className="accent-amber-500"
               />
-              <span className="text-[10px] text-stone-300">Hidden roll (GM only)</span>
+              <span className="text-[10px] text-stone-300">
+                Hidden roll (GM only)
+              </span>
             </label>
           )}
         </div>

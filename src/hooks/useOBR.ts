@@ -1,3 +1,17 @@
+/**
+ * @file Central OBR integration hook for the Nimble character sheet extension.
+ *
+ * Wraps the entire `@owlbear-rodeo/sdk` surface used by this extension:
+ * reading the current player/role, tracking scene selection, loading and
+ * persisting character data from/to item metadata, broadcasting dice rolls
+ * to the shared roll log, and exposing permission state (`canEdit`, `isGM`)
+ * to every tab component.
+ *
+ * This is the single source of truth for "what can the current player do
+ * right now" — all UI components receive `canEdit` from here rather than
+ * computing permissions themselves.
+ */
+
 import { useCallback, useEffect, useRef, useState } from "react";
 import OBR, { type Item, type Player } from "@owlbear-rodeo/sdk";
 
@@ -11,9 +25,20 @@ import {
 } from "../types/character";
 import { rollFormula } from "../utils/formulaParser";
 
+/** OBR player role as reported by the SDK. */
+
+/**
+ * Derived state of the current scene selection, used to decide what the
+ * extension panel should render:
+ * - "none": no character token selected.
+ * - "multiple": more than one token selected (sheet not shown).
+ * - "no-sheet": a single character token is selected but has no sheet yet.
+ * - "ready": a single character token with a valid sheet is selected.
+ */
 export type OBRRole = "GM" | "PLAYER";
 export type SelectionState = "none" | "multiple" | "no-sheet" | "ready";
 
+/** Public API returned by {@link useOBR}, consumed by `App.tsx` and passed down to tab components. */
 export interface UseOBRReturn {
   isReady: boolean;
   selectionState: SelectionState;
@@ -33,9 +58,26 @@ export interface UseOBRReturn {
   claimToken: () => Promise<void>;
 }
 
+/** Scene metadata key under which the shared, table-wide roll log is stored. */
+/** Maximum number of roll entries kept in the shared log (older entries are trimmed). */
 const ROLL_LOG_KEY = `${METADATA_KEY}/roll_log`;
 const MAX_ROLL_HISTORY = 20;
 
+/**
+ * Connects this extension instance to the active OBR scene and player,
+ * and exposes everything needed to render and edit a Nimble character sheet.
+ *
+ * Responsibilities:
+ * - Resolves the current player's ID, name, and role (GM/PLAYER) on ready.
+ * - Tracks scene selection changes and loads the corresponding character
+ *   from item metadata (see {@link SelectionState}).
+ * - Computes `canEdit` (GM, or the sheet's owner) for permission gating.
+ * - Persists character updates via `OBR.scene.items.updateItems`.
+ * - Pushes dice roll results to shared scene metadata so all clients see
+ *   them, except hidden rolls (GM-only, kept in local state only).
+ *
+ * @returns See {@link UseOBRReturn} for the full shape.
+ */
 export function useOBR(): UseOBRReturn {
   const [isReady, setIsReady] = useState(false);
   const [selectionState, setSelectionState] = useState<SelectionState>("none");
@@ -68,6 +110,7 @@ export function useOBR(): UseOBRReturn {
       !!character.ownerId &&
       character.ownerId === playerId);
 
+  /** Reads a {@link NimbleCharacter} out of an OBR item's metadata, or `null` if the item has no sheet attached. */
   const loadCharacterFromItem = useCallback(
     (item: Item): NimbleCharacter | null => {
       return (item.metadata?.[METADATA_KEY] as NimbleCharacter) ?? null;
@@ -75,6 +118,11 @@ export function useOBR(): UseOBRReturn {
     [],
   );
 
+  /**
+   * Recomputes `selectionState`, `selectedItems`, and `character` whenever
+   * the player's scene selection changes. Filters to CHARACTER-layer items
+   * only, since the sheet only applies to character tokens.
+   */
   const handleSelectionChange = useCallback(
     async (selectedIds: string[]) => {
       if (!selectedIds || selectedIds.length === 0) {
@@ -124,7 +172,7 @@ export function useOBR(): UseOBRReturn {
       await handleSelectionChange(initialSelection || []);
       await OBR.action.setWidth(400);
       await OBR.action.setHeight(800);
-await OBR.action.setTitle("Nimble Sheet");
+      await OBR.action.setTitle("Nimble Sheet");
       OBR.player.onChange(async (player: Player) => {
         await handleSelectionChange(player.selection || []);
       });
@@ -148,6 +196,13 @@ await OBR.action.setTitle("Nimble Sheet");
     });
   }, [handleSelectionChange, loadCharacterFromItem]);
 
+  /**
+   * Applies a partial update to the currently loaded character and persists
+   * it to the owning item's metadata via `OBR.scene.items.updateItems`,
+   * which propagates the change to every connected client.
+   *
+   * @param updates - Partial character fields to merge into the current state.
+   */
   const updateCharacter = async (updates: Partial<NimbleCharacter>) => {
     const current = characterRef.current;
     if (!current) return;
@@ -161,13 +216,16 @@ await OBR.action.setTitle("Nimble Sheet");
   };
 
   /**
-   * Push result to shared scene metadata.
-   * The onMetadataChange listener will pick it up and call setRecentRolls —
-   * so we must NOT call setRecentRolls here to avoid a double state update
-   * that causes App to re-mount its conditional branches and destroy DicePanel state.
+   * Appends a roll result to the shared roll log.
    *
-   * EXCEPTION: hidden rolls are never written to metadata, so for those we
-   * update local state directly (only the GM sees them).
+   * Hidden rolls (GM-only) are *not* written to scene metadata — they are
+   * appended directly to local state instead, so only the roller (the GM)
+   * sees them. Visible rolls are written to `OBR.scene.setMetadata`; the
+   * `onMetadataChange` listener registered in the main effect is the only
+   * place that calls `setRecentRolls` for visible rolls, to avoid a double
+   * state update that would otherwise remount conditional branches in `App`.
+   *
+   * @param result - The roll result to log.
    */
   const pushRollToLog = async (result: DiceRollResult) => {
     if (result.hidden) {
@@ -182,7 +240,13 @@ await OBR.action.setTitle("Nimble Sheet");
     await OBR.scene.setMetadata({ [ROLL_LOG_KEY]: newLog });
   };
 
-  /** Roll tied to a character sheet */
+  /**
+   * Rolls a formula tied to the currently loaded character (uses its stats/
+   * skills/level as context) and logs the result.
+   *
+   * @param req - Label, formula, roll mode, and optional hidden flag.
+   * @returns The resolved {@link DiceRollResult}, or `null` if no character is loaded.
+   */
   const handleRoll = async (
     req: DiceRollRequest,
   ): Promise<DiceRollResult | null> => {
@@ -208,8 +272,12 @@ await OBR.action.setTitle("Nimble Sheet");
   };
 
   /**
-   * Free roll — no character required.
-   * Uses a minimal stub so rollFormula works with plain NdX+modifier formulas.
+   * Rolls a formula with no character context (used by the standalone
+   * {@link DicePanel} free-roll widget). Builds a zeroed-out stub character
+   * so plain `NdX+modifier` formulas still resolve correctly.
+   *
+   * @param req - Label, formula, roll mode, and optional hidden flag.
+   * @returns The resolved {@link DiceRollResult}.
    */
   const handleFreeRoll = async (
     req: DiceRollRequest,
@@ -251,6 +319,12 @@ await OBR.action.setTitle("Nimble Sheet");
     return result;
   };
 
+  /**
+   * Rolls initiative for the current character: `1d20 + DEX + initiativeBonus`.
+   *
+   * @param mode - Roll mode, defaults to "standard".
+   * @returns The resolved {@link DiceRollResult}, or `null` if no character is loaded.
+   */
   const rollInitiative = async (mode: RollMode = "standard") => {
     const current = characterRef.current;
     if (!current) return null;
@@ -261,6 +335,12 @@ await OBR.action.setTitle("Nimble Sheet");
     });
   };
 
+  /**
+   * Attaches a brand-new default character sheet to the given token and
+   * makes the calling player its owner.
+   *
+   * @param item - The OBR scene item (token) to attach a sheet to.
+   */
   const createSheetForToken = async (item: Item) => {
     const newChar = createDefaultCharacter(item.id, playerIdRef.current);
     await OBR.scene.items.updateItems([item.id], (items) => {
@@ -272,6 +352,10 @@ await OBR.action.setTitle("Nimble Sheet");
     setSelectionState("ready");
   };
 
+  /**
+   * Sets the current player as the owner of the currently loaded character,
+   * used by the "Claim" / "Take over" button for unclaimed or GM-managed tokens.
+   */
   const claimToken = async () => {
     const current = characterRef.current;
     if (!current) return;
