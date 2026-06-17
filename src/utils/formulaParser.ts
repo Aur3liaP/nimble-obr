@@ -19,6 +19,46 @@
 import type { NimbleCharacter, Skills, Stats } from "../types/character";
 
 // ─────────────────────────────────────────────────────────────────
+// Safety limits — prevent pathological input from a player/GM-typed
+// formula from freezing or crashing a client (theirs or anyone else's
+// who later views the same character/spell/item).
+// ─────────────────────────────────────────────────────────────────
+
+/** Maximum accepted length for any raw formula string before parsing. */
+const MAX_FORMULA_LENGTH = 200;
+
+/** Maximum recursion depth allowed in the parser (guards against deeply nested parentheses/functions). */
+const MAX_PARSE_DEPTH = 30;
+
+/** Maximum number of dice allowed in a single NdX roll. */
+const MAX_DICE_COUNT = 100;
+
+/** Maximum number of sides allowed on a single die. */
+const MAX_DICE_SIDES = 1000;
+
+/**
+ * Thrown internally when a formula violates a safety limit (too long,
+ * too deeply nested, dice count/sides out of range). Callers that want
+ * to surface this to the user should catch it explicitly; the public
+ * `evalFormula`/`rollFormula` functions catch it themselves and fall
+ * back to a safe default, but also expose `lastFormulaError` so the UI
+ * can show a warning instead of silently displaying 0.
+ */
+export class FormulaError extends Error {}
+
+/**
+ * Set by `evalFormulaWithContext` and `rollFormula` whenever they fall
+ * back to a default value due to a parse failure or a safety-limit
+ * violation. Read this right after calling either function if you want
+ * to show a "this formula is invalid" hint in the UI rather than letting
+ * a silent 0 look like a real result.
+ *
+ * @remarks Not thread-safe / not safe for concurrent formulas — this is
+ * fine here since the UI evaluates one formula at a time per render.
+ */
+export let lastFormulaError: string | null = null;
+
+// ─────────────────────────────────────────────────────────────────
 // Variable substitution
 // ─────────────────────────────────────────────────────────────────
 
@@ -66,6 +106,12 @@ export function buildContext(char: NimbleCharacter): FormulaContext {
  * dice/arithmetic parsing.
  */
 function substituteVariables(formula: string, ctx: FormulaContext): string {
+  if (formula.length > MAX_FORMULA_LENGTH) {
+    throw new FormulaError(
+      `Formula too long (${formula.length} chars, max ${MAX_FORMULA_LENGTH}).`,
+    );
+  }
+
   let f = formula.trim().toUpperCase();
 
   // Stats
@@ -122,6 +168,11 @@ export function diceToAverage(formula: string): string {
   return formula.replace(/(\d+)d(\d+)/gi, (_match, count, sides) => {
     const n = parseInt(count, 10);
     const s = parseInt(sides, 10);
+    if (n > MAX_DICE_COUNT || s > MAX_DICE_SIDES) {
+      throw new FormulaError(
+        `Dice count/sides out of range (${n}d${s}, max ${MAX_DICE_COUNT}d${MAX_DICE_SIDES}).`,
+      );
+    }
     const avg = Math.round(n * ((1 + s) / 2));
     return String(avg);
   });
@@ -180,8 +231,22 @@ export function parseDamageFormula(
 class Parser {
   private readonly input: string;
   private pos = 0;
+  private depth = 0;
+
   constructor(input: string) {
     this.input = input;
+  }
+
+  private enterDepth() {
+    this.depth++;
+    if (this.depth > MAX_PARSE_DEPTH) {
+      throw new FormulaError(
+        `Formula nested too deeply (max depth ${MAX_PARSE_DEPTH}).`,
+      );
+    }
+  }
+  private exitDepth() {
+    this.depth--;
   }
 
   private peek(): string {
@@ -208,147 +273,166 @@ class Parser {
 
   /** expr = term (('+' | '-') term)* */
   private parseExpr(): number {
-    let left = this.parseTerm();
-    while (true) {
-      const ch = this.peek();
-      if (ch === "+") {
-        this.consume();
-        left += this.parseTerm();
-      } else if (ch === "-") {
-        this.consume();
-        left -= this.parseTerm();
-      } else break;
+    this.enterDepth();
+    try {
+      let left = this.parseTerm();
+      while (true) {
+        const ch = this.peek();
+        if (ch === "+") {
+          this.consume();
+          left += this.parseTerm();
+        } else if (ch === "-") {
+          this.consume();
+          left -= this.parseTerm();
+        } else break;
+      }
+      return left;
+    } finally {
+      this.exitDepth();
     }
-    return left;
   }
 
   /** term = unary (('*' | '/') unary)* */
   private parseTerm(): number {
-    let left = this.parseUnary();
-    while (true) {
-      const ch = this.peek();
-      if (ch === "*") {
-        this.consume();
-        left *= this.parseUnary();
-      } else if (ch === "/") {
-        this.consume();
-        const right = this.parseUnary();
-        left = right !== 0 ? left / right : 0;
-      } else break;
+    this.enterDepth();
+    try {
+      let left = this.parseUnary();
+      while (true) {
+        const ch = this.peek();
+        if (ch === "*") {
+          this.consume();
+          left *= this.parseUnary();
+        } else if (ch === "/") {
+          this.consume();
+          const right = this.parseUnary();
+          left = right !== 0 ? left / right : 0;
+        } else break;
+      }
+      return left;
+    } finally {
+      this.exitDepth();
     }
-    return left;
   }
 
   /** unary = '-' primary | primary */
   private parseUnary(): number {
-    if (this.peek() === "-") {
-      this.consume();
-      return -this.parsePrimary();
+    this.enterDepth();
+    try {
+      if (this.peek() === "-") {
+        this.consume();
+        return -this.parsePrimary();
+      }
+      return this.parsePrimary();
+    } finally {
+      this.exitDepth();
     }
-    return this.parsePrimary();
   }
 
   /** primary = number | '(' expr ')' | 'floor' '(' expr ')' | 'ceil' '(' expr ')' */
   private parsePrimary(): number {
     this.skipWhitespace();
-
-    // floor(
-    if (this.input.startsWith("floor(", this.pos)) {
-      this.pos += 6; // skip "floor("
-      const val = this.parseExpr();
-      if (this.peek() === ")") this.consume();
-      return Math.floor(val);
-    }
-
-    // ceil(
-    if (this.input.startsWith("ceil(", this.pos)) {
-      this.pos += 5;
-      const val = this.parseExpr();
-      if (this.peek() === ")") this.consume();
-      return Math.ceil(val);
-    }
-
-    // Parenthesised expression
-    if (this.peek() === "(") {
-      this.consume();
-      const val = this.parseExpr();
-      if (this.peek() === ")") this.consume();
-      return val;
-    }
-
-    // Number (integer or float, possibly negative sign was already handled)
-    const start = this.pos;
-    this.skipWhitespace();
-    if (/[\d.]/.test(this.input[this.pos] ?? "")) {
-      while (
-        this.pos < this.input.length &&
-        /[\d.]/.test(this.input[this.pos])
-      ) {
-        this.pos++;
+    this.enterDepth();
+    try {
+      // floor(
+      if (this.input.startsWith("floor(", this.pos)) {
+        this.pos += 6; // skip "floor("
+        const val = this.parseExpr();
+        if (this.peek() === ")") this.consume();
+        return Math.floor(val);
       }
-      return parseFloat(this.input.slice(start, this.pos)) || 0;
+
+      // ceil(
+      if (this.input.startsWith("ceil(", this.pos)) {
+        this.pos += 5;
+        const val = this.parseExpr();
+        if (this.peek() === ")") this.consume();
+        return Math.ceil(val);
+      }
+
+      // Parenthesised expression
+      if (this.peek() === "(") {
+        this.consume();
+        const val = this.parseExpr();
+        if (this.peek() === ")") this.consume();
+        return val;
+      }
+
+      // Number (integer or float, possibly negative sign was already handled)
+      const start = this.pos;
+      this.skipWhitespace();
+      if (/[\d.]/.test(this.input[this.pos] ?? "")) {
+        while (
+          this.pos < this.input.length &&
+          /[\d.]/.test(this.input[this.pos])
+        ) {
+          this.pos++;
+        }
+        return parseFloat(this.input.slice(start, this.pos)) || 0;
+      }
+
+      // Min & Max
+      if (this.input.startsWith("min(", this.pos)) {
+        this.pos += 4;
+        const a = this.parseExpr();
+        if (this.peek() === ",") this.consume();
+        const b = this.parseExpr();
+        if (this.peek() === ")") this.consume();
+        return Math.min(a, b);
+      }
+
+      if (this.input.startsWith("max(", this.pos)) {
+        this.pos += 4;
+        const a = this.parseExpr();
+        if (this.peek() === ",") this.consume();
+        const b = this.parseExpr();
+        if (this.peek() === ")") this.consume();
+        return Math.max(a, b);
+      }
+
+      // Custom
+      // incrementdice(baseSides, level)
+      if (this.input.startsWith("incrementdice(", this.pos)) {
+        this.pos += "incrementdice(".length;
+        const baseSides = this.parseExpr();
+
+        if (this.peek() === ",") this.consume();
+        const level = this.parseExpr();
+
+        if (this.peek() === ")") this.consume();
+        const increments = Math.floor(level / 5);
+
+        return baseSides + increments * 2;
+      }
+
+      // stepdice(level, d1, d2, d3, d4)
+      if (this.input.startsWith("stepdice(", this.pos)) {
+        this.pos += "stepdice(".length;
+        const level = this.parseExpr();
+
+        if (this.peek() === ",") this.consume();
+        const d1 = this.parseExpr();
+
+        if (this.peek() === ",") this.consume();
+        const d2 = this.parseExpr();
+
+        if (this.peek() === ",") this.consume();
+        const d3 = this.parseExpr();
+
+        if (this.peek() === ",") this.consume();
+        const d4 = this.parseExpr();
+
+        if (this.peek() === ")") this.consume();
+
+        if (level >= 15) return d4;
+        if (level >= 10) return d3;
+        if (level >= 5) return d2;
+        return d1;
+      }
+
+      return 0; // Unknown token — return 0 gracefully
+    } finally {
+      this.exitDepth();
     }
-
-    // Min & Max
-    if (this.input.startsWith("min(", this.pos)) {
-      this.pos += 4;
-      const a = this.parseExpr();
-      if (this.peek() === ",") this.consume();
-      const b = this.parseExpr();
-      if (this.peek() === ")") this.consume();
-      return Math.min(a, b);
-    }
-
-    if (this.input.startsWith("max(", this.pos)) {
-      this.pos += 4;
-      const a = this.parseExpr();
-      if (this.peek() === ",") this.consume();
-      const b = this.parseExpr();
-      if (this.peek() === ")") this.consume();
-      return Math.max(a, b);
-    }
-
-    // Custom
-    // incrementdice(baseSides, level)
-    if (this.input.startsWith("incrementdice(", this.pos)) {
-      this.pos += "incrementdice(".length;
-      const baseSides = this.parseExpr();
-
-      if (this.peek() === ",") this.consume();
-      const level = this.parseExpr();
-
-      if (this.peek() === ")") this.consume();
-      const increments = Math.floor(level / 5);
-
-      return baseSides + increments * 2;
-    }
-
-    // stepdice(level, d1, d2, d3, d4)
-    if (this.input.startsWith("stepdice(", this.pos)) {
-      this.pos += "stepdice(".length;
-      const level = this.parseExpr();
-
-      if (this.peek() === ",") this.consume();
-      const d1 = this.parseExpr();
-
-      if (this.peek() === ",") this.consume();
-      const d2 = this.parseExpr();
-
-      if (this.peek() === ",") this.consume();
-      const d3 = this.parseExpr();
-
-      if (this.peek() === ",") this.consume();
-      const d4 = this.parseExpr();
-
-      if (this.peek() === ")") this.consume();
-
-      if (level >= 15) return d4;
-      if (level >= 10) return d3;
-      if (level >= 5) return d2;
-      return d1;
-    }
-
-    return 0; // Unknown token — return 0 gracefully
   }
 }
 
@@ -361,15 +445,18 @@ class Parser {
  * character whitelist check or otherwise fails to parse.
  */
 export function safeEval(expr: string): number {
+  const sanitised = expr.replace(/\s+/g, " ").trim();
+
+  if (!/^[\d\s+\-*/().,a-z]+$/i.test(sanitised)) {
+    return NaN;
+  }
+
+  // Let FormulaError propagate — callers decide how to handle it.
+  // Only genuinely unexpected parse failures are swallowed here.
   try {
-    const sanitised = expr.replace(/\s+/g, " ").trim();
-
-    if (!/^[\d\s+\-*/().,a-z]+$/i.test(sanitised)) {
-      return NaN;
-    }
-
     return new Parser(sanitised).parse();
-  } catch {
+  } catch (err) {
+    if (err instanceof FormulaError) throw err;
     return NaN;
   }
 }
@@ -445,7 +532,11 @@ export function evalFormulaWithContext(
     f = diceToAverage(f); // Replace NdX with average before arithmetic
     const result = safeEval(f);
     return isNaN(result) ? 0 : result;
-  } catch {
+  } catch (err) {
+    lastFormulaError =
+      err instanceof FormulaError
+        ? err.message
+        : `Could not evaluate formula: "${formula}"`;
     return 0;
   }
 }
@@ -533,25 +624,48 @@ export function rollFormula(
   isCritical: boolean;
   isFumble: boolean;
 } {
+  lastFormulaError = null;
   const ctx = buildContext(char);
-  const { diceNotation, modifier } = parseDamageFormula(formula, ctx);
   let sides = 20;
   let count = 1;
+  let diceNotation: string;
+  let modifier: number;
 
-  if (diceNotation) {
+  try {
+    const parsed = parseDamageFormula(formula, ctx);
+    diceNotation = parsed.diceNotation;
+    modifier = parsed.modifier;
+
+    if (!diceNotation) {
+      // No dice in formula, e.g. flat "+3" — return immediately,
+      // there's nothing to roll.
+      return {
+        diceNotation: "",
+        rolls: [],
+        kept: [],
+        modifier,
+        total: modifier,
+        isCritical: false,
+        isFumble: false,
+      };
+    }
+
     const m = diceNotation.match(/^(\d+)d(\d+)$/i);
     if (m) {
       count = parseInt(m[1], 10);
       sides = parseInt(m[2], 10);
     }
-  } else {
-    // No dice in formula, e.g. flat "+3"
+  } catch (err) {
+    lastFormulaError =
+      err instanceof FormulaError
+        ? err.message
+        : `Could not evaluate formula: "${formula}"`;
     return {
       diceNotation: "",
       rolls: [],
       kept: [],
-      modifier,
-      total: modifier,
+      modifier: 0,
+      total: 0,
       isCritical: false,
       isFumble: false,
     };
@@ -566,11 +680,9 @@ export function rollFormula(
   if (mode === "standard" && extraDice === 0) {
     kept = rolls;
   } else if (mode === "advantage" || extraDice > 0) {
-    // Keep highest `count` dice
     const sorted = [...rolls].sort((a, b) => b - a);
     kept = sorted.slice(0, count);
   } else {
-    // Disadvantage — keep lowest `count` dice
     const sorted = [...rolls].sort((a, b) => a - b);
     kept = sorted.slice(0, count);
   }
@@ -578,9 +690,7 @@ export function rollFormula(
   const diceSum = kept.reduce((a, b) => a + b, 0);
   const total = diceSum + modifier;
 
-  // Critical: primary die shows max value
   const isCritical = kept[0] === sides;
-  // Fumble: primary die shows 1
   const isFumble = kept[0] === 1;
 
   return { diceNotation, rolls, kept, modifier, total, isCritical, isFumble };
