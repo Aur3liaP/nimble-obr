@@ -8,7 +8,7 @@
  * so changing armor in the Inventory tab is immediately reflected here.
  */
 
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import type {
   NimbleCharacter,
   CharacterAction,
@@ -23,6 +23,8 @@ import { InlineNumberField } from "../ui/common/InlineEditField";
 import { FavoriteButton } from "../ui/common/FavoriteButton";
 import { RollButton } from "../ui/common/RollButton";
 import { TextAction } from "../ui/common/RowActions";
+import { RowMeta } from "../ui/common/RowMeta";
+import { RowDescriptionPanel } from "../ui/common/RowDescriptionPanel";
 import { FormField, GridFields } from "../ui/common/FormField";
 
 // ── Types ─────────────────────────────────────────────────────────
@@ -125,9 +127,20 @@ export function CombatTab({
 }: Props) {
   const [rollPending, setRollPending] = useState<RollPending | null>(null);
   const [addingAction, setAddingAction] = useState(false);
+  const [editingActionId, setEditingActionId] = useState<string | null>(null);
   const [actionsUsed, setActionsUsed] = useState([false, false, false]);
   const [initiativeResult, setInitiativeResult] = useState<number | null>(null);
 
+  useEffect(() => {
+    if (initiativeResult === null) return;
+
+    const timer = setTimeout(() => {
+      setInitiativeResult(null);
+    }, 5000);
+
+    return () => clearTimeout(timer);
+  }, [initiativeResult]);
+  
   const defenseValue = computeDefense(character);
   const armorItems = character.inventory.filter((i) => i.isArmor);
   const equippedArmorItem = armorItems.find(
@@ -263,6 +276,47 @@ export function CombatTab({
       {/* ── Actions + Initiative ──────────────────────────────────── */}
       <BentoSection>
         <div className="flex justify-between items-start gap-1.5">
+          {/* Initiative */}
+          {canEdit && (
+            <div className="w-4/11 border-r border-stone-700 pr-2">
+              <p className="bento-label mb-2">Initiative</p>
+              <div className="flex items-center gap-2">
+                <div className="flex flex-col items-center px-2 py-1 rounded-lg bg-stone-800/60 border border-stone-700/40">
+                  <span className="text-[10px] text-stone-500 uppercase tracking-wider">
+                    Base
+                  </span>
+                  <span className="text-xl font-black text-amber-300">
+                    {character.stats.dex >= 0 ? "+" : ""}
+                    {character.stats.dex + character.initiativeBonus}
+                  </span>
+                  <span className="text-[10px] text-stone-500">DEX</span>
+                </div>
+                <div className="flex flex-col gap-1.5 flex-1">
+                  <button
+                    onClick={() => handleInitiativeRoll("standard")}
+                    className="w-full py-2 rounded-lg border border-amber-700/60 bg-amber-950/40 text-amber-300 text-sm font-bold hover:bg-amber-900/50 transition-all active:scale-95"
+                  >
+                    🎲
+                  </button>
+
+                  <div className="flex items-center gap-2">
+                    <span className="text-[10px] text-stone-500">Bonus:</span>
+                    <input
+                      type="number"
+                      value={character.initiativeBonus}
+                      onChange={(e) =>
+                        onUpdate({
+                          initiativeBonus: parseInt(e.target.value) || 0,
+                        })
+                      }
+                      className="w-7 text-center text-xs bg-stone-900 border border-stone-700 rounded py-0.5 text-stone-200 outline-none focus:border-amber-600"
+                    />
+                  </div>
+                </div>
+              </div>
+            </div>
+          )}
+
           {/* Action tokens */}
           <div className="flex-1">
             <div className="flex items-center justify-between mb-2">
@@ -298,59 +352,19 @@ export function CombatTab({
               Initiative: &lt;10 = 1 action · 10–19 = 2 · 20+ = 3
             </p>
           </div>
-
-          {/* Initiative */}
-          {canEdit && (
-            <div className="flex-1 border-l border-stone-700 pl-1.5">
-              <p className="bento-label mb-2">Initiative</p>
-              <div className="flex items-center gap-2">
-                <div className="flex flex-col items-center px-2 py-1 rounded-lg bg-stone-800/60 border border-stone-700/40">
-                  <span className="text-[10px] text-stone-500 uppercase tracking-wider">
-                    Base
-                  </span>
-                  <span className="text-2xl font-black text-amber-300">
-                    {character.stats.dex >= 0 ? "+" : ""}
-                    {character.stats.dex + character.initiativeBonus}
-                  </span>
-                  <span className="text-[10px] text-stone-500">DEX</span>
-                </div>
-                <div className="flex flex-col gap-1.5 flex-1">
-                  <button
-                    onClick={() => handleInitiativeRoll("standard")}
-                    className="w-full py-2 rounded-lg border border-amber-700/60 bg-amber-950/40 text-amber-300 text-sm font-bold hover:bg-amber-900/50 transition-all active:scale-95"
-                  >
-                    🎲
-                  </button>
-                  {initiativeResult !== null && (
-                    <p className="text-[10px] text-amber-400 text-center">
-                      Result: {initiativeResult} →{" "}
-                      {initiativeToActions(initiativeResult)} action
-                      {initiativeToActions(initiativeResult) > 1 ? "s" : ""}
-                    </p>
-                  )}
-                  <div className="flex items-center gap-2">
-                    <span className="text-[10px] text-stone-500">Bonus:</span>
-                    <input
-                      type="number"
-                      value={character.initiativeBonus}
-                      onChange={(e) =>
-                        onUpdate({
-                          initiativeBonus: parseInt(e.target.value) || 0,
-                        })
-                      }
-                      className="w-8 text-center text-xs bg-stone-900 border border-stone-700 rounded py-0.5 text-stone-200 outline-none focus:border-amber-600"
-                    />
-                  </div>
-                </div>
-              </div>
-            </div>
-          )}
         </div>
+        {initiativeResult !== null && (
+          <p className="text-[10px] font-medium text-amber-400 text-center mt-1.5 -mb-1 ">
+            Result: {initiativeResult} → {initiativeToActions(initiativeResult)}{" "}
+            action
+            {initiativeToActions(initiativeResult) > 1 ? "s" : ""}
+          </p>
+        )}
       </BentoSection>
 
       {/* ── Defense ──────────────────────────────────────────────── */}
       <BentoSection>
-        <div className="flex items-center justify-between mb-2">
+        <div className="flex items-center justify-between -mt-2">
           <p className="bento-label">Defense</p>
           <span className="text-3xl font-black text-sky-300">
             {defenseValue}
@@ -429,6 +443,7 @@ export function CombatTab({
                   character={character}
                   canEdit={canEdit}
                   isGM={isGM}
+                  isEditing={false}
                   onRoll={() => setRoll(a.name, a.formula || a.damage)}
                   onToggleFavorite={() =>
                     updateActions(
@@ -437,11 +452,7 @@ export function CombatTab({
                       ),
                     )
                   }
-                  onDelete={() =>
-                    updateActions(
-                      character.actions.filter((x) => x.id !== a.id),
-                    )
-                  }
+                  // No onEdit/onDelete here on purpose — favorites are read-only shortcuts
                 />
               ))}
             {character.inventory
@@ -494,6 +505,7 @@ export function CombatTab({
               character={character}
               canEdit={canEdit}
               isGM={isGM}
+              isEditing={editingActionId === a.id}
               onRoll={() => setRoll(a.name, a.formula || a.damage)}
               onToggleFavorite={() =>
                 updateActions(
@@ -502,8 +514,19 @@ export function CombatTab({
                   ),
                 )
               }
-              onDelete={() =>
-                updateActions(character.actions.filter((x) => x.id !== a.id))
+              onEditToggle={() =>
+                setEditingActionId((cur) => (cur === a.id ? null : a.id))
+              }
+              onDelete={() => {
+                updateActions(character.actions.filter((x) => x.id !== a.id));
+                setEditingActionId(null);
+              }}
+              onUpdate={(patch) =>
+                updateActions(
+                  character.actions.map((x) =>
+                    x.id === a.id ? { ...x, ...patch } : x,
+                  ),
+                )
               }
             />
           ))}
@@ -578,11 +601,16 @@ function InventoryFavoriteRow({
   onRoll?: () => void;
   onToggleFavorite?: () => void;
 }) {
+  const [expanded, setExpanded] = useState(false);
+
   return (
     <div className="rounded-lg border border-stone-700/40 bg-stone-900/40 overflow-hidden">
       <div className="flex items-center gap-2 px-2.5 py-2">
         <span>🎒</span>
-        <div className="flex-1 min-w-0">
+        <div
+          className="flex-1 min-w-0 cursor-pointer"
+          onClick={() => setExpanded((e) => !e)}
+        >
           <span className="text-xs font-semibold text-stone-200 truncate">
             {item.name}
           </span>
@@ -604,11 +632,14 @@ function InventoryFavoriteRow({
           {canEdit && onRoll && <RollButton onClick={onRoll} />}
         </div>
       </div>
+
+      {expanded && <RowDescriptionPanel description={item.description} />}
     </div>
   );
 }
 
 // ── ActionRow ─────────────────────────────────────────────────────
+
 /**
  * Expandable row for one combat action (melee/ranged/ability/item — spells
  * are excluded, they live in the Spells tab). Click to expand/collapse the
@@ -617,25 +648,34 @@ function InventoryFavoriteRow({
  * @param action - The action to render.
  * @param character - Used to resolve the formula's display string (variables substituted, dice kept).
  * @param canEdit - Gates the favorite toggle, roll button, and delete action.
+ * @param isEditing - Whether the inline edit form is open.
  * @param onRoll - Called when the roll button is clicked.
  * @param onToggleFavorite - Called when the favorite star is clicked.
+ * @param onEditToggle -Called when edit mode is toggled.
  * @param onDelete - Called when "Delete" is clicked in the expanded panel.
+ * @param onUpdate - Called with a partial patch when an edit field changes.
  */
 function ActionRow({
   action,
   character,
   canEdit,
+  isEditing = false,
   onRoll,
   onToggleFavorite,
+  onEditToggle,
   onDelete,
+  onUpdate,
 }: {
   action: CharacterAction;
   character: NimbleCharacter;
   canEdit: boolean;
   isGM: boolean;
+  isEditing?: boolean;
   onRoll?: () => void;
   onToggleFavorite?: () => void;
+  onEditToggle?: () => void;
   onDelete?: () => void;
+  onUpdate?: (patch: Partial<CharacterAction>) => void;
 }) {
   const [expanded, setExpanded] = useState(false);
   const typeStyle = ACTION_COLORS[action.type] ?? "";
@@ -645,11 +685,26 @@ function ActionRow({
     character,
   );
 
+  const handleHeaderClick = () => {
+    if (isEditing) {
+      onEditToggle?.();
+      setExpanded(true);
+      return;
+    }
+    setExpanded((e) => !e);
+  };
+
   return (
-    <div className="rounded-lg border border-stone-700/40 bg-stone-900/40 overflow-hidden">
+    <div
+      className={`rounded-lg border overflow-hidden transition-colors ${
+        isEditing
+          ? "border-amber-700/60 bg-amber-950/10"
+          : "border-stone-700/40 bg-stone-900/40"
+      }`}
+    >
       <div
         className="flex items-center gap-2 px-2.5 py-2 cursor-pointer"
-        onClick={() => setExpanded(!expanded)}
+        onClick={handleHeaderClick}
       >
         <span>{icon}</span>
         <div className="flex-1 min-w-0">
@@ -664,9 +719,7 @@ function ActionRow({
             </span>
           </div>
           <div className="flex items-center gap-3 mt-0.5">
-            <span className="text-[10px] text-stone-500">
-              📍 {action.range || "—"}
-            </span>
+            <RowMeta range={action.range} actionCost={action.actionCost} />
             {resolvedFormula && (
               <span className="text-[10px] font-mono text-amber-300/80">
                 {resolvedFormula}
@@ -687,16 +740,64 @@ function ActionRow({
         </div>
       </div>
 
-      {expanded && (
-        <div className="px-3 pb-2.5 border-t border-stone-700/40 pt-2">
-          <p className="text-xs text-stone-400 leading-relaxed">
-            {action.description || "No description."}
-          </p>
-          {canEdit && onDelete && (
-            <div className="mt-2">
-              <TextAction onClick={onDelete} label="Delete" variant="danger" />
-            </div>
-          )}
+      {/* Description panel — only when not editing */}
+      {expanded && !isEditing && (
+        <RowDescriptionPanel
+          description={action.description}
+          onEdit={canEdit ? onEditToggle : undefined}
+          onDelete={canEdit ? onDelete : undefined}
+          canEdit={canEdit}
+        />
+      )}
+
+      {/* Edit panel */}
+      {isEditing && onUpdate && (
+        <div className="px-3 pb-3 border-t border-amber-800/30 pt-2 flex flex-col gap-2">
+          <FormField
+            label="Name"
+            value={action.name}
+            onChange={(v) => onUpdate({ name: v })}
+          />
+          <GridFields>
+            <FormField
+              label="Range"
+              value={action.range ?? ""}
+              onChange={(v) => onUpdate({ range: v })}
+              placeholder="e.g. 1, range 6"
+            />
+            <FormField
+              label="Formula"
+              value={action.formula ?? action.damage ?? ""}
+              onChange={(v) => onUpdate({ formula: v, damage: v })}
+              placeholder="e.g. 1d8+STR"
+            />
+          </GridFields>
+          <FormField
+            label="Action cost"
+            type="number"
+            value={action.actionCost ?? 0}
+            min={0}
+            onChange={(v) => onUpdate({ actionCost: parseInt(v) || undefined })}
+          />
+          <FormField
+            label="Description"
+            as="textarea"
+            value={action.description ?? ""}
+            onChange={(v) => onUpdate({ description: v })}
+            rows={2}
+          />
+          <div className="flex justify-between items-center mt-1">
+            <TextAction
+              onClick={() => onDelete?.()}
+              label="Remove action"
+              variant="danger"
+            />
+            <TextAction
+              onClick={() => onEditToggle?.()}
+              label="OK"
+              variant="confirm"
+            />
+          </div>
         </div>
       )}
     </div>
@@ -712,6 +813,7 @@ function ActionRow({
  * @param onAdd - Called with the fully-constructed {@link CharacterAction} on submit.
  * @param onCancel - Called when the modal is dismissed without adding.
  */
+
 function AddActionModal({
   onAdd,
   onCancel,

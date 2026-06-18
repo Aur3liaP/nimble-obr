@@ -433,12 +433,13 @@ export function SummaryTab({
                     <span className="text-xs font-medium text-stone-200">
                       {SKILL_LABELS[skillKey]}
                     </span>
-                    <span className="text-[10px] text-stone-500 ml-1.5">
+                    <span className="text-[8px] text-stone-500 ml-1">
                       {SKILL_STAT[skillKey]}
                     </span>
                   </div>
-                  <div className="flex items-center gap-1.5">
+                  <div className="flex items-center gap-1">
                     {canEdit ? (
+                      
                       <input
                         type="number"
                         value={val}
@@ -455,7 +456,7 @@ export function SummaryTab({
                         className="w-6 text-center text-sm font-bold bg-stone-900 border border-stone-700 rounded text-amber-200 outline-none py-0.5 focus:border-amber-600"
                       />
                     ) : (
-                      <span className="text-sm font-bold text-amber-200 w-8 text-right">
+                      <span className="text-sm font-bold text-amber-200 w-6 text-right">
                         {val >= 0 ? `+${val}` : val}
                       </span>
                     )}

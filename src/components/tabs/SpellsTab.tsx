@@ -21,7 +21,9 @@ import { BASE_SPELLS } from "../../data/spells";
 import { BentoSection } from "../ui/common/BentoSection";
 import { FavoriteButton } from "../ui/common/FavoriteButton";
 import { RollButton } from "../ui/common/RollButton";
-import { RowActions, TextAction } from "../ui/common/RowActions";
+import { TextAction } from "../ui/common/RowActions";
+import { RowMeta } from "../ui/common/RowMeta";
+import { RowDescriptionPanel } from "../ui/common/RowDescriptionPanel";
 import { FormField, GridFields } from "../ui/common/FormField";
 import { TabPills } from "../ui/common/TabPills";
 import { ModalShell } from "../ui/common/ModalShell";
@@ -767,19 +769,22 @@ function SpellRow({
               {school ?? (tier === 0 ? "cantrip" : TIER_LABELS[tier])}
             </span>
             {tier > 0 && (
-              <span className="text-[9px] text-violet-400">T{tier}</span>
+              <span title={"Tier "+ tier} className="text-[9px] text-violet-400">T{tier}</span>
             )}
             {spell.manaCost != null && spell.manaCost > 0 && (
-              <span className="text-[9px] text-violet-400">
+              <span title="Mana cost" className="text-[9px] text-violet-400">
                 ✦{spell.manaCost}
               </span>
             )}
           </div>
-          {resolvedFormula && (
-            <span className="text-[10px] font-mono text-amber-300/80">
-              {resolvedFormula}
-            </span>
-          )}
+          <div className="flex items-center gap-3 mt-0.5">
+            <RowMeta range={spell.range} actionCost={spell.actionCost} />
+            {resolvedFormula && (
+              <span className="text-[10px] font-mono text-amber-300/80">
+                {resolvedFormula}
+              </span>
+            )}
+          </div>
         </div>
 
         <div
@@ -799,30 +804,12 @@ function SpellRow({
 
       {/* Description panel */}
       {isExpanded && !isEditing && (
-        <div className="px-3 pb-2.5 border-t border-stone-700/40 pt-2">
-          <div className="flex justify-between items-start">
-            <div>
-              {spell.range && (
-                <p className="text-[10px] text-stone-500 mb-1">
-                  📍 {spell.range}
-                  {spell.actionCost
-                    ? ` · ${spell.actionCost} action${spell.actionCost > 1 ? "s" : ""}`
-                    : ""}
-                </p>
-              )}
-            </div>
-            <RowActions
-              onEdit={canEdit ? onEditToggle : undefined}
-              onDelete={onDelete}
-              canEdit={canEdit}
-            />
-          </div>
-          <p className="text-xs text-stone-400 leading-relaxed">
-            {spell.description || (
-              <span className="italic text-stone-600">No description.</span>
-            )}
-          </p>
-        </div>
+        <RowDescriptionPanel
+          description={spell.description}
+          onEdit={canEdit ? onEditToggle : undefined}
+          onDelete={onDelete}
+          canEdit={canEdit}
+        />
       )}
 
       {/* Edit panel */}

@@ -18,7 +18,9 @@ import { BASIC_EQUIPMENTS } from "../../data/equipment";
 import { BentoSection } from "../ui/common/BentoSection";
 import { FavoriteButton } from "../ui/common/FavoriteButton";
 import { RollButton } from "../ui/common/RollButton";
-import { RowActions, TextAction } from "../ui/common/RowActions";
+import { TextAction } from "../ui/common/RowActions";
+import { RowMeta } from "../ui/common/RowMeta";
+import { RowDescriptionPanel } from "../ui/common/RowDescriptionPanel";
 import { FormField, GridFields } from "../ui/common/FormField";
 import { NumericStepper } from "../ui/common/NumericStepper";
 import { ModalShell } from "../ui/common/ModalShell";
@@ -630,6 +632,7 @@ export function InventoryTab({
 }
 
 // ── ItemRow ───────────────────────────────────────────────────────
+
 /**
  * One row in the inventory list, with three possible states: collapsed
  * (name + slot cost + resolved formula), expanded (adds description),
@@ -695,11 +698,14 @@ function ItemRow({
               <span className="text-[9px] text-sky-400 shrink-0">🛡</span>
             )}
           </div>
-          {item.formula && (
-            <span className="text-[10px] font-mono text-amber-300/70">
-              {item.formula}
-            </span>
-          )}
+          <div className="flex items-center gap-3 mt-0.5">
+            <RowMeta actionCost={item.actionCost} />
+            {item.formula && (
+              <span className="text-[10px] font-mono text-amber-300/70">
+                {item.formula}
+              </span>
+            )}
+          </div>
         </div>
 
         {/* Quantity — NumericStepper remplace les 3 boutons inline */}
@@ -733,18 +739,12 @@ function ItemRow({
 
       {/* Description panel */}
       {isExpanded && !isEditing && (
-        <div className="px-3 pb-2.5 border-t border-stone-700/40 pt-2 flex justify-between items-start gap-2">
-          <p className="text-xs text-stone-400 leading-relaxed flex-1">
-            {item.description || (
-              <span className="italic text-stone-600">No description.</span>
-            )}
-          </p>
-          <RowActions
-            onEdit={canEdit ? onEditToggle : undefined}
-            onDelete={onDelete}
-            canEdit={canEdit}
-          />
-        </div>
+        <RowDescriptionPanel
+          description={item.description}
+          onEdit={canEdit ? onEditToggle : undefined}
+          onDelete={onDelete}
+          canEdit={canEdit}
+        />
       )}
 
       {/* Edit panel */}

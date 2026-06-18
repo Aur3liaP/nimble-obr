@@ -7,3 +7,5 @@ export { FavoriteButton } from "./FavoriteButton";
 export { TabPills } from "./TabPills";
 export { InlineEditField, InlineNumberField } from "./InlineEditField";
 export { RowActions, TextAction } from "./RowActions";
+export { RowMeta } from "./RowMeta";
+export { RowDescriptionPanel } from "./RowDescriptionPanel";
