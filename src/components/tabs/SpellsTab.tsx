@@ -27,6 +27,8 @@ import { RowDescriptionPanel } from "../ui/common/RowDescriptionPanel";
 import { FormField, GridFields } from "../ui/common/FormField";
 import { TabPills } from "../ui/common/TabPills";
 import { ModalShell } from "../ui/common/ModalShell";
+import { DraggableBar } from "../ui/common/DraggableBar";
+import { useDraggableValue } from "../../hooks/useDraggableValue";
 
 // ── Constants ─────────────────────────────────────────────────────
 /** Display labels for spell tiers (0 = Cantrips, 1–9 = Tier I–IX). */
@@ -448,6 +450,14 @@ export function SpellsTab({
   const [expandedId, setExpandedId] = useState<string | null>(null);
   const [editingId, setEditingId] = useState<string | null>(null);
 
+  const {
+    displayValue: manaDisplay,
+    onDragChange: onManaDragChange,
+    onDragCommit: onManaDragCommit,
+  } = useDraggableValue(character.mana, (v) =>
+    onUpdate({ mana: Math.max(0, Math.min(character.maxMana, v)) }),
+  );
+
   /** Subset of `character.actions` with `type === "spell"`. */
   const spells = character.actions.filter((a) => a.type === "spell");
 
@@ -526,13 +536,15 @@ export function SpellsTab({
             <div className="flex items-baseline gap-1">
               <input
                 type="number"
-                value={character.mana}
+                value={manaDisplay}
                 min={0}
                 max={character.maxMana}
                 disabled={!canEdit}
-                onChange={(e) =>
-                  onUpdate({ mana: Math.max(0, parseInt(e.target.value) || 0) })
-                }
+                onChange={(e) => {
+                  const v = Math.max(0, parseInt(e.target.value) || 0);
+                  onManaDragChange(v);
+                  onManaDragCommit(v);
+                }}
                 className="w-14 text-center text-3xl font-black bg-transparent text-violet-200 outline-none border-b border-violet-800 focus:border-violet-500 disabled:border-transparent"
               />
               <span className="text-stone-500 text-sm"> / </span>
@@ -549,14 +561,15 @@ export function SpellsTab({
             </div>
           </div>
           <div className="flex-1">
-            <div className="h-2 bg-stone-800 rounded-full overflow-hidden">
-              <div
-                className="h-full rounded-full transition-all bg-gradient-to-r from-violet-700 to-violet-400"
-                style={{
-                  width: `${character.maxMana > 0 ? (character.mana / character.maxMana) * 100 : 0}%`,
-                }}
-              />
-            </div>
+            <DraggableBar
+              value={manaDisplay}
+              max={character.maxMana}
+              canEdit={canEdit}
+              onChange={onManaDragChange}
+              onCommit={onManaDragCommit}
+              color="#a78bfa"
+              valueSuffix=" mana"
+            />
             <p className="text-[10px] text-stone-500 mt-1">
               Spell tier ≈ mana cost · cantrips are free
             </p>
@@ -769,7 +782,12 @@ function SpellRow({
               {school ?? (tier === 0 ? "cantrip" : TIER_LABELS[tier])}
             </span>
             {tier > 0 && (
-              <span title={"Tier "+ tier} className="text-[9px] text-violet-400">T{tier}</span>
+              <span
+                title={"Tier " + tier}
+                className="text-[9px] text-violet-400"
+              >
+                T{tier}
+              </span>
             )}
             {spell.manaCost != null && spell.manaCost > 0 && (
               <span title="Mana cost" className="text-[9px] text-violet-400">

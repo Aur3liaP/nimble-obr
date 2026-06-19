@@ -125,7 +125,12 @@ export function InlineEditField({
  * @property min - Minimum value.
  * @property max - Maximum value.
  * @property size - Text size variant, from "sm" to "3xl".
- * @property colorClass - Tailwind text color class for the value.
+ * @property colorClass - Either a static Tailwind text-color class (e.g. "text-emerald-300"),
+ * or a function `(ratio: number) => string` returning a raw CSS color (e.g. a hex string)
+ * derived from `value / max` — used for HP-style fields where the color should shift
+ * as the ratio drops (e.g. green → amber → red). When a function is passed, the
+ * resolved color is applied via inline `style`, not as a Tailwind class, since a
+ * function can't be safely interpolated into a `className` string.
  * @property align - Text alignment, defaults to "center" (unlike {@link InlineEditField}, which defaults to "left").
  * @property className - Wrapper div classes.
  */
@@ -138,7 +143,7 @@ interface InlineNumberFieldProps {
   max?: number;
   /** Size variant: "sm" | "base" | "lg" | "2xl" | "3xl" */
   size?: "sm" | "base" | "lg" | "2xl" | "3xl";
-  colorClass?: string;
+  colorClass?: string | ((ratio: number) => string);
   align?: Align;
   className?: string;
 }
@@ -156,6 +161,13 @@ const SIZE_CLASS: Record<string, string> = {
  * Numeric-only shorthand for {@link InlineEditField}, with size variants
  * for prominent displays (HP current value, Level, Speed, stat bonuses…).
  * Always renders bold, tabular-nums text in both edit and read modes.
+ *
+ * `colorClass` can be a static Tailwind class or a ratio-based function;
+ * in the latter case the resolved color is applied via inline `style` in
+ * *both* the input (edit mode) and the span (read mode) — a function
+ * value is never interpolated directly into `className`, since
+ * `${someFunction}` would stringify to the function's source code and
+ * silently produce an invalid class.
  */
 export function InlineNumberField({
   value,
@@ -171,6 +183,17 @@ export function InlineNumberField({
 }: InlineNumberFieldProps) {
   const sizeCls = SIZE_CLASS[size] ?? "text-sm";
   const alignCls = ALIGN_CLASS[align];
+
+  const isDynamicColor = typeof colorClass === "function";
+  // Ratio only makes sense when max is a real, positive bound — guard
+  // against max being 0/undefined (e.g. fields with no real max, like
+  // Level or Speed) to avoid divide-by-zero producing NaN colors.
+  const ratio =
+    isDynamicColor && max ? Math.min(1, Math.max(0, value / max)) : 0;
+  const resolvedColor = isDynamicColor
+    ? (colorClass as (ratio: number) => string)(ratio)
+    : undefined;
+  const staticColorCls = isDynamicColor ? "" : (colorClass as string);
 
   return (
     <div className={`flex flex-col gap-0.5 ${className}`}>
@@ -192,12 +215,14 @@ export function InlineNumberField({
           className={`
             bg-transparent border-b border-stone-700 focus:border-amber-600
             outline-none transition-colors w-full pb-0.5 font-bold
-            ${sizeCls} ${colorClass} ${alignCls}
+            ${sizeCls} ${alignCls} ${staticColorCls}
           `}
+          style={resolvedColor ? { color: resolvedColor } : undefined}
         />
       ) : (
         <span
-          className={`font-bold tabular-nums ${sizeCls} ${colorClass} ${alignCls}`}
+          className={`font-bold tabular-nums ${sizeCls} ${alignCls} ${staticColorCls}`}
+          style={resolvedColor ? { color: resolvedColor } : undefined}
         >
           {value}
         </span>

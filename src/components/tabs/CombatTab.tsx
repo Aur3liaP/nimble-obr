@@ -26,6 +26,8 @@ import { TextAction } from "../ui/common/RowActions";
 import { RowMeta } from "../ui/common/RowMeta";
 import { RowDescriptionPanel } from "../ui/common/RowDescriptionPanel";
 import { FormField, GridFields } from "../ui/common/FormField";
+import { DraggableBar } from "../ui/common/DraggableBar";
+import { useDraggableValue } from "../../hooks/useDraggableValue";
 
 // ── Types ─────────────────────────────────────────────────────────
 /**
@@ -140,7 +142,16 @@ export function CombatTab({
 
     return () => clearTimeout(timer);
   }, [initiativeResult]);
-  
+
+  const hpMaxCombat = character.hp.max + character.hp.temp;
+  const {
+    displayValue: hpDisplayCombat,
+    onDragChange: onHpDragChangeCombat,
+    onDragCommit: onHpDragCommitCombat,
+  } = useDraggableValue(character.hp.current, (v) =>
+    onUpdate({ hp: { ...character.hp, current: Math.max(0, v) } }),
+  );
+
   const defenseValue = computeDefense(character);
   const armorItems = character.inventory.filter((i) => i.isArmor);
   const equippedArmorItem = armorItems.find(
@@ -194,16 +205,24 @@ export function CombatTab({
             <p className="bento-label">HP</p>
             <div className="flex items-baseline gap-1 mt-1">
               <InlineNumberField
-                value={character.hp.current}
+                value={hpDisplayCombat}
                 canEdit={canEdit}
                 min={0}
-                max={character.hp.max + character.hp.temp}
-                onChange={(v) =>
-                  onUpdate({ hp: { ...character.hp, current: Math.max(0, v) } })
-                }
+                max={hpMaxCombat}
+                onChange={(v) => {
+                  onHpDragChangeCombat(v);
+                  onHpDragCommitCombat(v);
+                }}
                 size="2xl"
-                colorClass="text-emerald-300"
+                colorClass={(ratio) =>
+                  ratio <= 0.25
+                    ? "#ef4444"
+                    : ratio <= 0.5
+                      ? "#f59e0b"
+                      : "#34d399"
+                }
               />
+
               <span className="text-stone-500 text-xs">
                 / {character.hp.max}
               </span>
@@ -223,18 +242,21 @@ export function CombatTab({
                 colorClass="text-sky-300"
               />
             </div>
-            <div className="h-1.5 bg-stone-800 rounded-full overflow-hidden mt-1.5">
-              <div
-                className="h-full rounded-full transition-all"
-                style={{
-                  width: `${Math.min(100, (character.hp.current / character.hp.max) * 100)}%`,
-                  background:
-                    character.hp.current <= character.hp.max * 0.25
-                      ? "#ef4444"
-                      : character.hp.current <= character.hp.max * 0.5
-                        ? "#f59e0b"
-                        : "#34d399",
-                }}
+            <div className="mt-1.5">
+              <DraggableBar
+                value={hpDisplayCombat}
+                max={hpMaxCombat}
+                canEdit={canEdit}
+                onChange={onHpDragChangeCombat}
+                onCommit={onHpDragCommitCombat}
+                valueSuffix=" HP"
+                color={(ratio) =>
+                  ratio <= 0.25
+                    ? "#ef4444"
+                    : ratio <= 0.5
+                      ? "#f59e0b"
+                      : "#34d399"
+                }
               />
             </div>
           </div>

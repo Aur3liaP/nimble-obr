@@ -9,3 +9,4 @@ export { InlineEditField, InlineNumberField } from "./InlineEditField";
 export { RowActions, TextAction } from "./RowActions";
 export { RowMeta } from "./RowMeta";
 export { RowDescriptionPanel } from "./RowDescriptionPanel";
+export { DraggableBar } from "./DraggableBar";

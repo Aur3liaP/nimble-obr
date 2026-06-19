@@ -24,6 +24,8 @@ import {
   InlineNumberField,
 } from "../ui/common/InlineEditField";
 import { RollButton } from "../ui/common/RollButton";
+import { DraggableBar } from "../ui/common/DraggableBar";
+import { useDraggableValue } from "../../hooks/useDraggableValue";
 
 // ── Constants ─────────────────────────────────────────────────────
 /** Display labels for each skill, used in the skills grid. */
@@ -107,6 +109,13 @@ export function SummaryTab({
   /** Sets the wounds count, clamped between 0 and `maxWounds + 1` (the extra slot represents the fatal wound). */
   const setWounds = (val: number) =>
     onUpdate({ wounds: Math.max(0, Math.min(character.maxWounds + 1, val)) });
+
+  const hpMax = character.hp.max + character.hp.temp;
+  const {
+    displayValue: hpDisplay,
+    onDragChange: onHpDragChange,
+    onDragCommit: onHpDragCommit,
+  } = useDraggableValue(character.hp.current, (v) => setHP("current", v));
 
   /**
    * Toggles a stat's key/flaw status, ensuring a stat can't be both at once
@@ -253,13 +262,22 @@ export function SummaryTab({
             <p className="bento-label">Hit Points</p>
             <div className="flex items-baseline gap-1.5 mt-1">
               <InlineNumberField
-                value={character.hp.current}
+                value={hpDisplay}
                 canEdit={canEdit}
                 min={0}
-                max={character.hp.max + character.hp.temp}
-                onChange={(v) => setHP("current", v)}
+                max={hpMax}
+                onChange={(v) => {
+                  onHpDragChange(v);
+                  onHpDragCommit(v);
+                }}
                 size="3xl"
-                colorClass="text-emerald-300"
+                colorClass={(ratio) =>
+                  ratio <= 0.25
+                    ? "#ef4444"
+                    : ratio <= 0.5
+                      ? "#f59e0b"
+                      : "#34d399"
+                }
               />
               <span className="text-stone-500 text-sm">/</span>
               <InlineNumberField
@@ -284,18 +302,22 @@ export function SummaryTab({
                 colorClass="text-sky-300"
               />
             </div>
-            <div className="mt-2 h-1.5 bg-stone-800 rounded-full overflow-hidden">
-              <div
-                className="h-full rounded-full transition-all duration-300"
-                style={{
-                  width: `${Math.min(100, (character.hp.current / character.hp.max) * 100)}%`,
-                  background:
-                    character.hp.current <= character.hp.max * 0.25
-                      ? "#ef4444"
-                      : character.hp.current <= character.hp.max * 0.5
-                        ? "#f59e0b"
-                        : "#34d399",
-                }}
+
+            <div className="mt-2">
+              <DraggableBar
+                value={hpDisplay}
+                max={hpMax}
+                canEdit={canEdit}
+                onChange={onHpDragChange}
+                onCommit={onHpDragCommit}
+                valueSuffix=" HP"
+                color={(ratio) =>
+                  ratio <= 0.25
+                    ? "#ef4444"
+                    : ratio <= 0.5
+                      ? "#f59e0b"
+                      : "#34d399"
+                }
               />
             </div>
           </div>
@@ -439,7 +461,6 @@ export function SummaryTab({
                   </div>
                   <div className="flex items-center gap-1">
                     {canEdit ? (
-                      
                       <input
                         type="number"
                         value={val}

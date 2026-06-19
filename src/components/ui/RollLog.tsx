@@ -217,9 +217,9 @@ function RollEntry({
       </div>
       {/* Player name + time */}
       <div className="flex items-center gap-1.5 mt-0.5">
-        <span className="text-stone-500 text-[10px]">{roll.playerName}</span>
-        <span className="text-stone-600 text-[10px]">·</span>
-        <span className="text-stone-600 text-[10px]">
+        <span className="text-stone-400 text-[10px] font-medium">{roll.playerName}</span>
+        <span className="text-stone-500 text-[10px]">·</span>
+        <span className="text-stone-500 text-[10px]">
           {formatTime(roll.timestamp)}
         </span>
         {roll.hidden && isGM && (
