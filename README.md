@@ -225,9 +225,14 @@ L'historique des lancés de dés (visibles par toute la table) est stocké sépa
 | GM | Toutes les fiches, indépendamment de `ownerId` |
 | Joueur — autre token | Lecture seule (boutons d'édition masqués, pas seulement désactivés) |
 
-Cette permission (`canEdit`) est calculée une seule fois dans `useOBR` et propagée explicitement en props à chaque composant interactif — elle ne se propage jamais "automatiquement" via le contexte React, ce qui a nécessité une vérification systématique de chaque nouveau composant ajouté.
+Cette permission est centralisée dans un objet `permissions` (`{ canEdit, isGM, isOwner, isUnclaimed }`), calculé une seule fois dans `useOBR` et propagé explicitement en props à chaque composant interactif — il ne se propage jamais "automatiquement" via le contexte React, ce qui nécessite une vérification systématique de chaque nouveau composant ajouté.
 
----
+**Garde côté écriture** : `updateCharacter` (dans `useOBR`) revérifie `canEdit` avant chaque appel à `OBR.scene.items.updateItems`, et abandonne silencieusement (avec un `console.warn`) si l'appelant n'a pas les droits. Ce n'est pas une vraie barrière de sécurité — OBR n'a pas d'ACL serveur sur les metadata, donc un joueur déterminé pourrait toujours écrire via les devtools — mais ça évite les écritures accidentelles déclenchées par un état UI obsolète (ex : un bouton qui aurait dû être masqué/désactivé mais ne l'était pas encore lors d'un re-render).
+
+**Lancer un dé reste possible en lecture seule** : `handleRoll` n'est volontairement pas soumis à `canEdit` — un joueur qui regarde la fiche d'un autre peut quand même lancer un dé avec ses stats. Seule la persistance de modifications sur la fiche elle-même passe par la garde de `updateCharacter`.
+
+**"Claim" / "Take over"** : `claimToken` n'est pas non plus gardé par `canEdit`, puisqu'il est justement le point d'entrée qui accorde les droits d'édition. Actuellement, n'importe quel joueur peut "Take over" la fiche d'un autre joueur déjà réclamée (choix délibéré pour une table de confiance entre amis) — si ce comportement doit être restreint au GM, la garde doit être ajoutée côté bouton dans `App.tsx`/`CharacterHeader.tsx`.
+
 
 ## Formules supportées
 
