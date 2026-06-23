@@ -27,6 +27,7 @@ import { RowMeta } from "../ui/common/RowMeta";
 import { RowDescriptionPanel } from "../ui/common/RowDescriptionPanel";
 import { FormField, GridFields } from "../ui/common/FormField";
 import { DraggableBar } from "../ui/common/DraggableBar";
+import { ItemRowBase } from "../ui/common/ItemRowBase";
 import { useDraggableValue } from "../../hooks/useDraggableValue";
 
 // ── Types ─────────────────────────────────────────────────────────
@@ -610,8 +611,12 @@ export function CombatTab({
  * Compact row for a favorited inventory item shown in the Combat tab's
  * Favorites section — same favorite/roll affordances as the Inventory
  * tab's `ItemRow`, but without expand/edit/delete (those live in Inventory).
+ *
+ * Built on {@link ItemRowBase} — this and
+ * `InventoryTab.ItemRow` used to each hand-roll this same row shape,
+ * which had started to drift slightly between the two. Now both build
+ * on the same shared shell.
  */
-
 function InventoryFavoriteRow({
   item,
   canEdit,
@@ -626,37 +631,21 @@ function InventoryFavoriteRow({
   const [expanded, setExpanded] = useState(false);
 
   return (
-    <div className="rounded-lg border border-stone-700/40 bg-stone-900/40 overflow-hidden">
-      <div className="flex items-center gap-2 px-2.5 py-2">
-        <span>🎒</span>
-        <div
-          className="flex-1 min-w-0 cursor-pointer"
-          onClick={() => setExpanded((e) => !e)}
-        >
-          <span className="text-xs font-semibold text-stone-200 truncate">
-            {item.name}
-          </span>
-          {item.formula && (
-            <span className="text-[10px] font-mono text-amber-300/80 ml-2">
-              {item.formula}
-            </span>
-          )}
-        </div>
-        <div
-          className="flex items-center gap-1"
-          onClick={(e) => e.stopPropagation()}
-        >
-          <FavoriteButton
-            isFavorite={item.isFavorite ?? false}
-            canEdit={canEdit}
-            onToggle={onToggleFavorite}
-          />
-          {canEdit && onRoll && <RollButton onClick={onRoll} />}
-        </div>
-      </div>
-
-      {expanded && <RowDescriptionPanel description={item.description} />}
-    </div>
+    <ItemRowBase
+      name={item.name}
+      icon="🎒"
+      formula={item.formula}
+      description={item.description}
+      isExpanded={expanded}
+      onRowClick={() => setExpanded((e) => !e)}
+      isFavorite={item.isFavorite ?? false}
+      canEdit={canEdit}
+      onToggleFavorite={onToggleFavorite}
+      onRoll={onRoll}
+      rollAccent="amber"
+      // No onEdit/onDelete — favorites are read-only shortcuts here,
+      // full edit/delete lives in the Inventory tab's own ItemRow.
+    />
   );
 }
 
@@ -914,7 +903,7 @@ function AddActionModal({
             onClick={() => {
               if (!form.name) return;
               onAdd({
-                id: `a-${Date.now()}`,
+                id: `a-${crypto.randomUUID()}`,
                 ...form,
                 formula: form.damage,
                 isFavorite: false,

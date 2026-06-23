@@ -16,6 +16,7 @@ import { SpellsTab } from "./components/tabs/SpellsTab";
 import { InventoryTab } from "./components/tabs/InventoryTab";
 import { RollLog } from "./components/ui/RollLog";
 import { DicePanel } from "./components/ui/DicePanel";
+import { CharacterHeader } from "./components/ui/CharacterHeader";
 import type { DiceRollRequest, RollMode } from "./types/character";
 
 /** Identifiers for the four character sheet tabs. */
@@ -41,8 +42,7 @@ export default function App() {
     selectedItems,
     playerId,
     playerName,
-    isGM,
-    canEdit,
+    permissions,
     updateCharacter,
     handleRoll,
     handleFreeRoll,
@@ -51,6 +51,8 @@ export default function App() {
     createSheetForToken,
     claimToken,
   } = useOBR();
+
+  const { canEdit, isGM } = permissions;
 
   const [activeTab, setActiveTab] = useState<TabId>("summary");
 
@@ -69,8 +71,6 @@ export default function App() {
   const onRoll = (req: DiceRollRequest) => handleRoll(req);
   const onRollInitiative = (mode: RollMode = "standard") =>
     rollInitiative(mode);
-  const isOwner = character ? character.ownerId === playerId : false;
-  const isUnclaimed = character ? !character.ownerId : false;
 
   // ─────────────────────────────────────────────────────────────────────
   // All post-ready states share ONE layout so DicePanel is never unmounted.
@@ -88,81 +88,11 @@ export default function App() {
     <div className="relative flex flex-col h-full bg-stone-950 text-stone-200 overflow-hidden font-sans pb-7">
       {/* ── Header — only when a sheet is open ───────────────────── */}
       {showSheet && character && (
-        <header className="shrink-0 px-3 pt-3 pb-0">
-          <div className="bento-card py-2! px-3!">
-            <div className="flex items-start justify-between gap-2">
-              <div className="min-w-0">
-                <h1 className="text-base font-black text-amber-200 truncate leading-tight">
-                  {character.name}
-                </h1>
-                <p className="text-[10px] text-stone-500 truncate">
-                  {[
-                    character.ancestry,
-                    character.class,
-                    character.level ? `Lv.${character.level}` : "",
-                  ]
-                    .filter(Boolean)
-                    .join(" · ")}
-                </p>
-              </div>
-              <div className="flex flex-col items-end gap-1 shrink-0">
-                <span
-                  className={`px-2 py-0.5 rounded-full text-[10px] font-bold border ${
-                    character.hp.current === 0
-                      ? "border-rose-700 bg-rose-950/60 text-rose-300"
-                      : character.hp.current <= character.hp.max * 0.5
-                        ? "border-amber-700/60 bg-amber-950/30 text-amber-300"
-                        : "border-emerald-800/50 bg-emerald-950/30 text-emerald-300"
-                  }`}
-                >
-                  ♥ {character.hp.current}/{character.hp.max}
-                  {character.hp.temp > 0 && (
-                    <span className="text-sky-300 ml-1">
-                      +{character.hp.temp}
-                    </span>
-                  )}
-                </span>
-                <div className="flex items-center gap-1">
-                  {isGM && (
-                    <span className="px-1.5 py-0.5 rounded text-[9px] font-bold tracking-widest uppercase bg-amber-900/40 text-amber-400 border border-amber-800/40">
-                      GM
-                    </span>
-                  )}
-                  {!isGM && !isOwner && (
-                    <button
-                      onClick={claimToken}
-                      className="px-2 py-0.5 rounded text-[9px] font-semibold border border-sky-700/60 bg-sky-950/40 text-sky-300 hover:bg-sky-900/50 transition-colors"
-                    >
-                      {isUnclaimed ? "Claim" : "Take over"}
-                    </button>
-                  )}
-                  {isOwner && !isGM && (
-                    <span className="px-1.5 py-0.5 rounded text-[9px] text-stone-500 border border-stone-800">
-                      mine
-                    </span>
-                  )}
-                </div>
-              </div>
-            </div>
-            {character.wounds > 0 && (
-              <div className="flex items-center gap-1.5 mt-1.5">
-                <span className="text-[9px] text-rose-700 uppercase tracking-wider">
-                  Wounds
-                </span>
-                <div className="flex gap-1">
-                  {Array.from({ length: character.maxWounds + 1 }).map(
-                    (_, i) => (
-                      <div
-                        key={i}
-                        className={`w-2 h-2 rounded-full ${i < character.wounds ? "bg-rose-700" : "bg-stone-700"}`}
-                      />
-                    ),
-                  )}
-                </div>
-              </div>
-            )}
-          </div>
-        </header>
+        <CharacterHeader
+          character={character}
+          permissions={permissions}
+          onClaim={claimToken}
+        />
       )}
 
       {/* ── Tab bar — only when sheet open ───────────────────────── */}

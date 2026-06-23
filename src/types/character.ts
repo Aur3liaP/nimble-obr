@@ -62,19 +62,11 @@ export interface Skills {
 /**
  * Defense/armor configuration for a character.
  *
- * Defense is no longer a flat manual value: it is derived from whichever
- * inventory item (with `isArmor: true`) is referenced by `equippedItemId`,
- * plus a flat `defenseBonus` (class features, racial traits, etc.).
- *
- * @remarks Legacy fields `name`, `value`, `proficient`, `equipped` are kept
- * for backward-compatibility with older saved sheets but are not used by
- * the current defense calculation (see `computeDefense` in CombatTab).
+ * Defense is derived from whichever inventory item (with `isArmor: true`)
+ * is referenced by `equippedItemId`, plus a flat `defenseBonus` (class
+ * features, racial traits, etc.) — see `computeDefense` in CombatTab.
  */
 export interface Armor {
-  name: string;
-  value: number;
-  proficient: boolean;
-  equipped: boolean;
   /** ID of the equipped armor InventoryItem */
   equippedItemId?: string;
   /** Flat bonus from class ability, racial trait, etc. */
@@ -259,10 +251,6 @@ export function createDefaultCharacter(
       stealth: 0,
     },
     armor: {
-      name: "Unarmored",
-      value: 0,
-      proficient: true,
-      equipped: false,
       equippedItemId: undefined,
       defenseBonus: 0,
     },

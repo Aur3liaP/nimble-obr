@@ -10,3 +10,4 @@ export { RowActions, TextAction } from "./RowActions";
 export { RowMeta } from "./RowMeta";
 export { RowDescriptionPanel } from "./RowDescriptionPanel";
 export { DraggableBar } from "./DraggableBar";
+export { ItemRowBase } from "./ItemRowBase";

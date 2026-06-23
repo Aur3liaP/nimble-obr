@@ -16,14 +16,12 @@ import type {
 import { DiceRollModal } from "../ui/DiceRollModal";
 import { BASIC_EQUIPMENTS } from "../../data/equipment";
 import { BentoSection } from "../ui/common/BentoSection";
-import { FavoriteButton } from "../ui/common/FavoriteButton";
-import { RollButton } from "../ui/common/RollButton";
 import { TextAction } from "../ui/common/RowActions";
 import { RowMeta } from "../ui/common/RowMeta";
-import { RowDescriptionPanel } from "../ui/common/RowDescriptionPanel";
 import { FormField, GridFields } from "../ui/common/FormField";
 import { NumericStepper } from "../ui/common/NumericStepper";
 import { ModalShell } from "../ui/common/ModalShell";
+import { ItemRowBase } from "../ui/common/ItemRowBase";
 
 // ── Types & helpers ───────────────────────────────────────────────
 /**
@@ -156,7 +154,15 @@ function AddItemModal({
     [search, filterCat],
   );
 
-  /** Converts a {@link BASIC_EQUIPMENTS} template into a concrete, non-custom {@link InventoryItem} and hands it to `onAdd`. */
+  /**
+   * Converts a {@link BASIC_EQUIPMENTS} template into a concrete, non-custom
+   * {@link InventoryItem} and hands it to `onAdd`.
+   *
+   * #12 — uses `crypto.randomUUID()`, same as the "custom" path below, so
+   * IDs are uniformly collision-safe regardless of which mode an item was
+   * added through (the "custom" form previously used `Date.now()`, which
+   * could collide on a fast double-click).
+   */
   const handleAddFromList = (template: (typeof BASIC_EQUIPMENTS)[0]) => {
     onAdd({
       id: `i-${crypto.randomUUID()}`,
@@ -217,7 +223,8 @@ function AddItemModal({
         onClick={() => {
           if (!form.name.trim()) return;
           onAdd({
-            id: `i-${Date.now()}`,
+            // #12 — was Date.now(), now uniformized on crypto.randomUUID()
+            id: `i-${crypto.randomUUID()}`,
             name: form.name,
             description: form.description,
             slots: form.slots,
@@ -638,6 +645,12 @@ export function InventoryTab({
  * (name + slot cost + resolved formula), expanded (adds description),
  * or editing (inline form for name/formula/description/slots/armor flag).
  *
+ * Built on {@link ItemRowBase} for the collapsed/
+ * expanded shell — the quantity stepper is passed in as
+ * `extraHeaderContent`, and the inline edit form is passed as `editPanel`
+ * (which replaces the description panel entirely while editing, same as
+ * the original behavior).
+ *
  * @param item - The item to render.
  * @param canEdit - Gates quantity stepper, favorite toggle, roll button, edit, and delete.
  * @param isExpanded - Whether the description panel is open.
@@ -676,131 +689,85 @@ function ItemRow({
   onDelete: () => void;
   onUpdate: (patch: Partial<InventoryItem>) => void;
 }) {
-  return (
-    <div
-      className={`rounded-lg border overflow-hidden transition-colors ${
-        isEditing
-          ? "border-emerald-700/60 bg-emerald-950/10"
-          : "border-stone-700/40 bg-stone-900/40"
-      }`}
-    >
-      {/* Main row */}
-      <div className="flex items-center gap-2 px-2.5 py-2">
-        <div className="flex-1 min-w-0 cursor-pointer" onClick={onRowClick}>
-          <div className="flex items-center gap-2">
-            <span className="text-xs font-semibold text-stone-200 truncate">
-              {item.name}
-            </span>
-            <span className="text-[9px] text-stone-500 shrink-0">
-              {slotLabel(item.slots)}
-            </span>
-            {item.isArmor && (
-              <span className="text-[9px] text-sky-400 shrink-0">🛡</span>
-            )}
-          </div>
-          <div className="flex items-center gap-3 mt-0.5">
-            <RowMeta actionCost={item.actionCost} />
-            {item.formula && (
-              <span className="text-[10px] font-mono text-amber-300/70">
-                {item.formula}
-              </span>
-            )}
-          </div>
-        </div>
+  const quantityControl = canEdit ? (
+    <NumericStepper value={item.quantity} onChange={onSetQuantity} min={0} compact />
+  ) : (
+    <span className="text-xs text-stone-400">×{item.quantity}</span>
+  );
 
-        {/* Quantity — NumericStepper remplace les 3 boutons inline */}
-        <div onClick={(e) => e.stopPropagation()}>
-          {canEdit ? (
-            <NumericStepper
-              value={item.quantity}
-              onChange={onSetQuantity}
-              min={0}
-              compact
-            />
-          ) : (
-            <span className="text-xs text-stone-400">×{item.quantity}</span>
-          )}
-        </div>
-
-        <div
-          className="flex items-center gap-1"
-          onClick={(e) => e.stopPropagation()}
+  const editPanel = isEditing ? (
+    <div className="px-3 pb-3 border-t border-emerald-800/30 pt-2 flex flex-col gap-2">
+      <FormField
+        label="Name"
+        value={item.name}
+        onChange={(v) => onUpdate({ name: v })}
+      />
+      <FormField
+        label="Roll formula"
+        value={item.formula ?? ""}
+        onChange={(v) => onUpdate({ formula: v || undefined })}
+        placeholder="e.g. 1d6+STR"
+      />
+      <FormField
+        label="Description"
+        as="textarea"
+        value={item.description ?? ""}
+        onChange={(v) => onUpdate({ description: v })}
+        rows={2}
+      />
+      <GridFields>
+        <FormField
+          label="Slots"
+          as="select"
+          value={item.slots}
+          onChange={(v) => onUpdate({ slots: parseFloat(v) })}
         >
-          <FavoriteButton
-            isFavorite={item.isFavorite ?? false}
-            canEdit={canEdit}
-            onToggle={onToggleFavorite}
+          <option value={0}>Negligible</option>
+          <option value={0.5}>½ slot</option>
+          <option value={1}>1 slot</option>
+          <option value={2}>2 slots</option>
+        </FormField>
+        <div className="flex items-center gap-1.5 mt-4">
+          <input
+            type="checkbox"
+            checked={item.isArmor ?? false}
+            onChange={(e) => onUpdate({ isArmor: e.target.checked })}
+            className="accent-sky-500"
           />
-          {canEdit && onRoll && (
-            <RollButton onClick={onRoll} accent="emerald" />
-          )}
+          <span className="text-[10px] text-stone-400">Is armor</span>
         </div>
+      </GridFields>
+      <div className="flex justify-between items-center mt-1">
+        <TextAction onClick={onDelete} label="Remove item" variant="danger" />
+        <TextAction onClick={onEditToggle} label="OK" variant="confirm" />
       </div>
-
-      {/* Description panel */}
-      {isExpanded && !isEditing && (
-        <RowDescriptionPanel
-          description={item.description}
-          onEdit={canEdit ? onEditToggle : undefined}
-          onDelete={onDelete}
-          canEdit={canEdit}
-        />
-      )}
-
-      {/* Edit panel */}
-      {isEditing && (
-        <div className="px-3 pb-3 border-t border-emerald-800/30 pt-2 flex flex-col gap-2">
-          <FormField
-            label="Name"
-            value={item.name}
-            onChange={(v) => onUpdate({ name: v })}
-          />
-          <FormField
-            label="Roll formula"
-            value={item.formula ?? ""}
-            onChange={(v) => onUpdate({ formula: v || undefined })}
-            placeholder="e.g. 1d6+STR"
-          />
-          <FormField
-            label="Description"
-            as="textarea"
-            value={item.description ?? ""}
-            onChange={(v) => onUpdate({ description: v })}
-            rows={2}
-          />
-          <GridFields>
-            <FormField
-              label="Slots"
-              as="select"
-              value={item.slots}
-              onChange={(v) => onUpdate({ slots: parseFloat(v) })}
-            >
-              <option value={0}>Negligible</option>
-              <option value={0.5}>½ slot</option>
-              <option value={1}>1 slot</option>
-              <option value={2}>2 slots</option>
-            </FormField>
-            <div className="flex items-center gap-1.5 mt-4">
-              <input
-                type="checkbox"
-                checked={item.isArmor ?? false}
-                onChange={(e) => onUpdate({ isArmor: e.target.checked })}
-                className="accent-sky-500"
-              />
-              <span className="text-[10px] text-stone-400">Is armor</span>
-            </div>
-          </GridFields>
-          <div className="flex justify-between items-center mt-1">
-            <TextAction
-              onClick={onDelete}
-              label="Remove item"
-              variant="danger"
-            />
-            <TextAction onClick={onEditToggle} label="OK" variant="confirm" />
-          </div>
-        </div>
-      )}
     </div>
+  ) : undefined;
+
+  return (
+    <ItemRowBase
+      name={item.name}
+      icon={item.isArmor ? "🛡" : undefined}
+      formula={item.formula}
+      description={item.description}
+      isExpanded={isExpanded}
+      onRowClick={onRowClick}
+      isFavorite={item.isFavorite ?? false}
+      canEdit={canEdit}
+      onToggleFavorite={onToggleFavorite}
+      onRoll={onRoll}
+      rollAccent="emerald"
+      extraHeaderContent={
+        <>
+          <span className="text-[9px] text-stone-500">{slotLabel(item.slots)}</span>
+          <RowMeta actionCost={item.actionCost} />
+          {quantityControl}
+        </>
+      }
+      onEdit={onEditToggle}
+      onDelete={onDelete}
+      editPanel={editPanel}
+    />
   );
 }
 

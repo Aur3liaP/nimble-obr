@@ -233,7 +233,7 @@ function AddSpellModal({
         onClick={() => {
           if (!form.name.trim()) return;
           onAdd({
-            id: `sp-${Date.now()}`,
+            id: `sp-${crypto.randomUUID()}`,
             name: form.name,
             type: "spell",
             range: form.range,
