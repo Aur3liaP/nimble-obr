@@ -5,10 +5,9 @@ author: Aurélia PIC (Aur3liaP)
 image: "https://nimble-obr.vercel.app/header.png"
 icon: "https://nimble-obr.vercel.app/icon.svg"
 tags:
-  - Nimble
-  - Character sheet
-  - Utility
-  - Dice
+  - tool
+  - combat
+  - dice
 manifest: "https://nimble-obr.vercel.app/manifest.json"
 learn-more: "https://github.com/Aur3liaP/nimble-obr"
 ---
