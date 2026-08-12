@@ -1,0 +1,13 @@
+{
+  "manifest_version": 1,
+  "name": "Nimble Character Sheet [DEV]",
+  "version": "1.0.0",
+  "description": "Interactive character sheet for the Nimble TTRPG system.",
+  "author": "Aurélia PIC (Aur3liaP)",
+  "icon": "/icon.svg",
+  "action": {
+    "title": "Nimble Sheet",
+    "icon": "/icon.svg",
+    "popover": "/"
+  }
+}
