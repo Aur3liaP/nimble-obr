@@ -222,7 +222,7 @@ describe("rollFormula", () => {
 
   it("flags a critical when the kept die shows its max face", () => {
     const char = makeCharacter();
-    // Run many times; with 1d1 every roll is forced to be the max face.
+    // With 1d1 every roll is forced to be the max face.
     const result = rollFormula("1d1", char);
     expect(result.isCritical).toBe(true);
     expect(result.isFumble).toBe(true); // 1 is also the min face on a d1
@@ -259,18 +259,29 @@ describe("rollFormula (pinned rolls via mocked Math.random)", () => {
   });
 
   it("fumbles but does not crit on disadvantage when rolls are [1, 20]", () => {
-    mockRolls([1, 20], 20);
     const char = makeCharacter();
+    mockRolls([1, 20], 20);
     const result = rollFormula("1d20", char, "disadvantage", 1);
     expect(result.isFumble).toBe(true);
     expect(result.isCritical).toBe(false);
   });
 
   it("crits but does not fumble on advantage when rolls are [1, 20]", () => {
-    mockRolls([1, 20], 20);
     const char = makeCharacter();
+    mockRolls([1, 20], 20);
     const result = rollFormula("1d20", char, "advantage", 1);
     expect(result.isCritical).toBe(true);
     expect(result.isFumble).toBe(false);
+  });
+
+  it("keeps the top 2 of 3 on a multi-dice advantage roll, crit off the highest", () => {
+    // 2d6 in advantage with one bonus die: kept[0] is the highest of the
+    // pool (not just of the base count), which is the intentional Nimble
+    // primary-die rule documented on rollFormula's isCritical/isFumble.
+    const char = makeCharacter();
+    mockRolls([6, 2, 4], 6);
+    const result = rollFormula("2d6", char, "advantage", 1);
+    expect(result.kept).toEqual([6, 4]);
+    expect(result.isCritical).toBe(true);
   });
 });
