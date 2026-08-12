@@ -604,8 +604,10 @@ export function rollDice(count: number, sides: number): number[] {
  * @param formula - Raw formula, e.g. "2d6+STR".
  * @param char - Character providing variable values.
  * @param mode - "standard" | "advantage" | "disadvantage".
- * @param extraDice - Number of extra dice to roll for advantage/disadvantage
- * (ignored in standard mode).
+ * @param extraDice - Number of extra dice to roll for advantage/disadvantage.
+ * Ignored (forced to 0) when `mode` is "standard", regardless of sign or
+ * value, since `mode` is the sole source of truth for how many dice are
+ * rolled and kept.
  * @returns Full breakdown: dice notation, all rolls, kept rolls, modifier,
  * total, and critical/fumble flags. If the formula has no dice (a flat
  * modifier), `rolls`/`kept` are empty and `total` equals the modifier.
@@ -671,25 +673,30 @@ export function rollFormula(
     };
   }
 
-  // Advantage/disadvantage adds extra dice, keep best/worst
-  const extraCount = Math.abs(extraDice);
+  // Advantage/disadvantage adds extra dice, keep best/worst.
+  // `mode` alone decides direction — the sign of `extraDice` is irrelevant,
+  // since callers (DiceRollModal/DicePanel) always pass a positive count.
+  const extraCount = mode === "standard" ? 0 : Math.abs(extraDice);
   const totalCount = count + extraCount;
   const rolls = rollDice(totalCount, sides);
 
   let kept: number[];
-  if (mode === "standard" && extraDice === 0) {
-    kept = rolls;
-  } else if (mode === "advantage" || extraDice > 0) {
-    const sorted = [...rolls].sort((a, b) => b - a);
-    kept = sorted.slice(0, count);
+  if (mode === "advantage") {
+    kept = [...rolls].sort((a, b) => b - a).slice(0, count);
+  } else if (mode === "disadvantage") {
+    kept = [...rolls].sort((a, b) => a - b).slice(0, count);
   } else {
-    const sorted = [...rolls].sort((a, b) => a - b);
-    kept = sorted.slice(0, count);
+    kept = rolls;
   }
 
   const diceSum = kept.reduce((a, b) => a + b, 0);
   const total = diceSum + modifier;
 
+  // `kept` is sorted by mode: descending on advantage, ascending on
+  // disadvantage, so `kept[0]` is the highest die on advantage and the
+  // lowest on disadvantage. This is intentional — in Nimble, disadvantage
+  // discards the highest roll, so the primary kept die is the low one, and
+  // crit/fumble detection must read off that same die.
   const isCritical = kept[0] === sides;
   const isFumble = kept[0] === 1;
 
