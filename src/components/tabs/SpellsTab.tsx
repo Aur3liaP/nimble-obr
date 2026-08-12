@@ -459,7 +459,10 @@ export function SpellsTab({
   );
 
   /** Subset of `character.actions` with `type === "spell"`. */
-  const spells = character.actions.filter((a) => a.type === "spell");
+  const spells = useMemo(
+    () => character.actions.filter((a) => a.type === "spell"),
+    [character.actions],
+  );
 
   /** Distinct tiers present among the character's known spells, sorted ascending — used to build the tier filter pills (hidden if there's only one tier). */
   const tiers = [...new Set(spells.map((s) => s.spellTier ?? 0))].sort();
