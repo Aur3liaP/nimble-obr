@@ -12,7 +12,16 @@ Owlbear Rodeo (OBR) extension: a real-time-synced character sheet panel for the 
 - `npm run build` : `tsc -b && vite build`
 - `npm run type-check` : `tsc --noEmit`
 - `npm run lint` : `eslint . --ext ts,tsx --report-unused-disable-directives --max-warnings 0`
-- **No test suite exists** (no vitest/jest/playwright configured). `type-check` + `lint` passing is the bar for "done". Changes touching permissions, sync, or roll flow need manual multiplayer verification in OBR (multiple accounts). Flag this rather than claiming it's tested.
+- `npm run test` : Vitest suite on `src/utils/formulaParser.test.ts` (97 tests).
+  Pure functions only, no OBR dependency. Deterministic dice via a `Math.random`
+  spy (`mockRolls` helper), not by mocking `rollDice` (ESM mocking limitations
+  in Vitest, and mocking it would leak into the public API signature).
+- `type-check` + `lint` + `test` passing is the bar for "done". Changes touching
+  permissions, sync, or roll flow still need manual multiplayer verification in
+  OBR (multiple accounts, multiple clients). There is no automated substitute.
+  Flag this rather than claiming it's tested.
+- After writing a test, reintroduce the bug it targets by hand and confirm the
+  test goes red. A test that stays green on the known bug isn't doing its job.
 
 ## Architecture
 
@@ -50,7 +59,69 @@ These exist because of bugs already diagnosed and fixed. Changing them reintrodu
 
 ### Formula parser (`src/utils/formulaParser.ts`)
 
-Hand-rolled recursive-descent parser. **Never use `eval()` or `Function()`** here, by design, to avoid arbitrary code execution from a player- or GM-typed formula. Preserve the existing safety limits when touching it: `MAX_FORMULA_LENGTH = 200`, `MAX_PARSE_DEPTH = 30`, `MAX_DICE_COUNT = 100`, `MAX_DICE_SIDES = 1000`. Syntax supports dice (`1d8`), stats (`STR/DEX/INT/WIL`), `KEY`/`FLAW`, skills, `LEVEL`, arithmetic, `floor()`/`ceil()`/`min()`/`max()`, and dynamic dice (`incrementdice(1, level)d12`, `stepdice(...)`).
+Hand-rolled recursive-descent parser. **Never use `eval()` or `Function()`**
+here, by design, to avoid arbitrary code execution from a player- or GM-typed
+formula.
+
+Syntax: dice (`1d8`, or implicit-count `d66`), stats (`STR/DEX/INT/WIL`),
+`KEY`/`FLAW`, skills, `LEVEL`/`LVL`, arithmetic, `floor()`/`ceil()`/`min()`/
+`max()`, and dynamic dice (`incrementdice(1, level)d12`, `1dstepdice(...)`).
+
+#### Decisions (do not "fix" these)
+
+Each of these was a real bug or a deliberate trade-off, diagnosed and settled.
+Reverting one reintroduces the bug.
+
+- **The rulebook's notation is the spec, not the parser's.** Three separate
+  bugs came from data being "wrong" when the parser was too strict: `d66`
+  (implicit count), `KEYd20` (variable glued to a die), `LVL` (book shorthand).
+  When game data doesn't parse, fix the parser, don't rewrite `spells.ts`.
+- **`LVL` is a deliberate alias for `LEVEL`.** The book uses it, so a GM
+  writing a custom spell will too. Not redundant, do not remove.
+- **Validation lives at the choke point.** `resolveDynamicDice` validates every
+  `NdX` token after resolution; `assertDiceWithinLimits` is the single shared
+  guard. The original DoS existed because limits were enforced on the display
+  path (`diceToAverage`) only. Never add a dice path that skips it.
+- **Failures are loud, never a silent zero.** Unknown tokens throw; `NaN`
+  throws; a 0 dice count throws. `rollFormula`, `evalFormula` and
+  `resolveFormulaDisplay` all return `{ ..., error? }` and every caller must
+  check `error` before writing to OBR or displaying a value. A roll that failed
+  must never reach the shared log as a legitimate 0. This cost several rounds
+  to clean up: do not reintroduce a `|| 0`, `?? 0` or `isNaN(x) ? 0 : x`
+  fallback on a failure path.
+- **Error state never lives in a module variable.** It travels on the return
+  value. A previous `lastFormulaError` module-level variable was written during
+  render (`resolveFormulaDisplay` is called from row components) and
+  desynchronised. Module-level mutable state read during render is unsupported
+  in React 19.
+- **The lower dice bound only ever catches `count === 0`.** A negative count
+  (`-1d6`) is caught earlier by `Parser.parse`'s full-consumption check, on
+  purpose: the choke-point regex can't capture a leading `-` without
+  misdiagnosing legitimate subtraction (`10-1d6`).
+- **`stepdice` only supports the `1d` prefix, and no nested arguments.** Not an
+  oversight: no real game content needs either, and any deviation now fails
+  loudly rather than returning a wrong number.
+- **`MAX_DICE_COUNT` / `MAX_DICE_SIDES` are sanity bounds, not balance
+  bounds.** A legal level-20 character's real spells top out around 5 dice and
+  d12, roughly 20x and 80x below the limits. They guard against a hand-typed
+  formula, nothing more. Don't tighten them to "match the game".
+- **`Parser.parse` requires full input consumption.** Without it, a recognised
+  prefix followed by garbage returns a plausible number.
+- **`parseUnary` handles unary `+` explicitly.** Flat bonuses (`+8`) and
+  stripped formula tails (`+3+2`) previously worked only by accident, via the
+  unknown-token fallback that returned 0.
+- **`manualResolution: true` marks flavour-text formulas** (e.g. equipment
+  reading `WeaponDamage + ...`, resolved by the GM by hand). The exhaustive
+  data test filters on this field, so exclusions live in the data, never as a
+  hardcoded list in the test.
+- **Three paths must reject identically:** `validateFormula` (write-time),
+  `evalFormulaWithContext` (display value), `resolveFormulaDisplay` (display
+  string). A cross-consistency test enforces this. If you add a check to one,
+  add it to all three.
+- **A reflexive test iterates `FormulaContext`'s own keys** to verify every
+  documented variable actually substitutes. `FLAW` was documented in the
+  README and computed in `buildContext` but never wired up, and nothing caught
+  it. Any field added to the context must be substituted or that test fails.
 
 ## Code style
 
