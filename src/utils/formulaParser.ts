@@ -133,6 +133,109 @@ function variablePattern(name: string): RegExp {
 }
 
 /**
+ * One row of the substitution table {@link substituteVariables} walks, in
+ * order. This table is the single source of truth for every variable
+ * token the formula language accepts: it is not a description of the
+ * substitution logic, it *is* the substitution logic, and also what
+ * {@link listFormulaVariables} reflects over to drive the in-app formula
+ * help panel. A variable that isn't in this table cannot substitute and
+ * cannot appear in the help panel, and vice versa — the two can't drift
+ * apart the way FLAW (documented in prose, never wired up) once did; see
+ * the @file header.
+ */
+interface VariableEntry {
+  /** Uppercase token as it appears in a formula, e.g. "STR", "LVL". */
+  name: string;
+  /** Resolves this token's numeric value from a context. */
+  value: (ctx: FormulaContext) => number;
+  /**
+   * Set when this token is a pure alias for another entry's `name`
+   * (identical resolution, different spelling the rulebook or a GM might
+   * use) — e.g. LVL for LEVEL. Purely descriptive, read only by
+   * {@link listFormulaVariables}; the substitution loop below applies
+   * every row identically regardless of this field.
+   */
+  aliasOf?: string;
+}
+
+/**
+ * @remarks Order matters for two entries: MAXHP must precede HP, because
+ * "HP" is a trailing substring of "MAXHP" and the left `\b` in
+ * {@link variablePattern} doesn't prevent `\bHP` from matching inside
+ * "MAXHP" on its own (no boundary between "X" and "H", both word
+ * characters) — verified by test, not just asserted. Every other entry is
+ * independent of order.
+ */
+const VARIABLE_TABLE: VariableEntry[] = [
+  { name: "STR", value: (ctx) => ctx.stats.str },
+  { name: "DEX", value: (ctx) => ctx.stats.dex },
+  { name: "INT", value: (ctx) => ctx.stats.int },
+  { name: "WIL", value: (ctx) => ctx.stats.wil },
+
+  { name: "KEY", value: (ctx) => ctx.key },
+  // FLAW is documented (see @file header) and already computed by
+  // buildContext, but had no substitution line at all — not a boundary
+  // bug like KEY/LEVEL, just never wired up. No real formula uses it yet,
+  // but it's intended, supported syntax.
+  { name: "FLAW", value: (ctx) => ctx.flaw },
+
+  // LVL is a deliberate alias for LEVEL, not a typo to remove; see the
+  // @file header for why.
+  { name: "LEVEL", value: (ctx) => ctx.level },
+  { name: "LVL", value: (ctx) => ctx.level, aliasOf: "LEVEL" },
+
+  { name: "ARCANA", value: (ctx) => ctx.skills.arcana },
+  { name: "EXAMINATION", value: (ctx) => ctx.skills.examination },
+  { name: "FINESSE", value: (ctx) => ctx.skills.finesse },
+  { name: "INFLUENCE", value: (ctx) => ctx.skills.influence },
+  { name: "INSIGHT", value: (ctx) => ctx.skills.insight },
+  { name: "LORE", value: (ctx) => ctx.skills.lore },
+  { name: "MIGHT", value: (ctx) => ctx.skills.might },
+  { name: "NATURECRAFT", value: (ctx) => ctx.skills.naturecraft },
+  { name: "PERCEPTION", value: (ctx) => ctx.skills.perception },
+  { name: "STEALTH", value: (ctx) => ctx.skills.stealth },
+
+  // MAXHP before HP — see the @remarks above the table.
+  { name: "MAXHP", value: (ctx) => ctx.maxHp ?? 0 },
+  { name: "HP", value: (ctx) => ctx.hp ?? 0 },
+];
+
+/**
+ * Describes one formula variable for display purposes (e.g. the in-app
+ * formula help panel): its canonical token plus any aliases that resolve
+ * identically.
+ */
+export interface FormulaVariableInfo {
+  /** Canonical uppercase token, e.g. "STR", "LEVEL". */
+  name: string;
+  /** Other uppercase tokens that resolve identically, e.g. ["LVL"] for "LEVEL". */
+  aliases: string[];
+}
+
+/**
+ * Lists every variable token the formula language accepts, grouped by
+ * canonical name with aliases attached (e.g. LEVEL with alias LVL).
+ *
+ * @remarks Reflects over {@link VARIABLE_TABLE} — the exact table
+ * {@link substituteVariables} walks to perform substitution, not a
+ * hand-copied list — so this can never advertise a variable that doesn't
+ * actually substitute, or omit one that does. This is the mechanism the
+ * in-app formula help panel relies on to avoid the FLAW bug (a variable
+ * documented in prose but never wired up; see the @file header) ever
+ * happening again for any variable, aliases included.
+ */
+export function listFormulaVariables(): FormulaVariableInfo[] {
+  const byName = new Map<string, FormulaVariableInfo>();
+  for (const entry of VARIABLE_TABLE) {
+    if (!entry.aliasOf) byName.set(entry.name, { name: entry.name, aliases: [] });
+  }
+  for (const entry of VARIABLE_TABLE) {
+    if (entry.aliasOf) byName.get(entry.aliasOf)?.aliases.push(entry.name);
+  }
+  return [...byName.values()];
+}
+
+/**
  * Replaces all known variable tokens (STR, DEX, LEVEL, skill names, HP…)
  * in a formula string with their numeric values from the given context.
  * Also normalizes `Math.floor(`/`Math.ceil(`/`Math.min(`/`Math.max(` to the
@@ -152,44 +255,9 @@ function substituteVariables(formula: string, ctx: FormulaContext): string {
 
   let f = formula.trim().toUpperCase();
 
-  // Stats
-  f = f.replace(variablePattern("STR"), String(ctx.stats.str));
-  f = f.replace(variablePattern("DEX"), String(ctx.stats.dex));
-  f = f.replace(variablePattern("INT"), String(ctx.stats.int));
-  f = f.replace(variablePattern("WIL"), String(ctx.stats.wil));
-
-  f = f.replace(variablePattern("KEY"), String(ctx.key));
-  // FLAW is documented (see @file header) and already computed by
-  // buildContext, but had no substitution line at all — not a boundary
-  // bug like KEY/LEVEL, just never wired up. No real formula uses it yet,
-  // but it's intended, supported syntax.
-  f = f.replace(variablePattern("FLAW"), String(ctx.flaw));
-
-  // Level — LVL is a deliberate alias, not a typo to remove; see the
-  // @file header for why.
-  f = f.replace(variablePattern("LEVEL"), String(ctx.level));
-  f = f.replace(variablePattern("LVL"), String(ctx.level));
-
-  // Skills
-  f = f.replace(variablePattern("ARCANA"), String(ctx.skills.arcana));
-  f = f.replace(variablePattern("EXAMINATION"), String(ctx.skills.examination));
-  f = f.replace(variablePattern("FINESSE"), String(ctx.skills.finesse));
-  f = f.replace(variablePattern("INFLUENCE"), String(ctx.skills.influence));
-  f = f.replace(variablePattern("INSIGHT"), String(ctx.skills.insight));
-  f = f.replace(variablePattern("LORE"), String(ctx.skills.lore));
-  f = f.replace(variablePattern("MIGHT"), String(ctx.skills.might));
-  f = f.replace(variablePattern("NATURECRAFT"), String(ctx.skills.naturecraft));
-  f = f.replace(variablePattern("PERCEPTION"), String(ctx.skills.perception));
-  f = f.replace(variablePattern("STEALTH"), String(ctx.skills.stealth));
-
-  // HP — MAXHP must be replaced before HP. "HP" is a trailing substring of
-  // "MAXHP" (not a prefix of it), and the left `\b` in variablePattern
-  // already prevents `\bHP` from matching inside "MAXHP" on its own (no
-  // boundary between "X" and "H", both word characters) — verified by
-  // test, not just asserted. Ordering the longer/more-specific name first
-  // removes any need to rely on that reasoning holding forever.
-  f = f.replace(variablePattern("MAXHP"), String(ctx.maxHp ?? 0));
-  f = f.replace(variablePattern("HP"), String(ctx.hp ?? 0));
+  for (const entry of VARIABLE_TABLE) {
+    f = f.replace(variablePattern(entry.name), String(entry.value(ctx)));
+  }
 
   // floor / ceil shorthands → keep as tokens for the parser
   f = f.replace(/MATH\.FLOOR\(/g, "floor(");
