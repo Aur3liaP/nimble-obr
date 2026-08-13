@@ -10,12 +10,14 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createDefaultCharacter, type NimbleCharacter } from "../types/character";
 import {
+  buildContext,
   diceToAverage,
   evalFormula,
   parseDamageFormula,
   resolveFormulaDisplay,
   rollFormula,
   safeEval,
+  validateFormula,
 } from "./formulaParser";
 
 function makeCharacter(overrides: Partial<NimbleCharacter> = {}): NimbleCharacter {
@@ -152,22 +154,77 @@ describe("parseDamageFormula", () => {
     expect(result.diceNotation).toBe("");
     expect(result.modifier).toBe(5);
   });
+
+  it("throws when dice count exceeds the safety limit", () => {
+    const ctx = buildContext(makeCharacter());
+    expect(() => parseDamageFormula("101d6", ctx)).toThrow();
+  });
+
+  it("throws when dice sides exceed the safety limit", () => {
+    const ctx = buildContext(makeCharacter());
+    expect(() => parseDamageFormula("1d1001", ctx)).toThrow();
+  });
+
+  it("throws when incrementdice resolves to a dice count beyond the safety limit", () => {
+    const ctx = buildContext(makeCharacter({ level: 500 }));
+    // incrementdice(1, LEVEL) -> 1 + floor(500/5) = 101 dice, over MAX_DICE_COUNT
+    expect(() =>
+      parseDamageFormula("incrementdice(1,LEVEL)d6", ctx),
+    ).toThrow();
+  });
+
+  it("throws when stepdice resolves to a die size beyond the safety limit", () => {
+    const ctx = buildContext(makeCharacter({ level: 20 }));
+    // level >= 15 picks the 4th die size; 1001 is over MAX_DICE_SIDES
+    expect(() =>
+      parseDamageFormula("1dstepdice(LEVEL,4,6,8,1001)", ctx),
+    ).toThrow();
+  });
+
+  it("does not throw for dice count/sides exactly at the safety limit", () => {
+    const ctx = buildContext(makeCharacter());
+    expect(parseDamageFormula("100d6", ctx).diceNotation).toBe("100d6");
+    expect(parseDamageFormula("1d1000", ctx).diceNotation).toBe("1d1000");
+  });
 });
 
 describe("resolveFormulaDisplay", () => {
   it("keeps dice notation but resolves the modifier", () => {
     const char = makeCharacter();
-    expect(resolveFormulaDisplay("1d8 + STR + 2", char)).toBe("1d8+5");
+    expect(resolveFormulaDisplay("1d8 + STR + 2", char).display).toBe(
+      "1d8+5",
+    );
   });
 
   it("omits a zero modifier", () => {
     const char = makeCharacter({ stats: { str: 0, dex: 0, int: 0, wil: 0 } });
-    expect(resolveFormulaDisplay("1d8 + STR", char)).toBe("1d8");
+    expect(resolveFormulaDisplay("1d8 + STR", char).display).toBe("1d8");
   });
 
   it("resolves to a plain number when there is no dice notation", () => {
     const char = makeCharacter();
-    expect(resolveFormulaDisplay("STR + 2", char)).toBe("5");
+    expect(resolveFormulaDisplay("STR + 2", char).display).toBe("5");
+  });
+
+  it("falls back to the raw formula and reports an error instead of crashing the row, for a formula already stored beyond the safety limit", () => {
+    // Simulates a scene that already has an oversized formula persisted on
+    // an action/spell/item (e.g. saved before write-time validation existed,
+    // or edited directly in metadata) — rendering that row must degrade
+    // gracefully rather than throw during render.
+    const char = makeCharacter();
+    const result = resolveFormulaDisplay("101d6", char);
+    expect(result.display).toBe("101d6");
+    expect(result.error).toMatch(/out of range/i);
+  });
+
+  it("rethrows anything that isn't a FormulaError instead of masking it as an invalid formula", () => {
+    const char = makeCharacter();
+    // A non-string formula reaching substituteVariables (e.g. corrupted
+    // metadata) throws a plain TypeError, not a FormulaError — a genuine
+    // bug that must keep its stack instead of being reported to the user
+    // as "invalid formula" like a safety-limit violation would be.
+    const notAString = null as unknown as string;
+    expect(() => resolveFormulaDisplay(notAString, char)).toThrow(TypeError);
   });
 });
 
@@ -226,6 +283,108 @@ describe("rollFormula", () => {
     const result = rollFormula("1d1", char);
     expect(result.isCritical).toBe(true);
     expect(result.isFumble).toBe(true); // 1 is also the min face on a d1
+  });
+
+  it("rejects a dice count over the safety limit instead of rolling it", () => {
+    const char = makeCharacter();
+    const result = rollFormula("101d6", char);
+    expect(result.rolls).toEqual([]);
+    expect(result.total).toBe(0);
+    expect(result.error).toMatch(/out of range/i);
+  });
+
+  it("rejects dice sides over the safety limit instead of rolling them", () => {
+    const char = makeCharacter();
+    const result = rollFormula("1d1001", char);
+    expect(result.rolls).toEqual([]);
+    expect(result.total).toBe(0);
+    expect(result.error).toMatch(/out of range/i);
+  });
+
+  it("rejects dynamically-resolved dice (incrementdice) that exceed the safety limit, instead of freezing on a huge roll", () => {
+    const char = makeCharacter({ level: 500 });
+    // incrementdice(1, LEVEL) -> 1 + floor(500/5) = 101 dice, over MAX_DICE_COUNT.
+    // This is the exact DoS shape the fix closes: a dynamic formula that
+    // only becomes oversized after resolution, previously never checked
+    // on the rollFormula path (only on the diceToAverage display path).
+    const result = rollFormula("incrementdice(1,LEVEL)d6", char);
+    expect(result.rolls).toEqual([]);
+    expect(result.total).toBe(0);
+    expect(result.error).toMatch(/out of range/i);
+  });
+
+  it("still rolls dynamically-resolved dice exactly at the safety limit", () => {
+    const char = makeCharacter({ level: 495 });
+    // incrementdice(1, LEVEL) -> 1 + floor(495/5) = 100 dice, exactly at MAX_DICE_COUNT.
+    const result = rollFormula("incrementdice(1,LEVEL)d6", char);
+    expect(result.rolls).toHaveLength(100);
+    expect(result.error).toBeUndefined();
+  });
+
+  it("rejects a formula where only the second of two dice tokens exceeds the limit", () => {
+    // parseDamageFormula only ever extracts the *leading* NdX as the roll's
+    // diceNotation, but the choke point in resolveDynamicDice scans every
+    // NdX token in the formula, not just the leading one — this proves a
+    // limit violation buried past the first token isn't missed.
+    const char = makeCharacter();
+    const result = rollFormula("2d6 + 101d6", char);
+    expect(result.rolls).toEqual([]);
+    expect(result.total).toBe(0);
+    expect(result.error).toMatch(/out of range/i);
+  });
+
+  it("leaves a well-formed multi-token formula alone when both tokens are within the limit", () => {
+    const char = makeCharacter();
+    const result = rollFormula("2d6 + 3d4", char);
+    expect(result.diceNotation).toBe("2d6"); // leading token only, by design
+    expect(result.error).toBeUndefined();
+  });
+
+  it("only reaches modest dice counts/sides for a legal max-level character on the project's real dynamic-dice spells, nowhere near the safety limits", () => {
+    // Level 20 is the highest level this app's UI lets a player reach
+    // (no MAX_LEVEL constant enforces this in code — flagged separately).
+    // These are real formulas from src/data/spells.ts, not synthetic ones.
+    const char = makeCharacter({ level: 20 });
+
+    // Shadow Blast: "incrementdice(1,level)d12+KEY" -> 1 + floor(20/5) = 5 dice of d12.
+    const shadowBlast = rollFormula("incrementdice(1,level)d12+KEY", char);
+    expect(shadowBlast.rolls).toHaveLength(5);
+    expect(shadowBlast.error).toBeUndefined();
+
+    // Entice: "1dstepdice(level,4,8,10,12)" -> level >= 15 picks the d12 tier.
+    const entice = rollFormula("1dstepdice(level,4,8,10,12)", char);
+    expect(entice.rolls).toHaveLength(1);
+    entice.rolls.forEach((r) => expect(r).toBeLessThanOrEqual(12));
+    expect(entice.error).toBeUndefined();
+
+    // 5 dice and d12 sides are nowhere near MAX_DICE_COUNT (100) or
+    // MAX_DICE_SIDES (1000): the margin is roughly 20x on count and 80x on
+    // sides. These limits protect against a hand-typed/malicious custom
+    // formula, not against anything a legally-built level-20 character's
+    // real spell list can produce.
+  });
+});
+
+describe("validateFormula (write-time safety gate)", () => {
+  it("does not throw for a well-formed formula within all limits", () => {
+    const ctx = buildContext(makeCharacter());
+    expect(() => validateFormula("1d8 + STR + 2", ctx)).not.toThrow();
+  });
+
+  it("throws for dice count/sides beyond the safety limits", () => {
+    const ctx = buildContext(makeCharacter());
+    expect(() => validateFormula("101d6", ctx)).toThrow();
+    expect(() => validateFormula("1d1001", ctx)).toThrow();
+  });
+
+  it("throws for dynamically-resolved dice beyond the safety limits", () => {
+    const ctx = buildContext(makeCharacter({ level: 500 }));
+    expect(() => validateFormula("incrementdice(1,LEVEL)d6", ctx)).toThrow();
+  });
+
+  it("throws for an over-length formula", () => {
+    const ctx = buildContext(makeCharacter());
+    expect(() => validateFormula("1+".repeat(150) + "1", ctx)).toThrow();
   });
 });
 
