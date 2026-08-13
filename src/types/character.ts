@@ -88,6 +88,15 @@ export interface CharacterAction {
   slots?: number;
   isCustom?: boolean;
   actionCost?: number;
+  /**
+   * If true, `formula` is flavor-text shorthand for the GM to interpret
+   * manually rather than a formula meant to be evaluated or rolled by the
+   * engine. Mirrors {@link InventoryItem.manualResolution}; not currently
+   * set on any spell in src/data/spells.ts, but the field exists so a
+   * future flavor-only spell formula has somewhere to be marked instead of
+   * failing the game-data validation test with no way to exclude it.
+   */
+  manualResolution?: boolean;
 }
 
 export interface InventoryItem {
@@ -104,6 +113,14 @@ export interface InventoryItem {
   isArmor?: boolean;
   armorValue?: number;
   actionCost?: number;
+  /**
+   * If true, `formula` is flavor-text shorthand for the GM to interpret
+   * manually (e.g. "WeaponDamage + 1d4" on a magic weapon, referencing
+   * whatever weapon it's enchanting — a concept this app has no variable
+   * for), not a formula meant to be evaluated or rolled by the engine.
+   * Content-validation tests exclude these instead of treating them as bugs.
+   */
+  manualResolution?: boolean;
 }
 
 /**

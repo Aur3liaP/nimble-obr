@@ -82,19 +82,27 @@ const ACTION_ICONS = {
  * DEX + the flat bonus (unarmored).
  *
  * @param character - The character to compute defense for.
- * @returns The resolved numeric defense value.
+ * @returns `value`: the resolved defense number. `error` is set when the
+ * equipped armor's formula is broken — in that case `value` is *not* a
+ * trustworthy defense number (just `defenseBonus` with no armor
+ * contribution) and the caller must show that distinctly rather than
+ * rendering it as if the character really has that little defense.
  */
-function computeDefense(character: NimbleCharacter): number {
+function computeDefense(character: NimbleCharacter): {
+  value: number;
+  error?: string;
+} {
   const armorItem = character.inventory.find(
     (i) => i.id === character.armor.equippedItemId && i.isArmor,
   );
   if (armorItem?.formula) {
-    return (
-      evalFormula(armorItem.formula, character) +
-      (character.armor.defenseBonus ?? 0)
-    );
+    const { value, error } = evalFormula(armorItem.formula, character);
+    return {
+      value: value + (character.armor.defenseBonus ?? 0),
+      error,
+    };
   }
-  return character.stats.dex + (character.armor.defenseBonus ?? 0);
+  return { value: character.stats.dex + (character.armor.defenseBonus ?? 0) };
 }
 
 /**
@@ -153,7 +161,8 @@ export function CombatTab({
     onUpdate({ hp: { ...character.hp, current: Math.max(0, v) } }),
   );
 
-  const defenseValue = computeDefense(character);
+  const { value: defenseValue, error: defenseError } =
+    computeDefense(character);
   const armorItems = character.inventory.filter((i) => i.isArmor);
   const equippedArmorItem = armorItems.find(
     (i) => i.id === character.armor.equippedItemId,
@@ -389,8 +398,17 @@ export function CombatTab({
       <BentoSection>
         <div className="flex items-center justify-between -mt-2">
           <p className="bento-label">Defense</p>
-          <span className="text-3xl font-black text-sky-300">
-            {defenseValue}
+          <span
+            className={`text-3xl font-black ${
+              defenseError ? "text-rose-400" : "text-sky-300"
+            }`}
+            title={
+              defenseError
+                ? `Armor formula is broken, can't compute defense: ${defenseError}`
+                : undefined
+            }
+          >
+            {defenseError ? "⚠" : defenseValue}
           </span>
         </div>
         <div className="flex flex-col gap-2">

@@ -672,6 +672,7 @@ export const BASIC_EQUIPMENTS: ItemTemplate[] = [
     formula: "WeaponDamage + 1d4", // 1d4 (Uncommon) à 1d10 (Legendary)
     actionCost: 1,
     isCustom: false,
+    manualResolution: true,
   },
   {
     name: "Weapon of Wounding",
@@ -682,6 +683,7 @@ export const BASIC_EQUIPMENTS: ItemTemplate[] = [
     formula: "WeaponDamage + (1d6 * 2)",
     actionCost: 1,
     isCustom: false,
+    manualResolution: true,
   },
   {
     name: "Resolute Fangs, Golden Bastion",
@@ -702,6 +704,7 @@ export const BASIC_EQUIPMENTS: ItemTemplate[] = [
     isEquipped: false,
     formula: "WeaponDamage + 1d12",
     actionCost: 1,
+    manualResolution: true,
     isCustom: false,
   },
   {
