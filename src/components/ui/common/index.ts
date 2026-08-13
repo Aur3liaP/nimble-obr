@@ -11,3 +11,4 @@ export { RowMeta } from "./RowMeta";
 export { RowDescriptionPanel } from "./RowDescriptionPanel";
 export { DraggableBar } from "./DraggableBar";
 export { ItemRowBase } from "./ItemRowBase";
+export { FormulaHelpButton } from "./FormulaHelp";
