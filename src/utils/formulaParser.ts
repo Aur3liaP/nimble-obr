@@ -5,8 +5,10 @@
  *  - Stat references: STR, DEX, INT, WIL (case-insensitive)
  *  - Skill references: MIGHT, STEALTH, etc.
  *  - LEVEL, KEY (key stat value), FLAW (flaw stat value)
- *  - Dice notation: NdX (e.g. 1d8, 2d6) — averaged for display/modifier math;
- *    actual random rolling is done separately by {@link rollFormula}
+ *  - Dice notation: NdX (e.g. 1d8, 2d6), or implicit-count dN (e.g. Nimble's
+ *    single-die d44/d66/d88), normalized to 1dN — averaged for display/
+ *    modifier math; actual random rolling is done separately by
+ *    {@link rollFormula}
  *  - Math: + - * / floor() ceil() min() max()
  *  - Custom helpers: incrementdice(base, level), stepdice(level, d1, d2, d3, d4)
  *  - Parentheses
@@ -30,10 +32,25 @@ const MAX_FORMULA_LENGTH = 200;
 /** Maximum recursion depth allowed in the parser (guards against deeply nested parentheses/functions). */
 const MAX_PARSE_DEPTH = 30;
 
-/** Maximum number of dice allowed in a single NdX roll. */
+/**
+ * Maximum number of dice allowed in a single NdX roll.
+ *
+ * @remarks Sanity bound against a hand-typed/malicious formula, not a game
+ * balance bound: a legal level-20 character rolling this project's own
+ * dynamic-dice spells (e.g. Shadow Blast's `incrementdice(1,level)d12`)
+ * only ever reaches ~5 dice, roughly 20x below this limit. Tightening it
+ * further wouldn't protect against real spell content, only against
+ * formulas nobody's build can actually produce.
+ */
 const MAX_DICE_COUNT = 100;
 
-/** Maximum number of sides allowed on a single die. */
+/**
+ * Maximum number of sides allowed on a single die.
+ *
+ * @remarks Same caveat as {@link MAX_DICE_COUNT}: a legal level-20
+ * character's dynamic-dice spells top out around d12 (e.g. Entice's
+ * `1dstepdice(level,4,8,10,12)`), roughly 80x below this limit.
+ */
 const MAX_DICE_SIDES = 1000;
 
 /**
@@ -267,9 +284,22 @@ class Parser {
     }
   }
 
-  /** Entry point */
+  /**
+   * Entry point. Requires the *entire* input to be consumed — without
+   * this, a recognized prefix followed by garbage (e.g. "2dstepdice(…)",
+   * where "2" parses fine and "dstepdice(…)" is silently dropped) returns
+   * a plausible-looking number instead of surfacing the leftover text.
+   */
   parse(): number {
     const result = this.parseExpr();
+    this.skipWhitespace();
+    if (this.pos < this.input.length) {
+      throw new FormulaError(
+        `Unexpected trailing input in formula: "${this.input.slice(this.pos, this.pos + 20)}${
+          this.pos + 20 < this.input.length ? "…" : ""
+        }".`,
+      );
+    }
     return result;
   }
 
@@ -316,13 +346,28 @@ class Parser {
     }
   }
 
-  /** unary = '-' primary | primary */
+  /**
+   * unary = ('-' | '+') primary | primary
+   *
+   * The explicit '+' branch matters now that {@link parsePrimary} throws
+   * instead of returning 0 on an unrecognized token: a leading '+' in
+   * formulas like "+2" (a flat armor bonus) or "+STR+2" (the tail of
+   * "1d8+STR+2" once its dice part is stripped) used to reach 0 only
+   * because parsePrimary silently ignored the unmatched '+' and returned
+   * 0, which parseExpr's own '+' handling then happened to add onto. That
+   * accidental path is gone, so '+' needs real unary handling, symmetric
+   * with '-', instead of relying on the unknown-token fallback.
+   */
   private parseUnary(): number {
     this.enterDepth();
     try {
       if (this.peek() === "-") {
         this.consume();
         return -this.parsePrimary();
+      }
+      if (this.peek() === "+") {
+        this.consume();
+        return this.parsePrimary();
       }
       return this.parsePrimary();
     } finally {
@@ -431,7 +476,17 @@ class Parser {
         return d1;
       }
 
-      return 0; // Unknown token — return 0 gracefully
+      // Unknown token — this used to `return 0` silently, which is exactly
+      // the "rolled 0 without saying why" failure mode this app must not
+      // have for a dice roller broadcast to a table. A typo'd variable, a
+      // stray leftover identifier, or genuinely malformed input must be
+      // reported, not disguised as a legitimate zero result.
+      const remainder = this.input.slice(this.pos, this.pos + 20);
+      throw new FormulaError(
+        `Unrecognized token in formula: "${remainder}${
+          this.pos + 20 < this.input.length ? "…" : ""
+        }".`,
+      );
     } finally {
       this.exitDepth();
     }
@@ -464,6 +519,32 @@ export function safeEval(expr: string): number {
 }
 
 /**
+ * Normalizes implicit-count dice notation (`dN`, e.g. Nimble's `d66`/`d44`/
+ * `d88` single dice) to explicit `1dN` so it reads as real dice notation
+ * everywhere downstream (the safety-limit check right below, then
+ * `parseDamageFormula`'s leading-dice match, then `rollDice`).
+ *
+ * Only a `d` with no digit or letter immediately before it qualifies — this
+ * is what keeps the already-explicit count in "2d6" untouched, and keeps
+ * this from firing inside "stepdice(", "incrementdice(", or the "1d" this
+ * function's own replacements above just produced (all of which have a
+ * letter or digit directly before their "d…" position). Must run *after*
+ * those replacements: normalizing first would insert a stray "1" between
+ * the ")" and the trailing "d6" of "incrementdice(1,20)d6", breaking that
+ * regex's own `\)d(\d+)` match.
+ *
+ * @param formula - Formula with `incrementdice`/`stepdice` already expanded.
+ * @returns The formula with every bare `dN` rewritten to `1dN`.
+ */
+function normalizeImplicitDiceCount(formula: string): string {
+  return formula.replace(
+    /([a-z0-9]?)d(\d+)/gi,
+    (match, precedingChar: string, sides: string) =>
+      precedingChar ? match : `1d${sides}`,
+  );
+}
+
+/**
  * Resolves the project's two custom dynamic-dice helpers into plain NdX
  * notation before the rest of the pipeline (averaging / rolling) runs.
  *
@@ -489,13 +570,15 @@ function resolveDynamicDice(formula: string): string {
   });
 
   formula = formula.replace(
-    /incrementdice\((\d+),(\d+)\)d(\d+)/gi,
+    /incrementdice\(\s*(\d+)\s*,\s*(\d+)\s*\)d(\d+)/gi,
     (_match, base, level, sides) => {
       const count = Number(base) + Math.floor(Number(level) / 5);
 
       return `${count}d${sides}`;
     },
   );
+
+  formula = normalizeImplicitDiceCount(formula);
 
   // Choke point: validate every NdX token now present in the formula,
   // whether it was already there literally (a player/GM typing "50d6"
@@ -523,7 +606,14 @@ function resolveDynamicDice(formula: string): string {
  *
  * @param formula - Formula string (variables + optional dice notation).
  * @param char - Character providing stats/skills/level context.
- * @returns The resolved numeric value, or 0 on any parse error.
+ * @returns The resolved numeric value, or 0 if the formula violates a
+ * safety limit or fails to parse. Note this is a plain `number`, not an
+ * `{ value, error }` pair — a genuinely invalid formula feeding a displayed
+ * stat (e.g. {@link computeDefense} in CombatTab, which evaluates an
+ * equipped armor's formula) is currently indistinguishable from a formula
+ * that legitimately computes to 0.
+ * @throws Rethrows anything that isn't a {@link FormulaError} (a real bug,
+ * not an invalid-formula case).
  */
 export function evalFormula(formula: string, char: NimbleCharacter): number {
   const ctx = buildContext(char);
@@ -545,7 +635,8 @@ export function evalFormulaWithContext(
     f = diceToAverage(f); // Replace NdX with average before arithmetic
     const result = safeEval(f);
     return isNaN(result) ? 0 : result;
-  } catch {
+  } catch (err) {
+    if (!(err instanceof FormulaError)) throw err;
     return 0;
   }
 }

@@ -9,10 +9,13 @@
 
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createDefaultCharacter, type NimbleCharacter } from "../types/character";
+import { BASE_SPELLS } from "../data/spells";
+import { BASIC_EQUIPMENTS } from "../data/equipment";
 import {
   buildContext,
   diceToAverage,
   evalFormula,
+  FormulaError,
   parseDamageFormula,
   resolveFormulaDisplay,
   rollFormula,
@@ -69,15 +72,33 @@ describe("safeEval", () => {
     expect(safeEval("max(3, 8)")).toBe(8);
   });
 
-  it("never executes unknown identifiers, just resolves them to 0", () => {
+  it("never executes unknown identifiers — rejects them with a FormulaError instead of silently resolving to 0", () => {
     // "alert(1)" only contains letters/digits/parens, all of which pass the
     // character whitelist — safety here comes from the parser never
-    // recognizing "alert(" as a known token, not from the whitelist.
-    expect(safeEval("alert(1)")).toBe(0);
+    // recognizing "alert(" as a known token, not from the whitelist. It
+    // used to silently fall back to 0 for this; that's exactly the kind of
+    // silent failure this app can't afford for a formula rolled to a table,
+    // so an unrecognized token is now a thrown FormulaError instead.
+    expect(() => safeEval("alert(1)")).toThrow(FormulaError);
   });
 
   it("rejects input containing disallowed characters", () => {
     expect(safeEval("1; console.log(1)")).toBeNaN();
+  });
+
+  it("treats a leading unary '+' as a no-op, same as no sign at all", () => {
+    // Regression guard: before parsePrimary threw on unknown tokens, a
+    // leading '+' only "worked" because parsePrimary silently returned 0
+    // for the unrecognized '+' and parseExpr's own '+' handling patched
+    // over it. Real formulas depend on this shape — e.g. armor items in
+    // src/data/equipment.ts store flat bonuses as a bare "+8", and
+    // parseDamageFormula feeds a leading-'+' modifier tail (e.g. "+3+2")
+    // to safeEval for any "NdX+STR+2"-style formula. This must keep
+    // working now that unary '+' is handled explicitly instead of by
+    // accident.
+    expect(safeEval("+2")).toBe(2);
+    expect(safeEval("+3+2")).toBe(5);
+    expect(safeEval("8")).toBe(safeEval("+8"));
   });
 });
 
@@ -121,6 +142,22 @@ describe("evalFormula", () => {
     const char = makeCharacter();
     expect(evalFormula("101d6", char)).toBe(0);
     expect(evalFormula("1d1001", char)).toBe(0);
+  });
+
+  it("still returns 0 (not a thrown error) for a typo'd/unrecognized variable — the remaining silent-failure gap", () => {
+    // "LVL" instead of "LEVEL" is an actual bug in src/data/spells.ts
+    // ("Tooth & Claw (Dragonform)": formula "1d20+LVL"). The parser now
+    // raises a FormulaError for the unrecognized "LVL" token internally
+    // (see the Parser tests), but evalFormulaWithContext's contract is a
+    // plain `number`, so it still catches FormulaError and returns 0 —
+    // same as before, just via an explicit catch instead of an accidental
+    // fallback. Any UI feeding evalFormula's return straight into a
+    // displayed stat (e.g. CombatTab's computeDefense, which evaluates an
+    // equipped armor's formula) still can't tell "legitimately 0" apart
+    // from "formula is broken" without a return-shape change, which is
+    // out of scope here — flagged, not fixed, in this batch.
+    const char = makeCharacter();
+    expect(evalFormula("1d20+LVL", char)).toBe(0);
   });
 });
 
@@ -333,10 +370,26 @@ describe("rollFormula", () => {
     expect(result.error).toMatch(/out of range/i);
   });
 
-  it("leaves a well-formed multi-token formula alone when both tokens are within the limit", () => {
+  it("rejects a second dice token in the modifier position instead of silently dropping it", () => {
+    // Only the *leading* NdX is ever treated as real, rollable dice notation
+    // (parseDamageFormula's diceNotation) — "3d4" here lands in the flat
+    // modifier text, which is arithmetic-only. Before the parser required
+    // full input consumption, "3d4" silently parsed as just "3" with "d4"
+    // dropped, so this formula looked "well-formed" (modifier 3, no error)
+    // while quietly discarding half of what was typed. It must now fail
+    // loudly instead.
     const char = makeCharacter();
     const result = rollFormula("2d6 + 3d4", char);
-    expect(result.diceNotation).toBe("2d6"); // leading token only, by design
+    expect(result.rolls).toEqual([]);
+    expect(result.total).toBe(0);
+    expect(result.error).toMatch(/trailing input/i);
+  });
+
+  it("rolls a leading dice token normally when the rest of the formula is plain arithmetic", () => {
+    const char = makeCharacter();
+    const result = rollFormula("2d6 + 3 + 4", char);
+    expect(result.diceNotation).toBe("2d6");
+    expect(result.modifier).toBe(7);
     expect(result.error).toBeUndefined();
   });
 
@@ -442,5 +495,244 @@ describe("rollFormula (pinned rolls via mocked Math.random)", () => {
     const result = rollFormula("2d6", char, "advantage", 1);
     expect(result.kept).toEqual([6, 4]);
     expect(result.isCritical).toBe(true);
+  });
+});
+
+describe("resolveDynamicDice parity fixes (point 3)", () => {
+  it("tolerates whitespace after the comma in incrementdice(...), which a GM naturally types", () => {
+    // 3a: incrementdice(1, LEVEL) with a space after the comma used to fall
+    // straight through resolveDynamicDice's regex (no \s* allowance),
+    // leaving "incrementdice(...)d6" for the Parser's own (different!)
+    // standalone incrementdice implementation, which computes a flat
+    // number and ignores the trailing "d6" entirely.
+    const char = makeCharacter({ level: 20 });
+    const spaced = rollFormula("incrementdice(1, LEVEL)d6", char);
+    const tight = rollFormula("incrementdice(1,LEVEL)d6", char);
+    expect(spaced.error).toBeUndefined();
+    expect(spaced.rolls).toHaveLength(tight.rolls.length);
+    expect(spaced.diceNotation).toBe(tight.diceNotation);
+  });
+
+  it("rejects a stepdice dice-count other than 1 instead of silently truncating", () => {
+    // 3b: resolveDynamicDice only ever matches "1dstepdice(...)" — stepdice
+    // is conceptually a single die whose *size* steps with level, not a
+    // count of stepped dice, and no real formula in src/data uses anything
+    // but "1d". A typo'd "2dstepdice(...)" doesn't match that regex, so it
+    // used to fall through to the Parser, which read the leading "2" as a
+    // complete expression and silently discarded "dstepdice(...)" — this is
+    // the "returns 2" bug reported. The general full-consumption check
+    // added to Parser.parse() now catches that leftover instead, so this
+    // fails loudly rather than rolling a nonsense flat "2".
+    const char = makeCharacter({ level: 20 });
+    const result = rollFormula("2dstepdice(15,4,6,8,1001)", char);
+    expect(result.rolls).toEqual([]);
+    expect(result.error).toMatch(/trailing input/i);
+  });
+
+  it("rejects a nested function call inside stepdice's argument list instead of silently mis-parsing it", () => {
+    // 3c: resolveDynamicDice's stepdice regex captures args with `[^)]+`,
+    // which stops at the *first* ")" — a nested call like
+    // "floor(LEVEL/2)" closes early on floor's own ")", corrupting the
+    // capture. No real formula in src/data nests a call there (level/base
+    // are always plain values), so this is intentionally not special-cased
+    // with a balanced-paren parser; the general full-consumption check
+    // catches the resulting garbage and throws instead of producing a
+    // wrong result.
+    const char = makeCharacter({ level: 20 });
+    const result = rollFormula("1dstepdice(floor(LEVEL/2),4,6,8,10)", char);
+    expect(result.rolls).toEqual([]);
+    expect(result.error).toBeTruthy();
+  });
+});
+
+describe("implicit-count dice notation (dN -> 1dN)", () => {
+  // Confirmed against the Nimble rulebook: d44/d66/d88 are single dice with
+  // that many faces (progression by spell tier), not two-digit roll tables
+  // — consistent with Nimble's crit rule (max face value crits), which
+  // wouldn't make sense on a table roll. So src/data/spells.ts's use of
+  // "d66"/"d88"/"d44" is correct game data; the parser was too strict.
+
+  it("normalizes a bare dN with nothing before it to 1dN and rolls one die", () => {
+    const char = makeCharacter();
+    mockRolls([50], 66);
+    const result = rollFormula("d66", char);
+    expect(result.rolls).toEqual([50]);
+    expect(result.diceNotation).toBe("1d66");
+    expect(result.error).toBeUndefined();
+  });
+
+  it("rolls the project's real d44/d66/d88 spell formulas without error", () => {
+    // Real formulas from src/data/spells.ts (Entice's sibling spells use
+    // stepdice instead; these four use a bare implicit die directly).
+    const char = makeCharacter();
+    for (const formula of ["d44", "d66", "d66", "d88"]) {
+      const result = rollFormula(formula, char);
+      expect(result.rolls).toHaveLength(1);
+      expect(result.error).toBeUndefined();
+    }
+  });
+
+  it("does not touch an already-explicit count — non-regression for 2d6", () => {
+    const char = makeCharacter();
+    const result = rollFormula("2d6", char);
+    expect(result.diceNotation).toBe("2d6");
+    expect(result.rolls).toHaveLength(2);
+  });
+
+  it("does not re-prefix a digit that arrived via substitution rather than being typed literally", () => {
+    // normalizeImplicitDiceCount runs on the post-substitution string and
+    // only cares whether a digit/letter precedes "d" *in that string* — it
+    // can't tell a literal count from one produced by variable
+    // substitution, which is exactly what makes it safe for both. Proven
+    // here with a hand-substituted count standing in for what a resolved
+    // variable would leave behind.
+    const char = makeCharacter();
+    const result = rollFormula("12d20", char);
+    expect(result.diceNotation).toBe("12d20");
+    expect(result.rolls).toHaveLength(12);
+  });
+
+  it("found: KEYd20 (src/data/spells.ts, 'Immolating Breath (Dragonform)') never substitutes KEY, for an unrelated pre-existing reason", () => {
+    // \bKEY\b requires a non-word boundary right after "KEY", but "d20" is
+    // glued directly on with no separator — "KEYD20" is all word
+    // characters, so there's no boundary between "Y" and "D" and the
+    // substitution silently never fires (same root cause would affect any
+    // stat/skill/LEVEL glued directly to a die suffix, e.g. "LEVELd6").
+    // Before this batch, the un-substituted "keyd20" hit the old
+    // unknown-token fallback and silently evaluated to 0 — this spell's
+    // damage has always been a silent no-op. It now throws instead, which
+    // is strictly better, but the root substitution bug is a separate,
+    // pre-existing issue not fixed here — flagged, not fixed.
+    const char = makeCharacter({ keyStat: "str", stats: { str: 3, dex: 0, int: 0, wil: 0 } });
+    expect(() => rollFormula("KEYd20", char)).not.toThrow(); // rollFormula itself never throws...
+    const result = rollFormula("KEYd20", char);
+    expect(result.rolls).toEqual([]); // ...it reports failure via `.error` instead
+    expect(result.error).toMatch(/unrecognized token/i);
+  });
+
+  it("does not touch stepdice(/incrementdice( — non-regression for the letter-preceded exclusion", () => {
+    // Both function names contain a "d" that isn't immediately followed by
+    // a digit ("stepDIce", "incrementDIce"), so they're already safe on
+    // that basis alone. This test instead proves the *letter-precededness*
+    // exclusion itself, using a synthetic unrecognized token ("Xd6") that
+    // has a letter directly before a digit-followed "d" — if the exclusion
+    // were missing or buggy, this would be silently normalized into a
+    // rollable "1d6" and quietly succeed instead of correctly failing as
+    // an unrecognized token.
+    const char = makeCharacter();
+    const result = rollFormula("Xd6", char);
+    expect(result.rolls).toEqual([]);
+    expect(result.error).toMatch(/unrecognized token/i);
+  });
+
+  it("still resolves real incrementdice/stepdice spell formulas correctly alongside the implicit-dice normalization", () => {
+    const char = makeCharacter({ level: 20 });
+    const shadowBlast = rollFormula("incrementdice(1,level)d12+KEY", char);
+    expect(shadowBlast.rolls).toHaveLength(5);
+    expect(shadowBlast.error).toBeUndefined();
+
+    const entice = rollFormula("1dstepdice(level,4,8,10,12)", char);
+    expect(entice.rolls).toHaveLength(1);
+    expect(entice.error).toBeUndefined();
+  });
+});
+
+describe("game data validation (point 4)", () => {
+  // Iterates every formula in src/data/spells.ts and src/data/equipment.ts
+  // through validateFormula, and additionally requires a non-empty
+  // diceNotation (via parseDamageFormula) for any formula whose raw text
+  // looks like it should roll dice — this is what originally caught
+  // d66/d88/d44 evaluating to a flat 0 instead of rolling.
+  //
+  // A level-20 character is used throughout: level feeds incrementdice/
+  // stepdice, and this project's actual dynamic-dice spells only reach a
+  // handful of dice/low sides at that level (see the MAX_DICE_COUNT/
+  // MAX_DICE_SIDES comments), so this doesn't risk tripping the safety
+  // limits on legitimate content.
+  const char = makeCharacter({
+    level: 20,
+    stats: { str: 3, dex: 2, int: 1, wil: 0 },
+    keyStat: "str",
+    flawStat: "wil",
+  });
+  const ctx = buildContext(char);
+
+  /** True if the raw formula text contains dice notation (explicit, implicit, or dynamic). */
+  function looksLikeDice(formula: string): boolean {
+    return /\d*d\d+/i.test(formula) || /stepdice|incrementdice/i.test(formula);
+  }
+
+  const entries: { name: string; formula: string }[] = [
+    ...BASE_SPELLS.map((s) => ({ name: s.name, formula: s.formula })),
+    ...BASIC_EQUIPMENTS.map((e) => ({ name: e.name, formula: e.formula ?? "" })),
+  ].filter((e) => e.formula);
+
+  /**
+   * Known-bad formulas as of this batch, keyed by item/spell name — found
+   * by running this exact validation over every entry. Each is a distinct,
+   * pre-existing data issue, not something introduced or fixed here:
+   *
+   * - "Tooth & Claw (Dragonform)" (spell): formula "1d20+LVL" — typo for
+   *   LEVEL. The level bonus has always silently evaluated to +0.
+   * - "Immolating Breath (Dragonform)" (spell): formula "KEYd20" — KEY is
+   *   glued directly to "d20" with no separator, so `\bKEY\b` never
+   *   matches (no word-boundary between "Y" and "D") and KEY is never
+   *   substituted. Same root cause would hit any stat/skill/LEVEL glued
+   *   directly to a die suffix. Damage has always silently evaluated to 0.
+   * - "Weapon of Animosity", "Weapon of Wounding", "Vindication"
+   *   (equipment): formulas reference "WeaponDamage", a token the engine
+   *   has no concept of (there's no "currently equipped weapon's damage"
+   *   variable) — these read as flavor-text shorthand for a GM to
+   *   interpret manually, not as formulas meant to be rolled as-is.
+   *
+   * If this list needs to shrink, it means one of these was actually
+   * fixed — update it alongside the fix, don't just delete entries to
+   * make the test pass. If it needs to grow, a *newly added* formula is
+   * broken and should be fixed instead of allowlisted.
+   */
+  const KNOWN_BAD_FORMULAS = new Set([
+    "Tooth & Claw (Dragonform)",
+    "Immolating Breath (Dragonform)",
+    "Weapon of Animosity",
+    "Weapon of Wounding",
+    "Vindication",
+  ]);
+
+  it("has formula entries to check (sanity check that the data imports resolved)", () => {
+    expect(entries.length).toBeGreaterThan(50);
+  });
+
+  it("validates every spell/equipment formula except the known pre-existing data bugs above", () => {
+    const unexpectedFailures: string[] = [];
+    const unexpectedPasses: string[] = [];
+
+    for (const { name, formula } of entries) {
+      let validationError: string | null = null;
+      try {
+        validateFormula(formula, ctx);
+      } catch (err) {
+        validationError = err instanceof Error ? err.message : String(err);
+      }
+
+      let missingDice = false;
+      if (!validationError && looksLikeDice(formula)) {
+        const { diceNotation } = parseDamageFormula(formula, ctx);
+        missingDice = diceNotation === "";
+      }
+
+      const isBroken = validationError !== null || missingDice;
+      const isKnownBad = KNOWN_BAD_FORMULAS.has(name);
+
+      if (isBroken && !isKnownBad) {
+        unexpectedFailures.push(
+          `${name} :: "${formula}" :: ${validationError ?? "no dice extracted from a dice-shaped formula"}`,
+        );
+      } else if (!isBroken && isKnownBad) {
+        unexpectedPasses.push(`${name} :: "${formula}" (listed as known-bad but now validates fine)`);
+      }
+    }
+
+    expect(unexpectedFailures).toEqual([]);
+    expect(unexpectedPasses).toEqual([]);
   });
 });
