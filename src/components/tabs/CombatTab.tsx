@@ -691,7 +691,7 @@ function ActionRow({
   const [expanded, setExpanded] = useState(false);
   const typeStyle = ACTION_COLORS[action.type] ?? "";
   const icon = ACTION_ICONS[action.type] ?? "⚡";
-  const resolvedFormula = resolveFormulaDisplay(
+  const { display: resolvedFormula } = resolveFormulaDisplay(
     action.formula || action.damage,
     character,
   );

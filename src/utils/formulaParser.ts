@@ -40,23 +40,13 @@ const MAX_DICE_SIDES = 1000;
  * Thrown internally when a formula violates a safety limit (too long,
  * too deeply nested, dice count/sides out of range). Callers that want
  * to surface this to the user should catch it explicitly; the public
- * `evalFormula`/`rollFormula` functions catch it themselves and fall
- * back to a safe default, but also expose `lastFormulaError` so the UI
- * can show a warning instead of silently displaying 0.
+ * `evalFormula`/`rollFormula` functions catch it themselves and fall back
+ * to a safe default. `rollFormula` and `resolveFormulaDisplay` also carry
+ * the resulting message on their own return value (`error`/`.error`) so
+ * the UI can show it right where the failing formula lives, rather than
+ * through module-level state shared across every render.
  */
 export class FormulaError extends Error {}
-
-/**
- * Set by `evalFormulaWithContext` and `rollFormula` whenever they fall
- * back to a default value due to a parse failure or a safety-limit
- * violation. Read this right after calling either function if you want
- * to show a "this formula is invalid" hint in the UI rather than letting
- * a silent 0 look like a real result.
- *
- * @remarks Not thread-safe / not safe for concurrent formulas — this is
- * fine here since the UI evaluates one formula at a time per render.
- */
-export let lastFormulaError: string | null = null;
 
 // ─────────────────────────────────────────────────────────────────
 // Variable substitution
@@ -160,19 +150,31 @@ function substituteVariables(formula: string, ctx: FormulaContext): string {
 // ─────────────────────────────────────────────────────────────────
 
 /**
+ * Throws if a resolved dice token's count or sides exceed the configured
+ * safety limits. This is the shared guard behind every legitimate entry
+ * point that reads final count/sides values — {@link diceToAverage} (direct
+ * display-path callers) and {@link resolveDynamicDice} (the choke point all
+ * dice-rolling paths pass through) — so the limit is defined once and
+ * cannot be bypassed by going through one path instead of the other.
+ */
+function assertDiceWithinLimits(count: number, sides: number, token: string): void {
+  if (count > MAX_DICE_COUNT || sides > MAX_DICE_SIDES) {
+    throw new FormulaError(
+      `Dice count/sides out of range (${token}, max ${MAX_DICE_COUNT}d${MAX_DICE_SIDES}).`,
+    );
+  }
+}
+
+/**
  * Replace NdX tokens with their *average* value (for static display /
  * modifier computation).  Actual random rolling uses OBR dice or rollDice().
  */
 export function diceToAverage(formula: string): string {
   // e.g.  2d6  →  7   (average of 2×(1+6)/2)
-  return formula.replace(/(\d+)d(\d+)/gi, (_match, count, sides) => {
+  return formula.replace(/(\d+)d(\d+)/gi, (match, count, sides) => {
     const n = parseInt(count, 10);
     const s = parseInt(sides, 10);
-    if (n > MAX_DICE_COUNT || s > MAX_DICE_SIDES) {
-      throw new FormulaError(
-        `Dice count/sides out of range (${n}d${s}, max ${MAX_DICE_COUNT}d${MAX_DICE_SIDES}).`,
-      );
-    }
+    assertDiceWithinLimits(n, s, match);
     const avg = Math.round(n * ((1 + s) / 2));
     return String(avg);
   });
@@ -495,6 +497,17 @@ function resolveDynamicDice(formula: string): string {
     },
   );
 
+  // Choke point: validate every NdX token now present in the formula,
+  // whether it was already there literally (a player/GM typing "50d6"
+  // directly) or was just produced by the replacements above. Every
+  // consumer of dice notation (parseDamageFormula → rollFormula,
+  // evalFormulaWithContext, resolveFormulaDisplay) calls this function
+  // before reading count/sides, so this single check guards all of them —
+  // none of those callers do their own limit check on the result.
+  for (const match of formula.matchAll(/(\d+)d(\d+)/gi)) {
+    assertDiceWithinLimits(Number(match[1]), Number(match[2]), match[0]);
+  }
+
   return formula;
 }
 
@@ -532,13 +545,37 @@ export function evalFormulaWithContext(
     f = diceToAverage(f); // Replace NdX with average before arithmetic
     const result = safeEval(f);
     return isNaN(result) ? 0 : result;
-  } catch (err) {
-    lastFormulaError =
-      err instanceof FormulaError
-        ? err.message
-        : `Could not evaluate formula: "${formula}"`;
+  } catch {
     return 0;
   }
+}
+
+/**
+ * Validates a raw formula against every safety limit (length, recursion
+ * depth, dice count/sides) without evaluating it to a final display or
+ * roll value. Intended as a write-time gate: call this before persisting a
+ * formula on an action/spell/item so an out-of-range formula is rejected
+ * at save time instead of merely failing safely (but silently, from the
+ * saver's point of view) the next time someone tries to roll or display it.
+ *
+ * @param formula - Raw formula as a player/GM is about to save it.
+ * @param ctx - Context used to resolve variables/dynamic dice before checking limits.
+ * @throws {FormulaError} if the formula violates any safety limit.
+ */
+export function validateFormula(formula: string, ctx: FormulaContext): void {
+  // Explicit, first-line check on the raw string — this is what actually
+  // gets persisted in scene metadata and broadcast to the table, so this
+  // gate must not rely on substituteVariables' own length check (which
+  // happens to run on this same raw string too) as an implementation detail.
+  if (formula.length > MAX_FORMULA_LENGTH) {
+    throw new FormulaError(
+      `Formula too long (${formula.length} chars, max ${MAX_FORMULA_LENGTH}).`,
+    );
+  }
+  const substituted = substituteVariables(formula, ctx);
+  const resolved = resolveDynamicDice(substituted);
+  const averaged = diceToAverage(resolved);
+  safeEval(averaged); // lets a MAX_PARSE_DEPTH violation propagate as FormulaError
 }
 
 /**
@@ -548,31 +585,44 @@ export function evalFormulaWithContext(
  *
  * @param formula - Raw formula as stored on the action/spell/item.
  * @param char - Character providing the variable values.
- * @returns A simplified display string, or the original formula if nothing
- * could be resolved.
+ * @returns `display`: a simplified display string, or the original formula
+ * if nothing could be resolved or a safety limit was violated. `error` is
+ * only set in the latter case, so the caller can decide whether/how to
+ * surface it instead of a value silently looking legitimate.
+ * @throws Rethrows anything that isn't a {@link FormulaError} — a genuine
+ * bug (e.g. a `TypeError`) must not be reported to the user as "invalid
+ * formula" and lose its stack.
  */
 export function resolveFormulaDisplay(
   formula: string,
   char: NimbleCharacter,
-): string {
+): { display: string; error?: string } {
   const ctx = buildContext(char);
-  let f = substituteVariables(formula, ctx);
-  f = resolveDynamicDice(f);
-  // Evaluate non-dice parts but keep dice notation
-  // e.g. "1d8 + 2 + 1" → "1d8+3"
-  const diceMatch = f.match(/\d+d\d+/i);
-  if (!diceMatch) {
-    const val = safeEval(f);
-    return isNaN(val) ? formula : String(val);
+  try {
+    let f = substituteVariables(formula, ctx);
+    f = resolveDynamicDice(f);
+    // Evaluate non-dice parts but keep dice notation
+    // e.g. "1d8 + 2 + 1" → "1d8+3"
+    const diceMatch = f.match(/\d+d\d+/i);
+    if (!diceMatch) {
+      const val = safeEval(f);
+      return { display: isNaN(val) ? formula : String(val) };
+    }
+
+    const dicePart = diceMatch[0];
+    const rest = f.replace(dicePart, "0");
+    const modifier = safeEval(rest);
+
+    if (isNaN(modifier) || modifier === 0) return { display: dicePart };
+    if (modifier > 0) return { display: `${dicePart}+${modifier}` };
+    return { display: `${dicePart}${modifier}` }; // negative already has the sign
+  } catch (err) {
+    if (!(err instanceof FormulaError)) throw err;
+    // A formula that violates a safety limit (dice count/sides, length)
+    // must not crash the row it's displayed on — fall back to showing the
+    // raw formula, with the reason attached for the caller to surface.
+    return { display: formula, error: err.message };
   }
-
-  const dicePart = diceMatch[0];
-  const rest = f.replace(dicePart, "0");
-  const modifier = safeEval(rest);
-
-  if (isNaN(modifier) || modifier === 0) return dicePart;
-  if (modifier > 0) return `${dicePart}+${modifier}`;
-  return `${dicePart}${modifier}`; // negative already has the sign
 }
 
 // ─────────────────────────────────────────────────────────────────
@@ -610,7 +660,10 @@ export function rollDice(count: number, sides: number): number[] {
  * rolled and kept.
  * @returns Full breakdown: dice notation, all rolls, kept rolls, modifier,
  * total, and critical/fumble flags. If the formula has no dice (a flat
- * modifier), `rolls`/`kept` are empty and `total` equals the modifier.
+ * modifier), `rolls`/`kept` are empty and `total` equals the modifier. If
+ * the formula failed to parse or violated a safety limit, `error` carries
+ * the message and every numeric field is zeroed rather than clamped —
+ * the caller must not treat that as "rolled a 0".
  */
 export function rollFormula(
   formula: string,
@@ -625,8 +678,8 @@ export function rollFormula(
   total: number;
   isCritical: boolean;
   isFumble: boolean;
+  error?: string;
 } {
-  lastFormulaError = null;
   const ctx = buildContext(char);
   let sides = 20;
   let count = 1;
@@ -658,10 +711,6 @@ export function rollFormula(
       sides = parseInt(m[2], 10);
     }
   } catch (err) {
-    lastFormulaError =
-      err instanceof FormulaError
-        ? err.message
-        : `Could not evaluate formula: "${formula}"`;
     return {
       diceNotation: "",
       rolls: [],
@@ -670,6 +719,10 @@ export function rollFormula(
       total: 0,
       isCritical: false,
       isFumble: false,
+      error:
+        err instanceof FormulaError
+          ? err.message
+          : `Could not evaluate formula: "${formula}"`,
     };
   }
 

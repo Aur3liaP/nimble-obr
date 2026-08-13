@@ -757,7 +757,7 @@ function SpellRow({
     ? SCHOOL_STYLES[school]
     : "text-violet-300 border-violet-800/60 bg-violet-950/30";
   const schoolIcon = school ? SCHOOL_ICONS[school] : "✨";
-  const resolvedFormula = resolveFormulaDisplay(
+  const { display: resolvedFormula } = resolveFormulaDisplay(
     spell.formula || spell.damage,
     character,
   );
