@@ -22,6 +22,7 @@ import {
   rollFormula,
   safeEval,
   validateFormula,
+  VARIABLE_TABLE,
 } from "./formulaParser";
 
 function makeCharacter(overrides: Partial<NimbleCharacter> = {}): NimbleCharacter {
@@ -904,6 +905,141 @@ describe("LVL alias for LEVEL, and the FLAW substitution gap (point 1 follow-ups
     const char = makeCharacter({ flawStat: null });
     expect(evalFormula("FLAW", char).value).toBe(0);
     expect(evalFormula("FLAW", char).error).toBeUndefined();
+  });
+});
+
+describe("Math.floor/ceil/min/max shorthand actually normalizes (point 5)", () => {
+  // substituteVariables uppercases the raw formula, walks VARIABLE_TABLE,
+  // *then* rewrites "MATH.FLOOR("/"MATH.CEIL("/"MATH.MIN("/"MATH.MAX(" to
+  // the lowercase floor(/ceil(/min(/max( tokens the parser recognizes, and
+  // only after that lowercases the whole string. That ordering is load
+  // bearing: the four replace() calls are case-sensitive and rely on
+  // running *before* the final toLowerCase() to still see the uppercase
+  // "MATH.FLOOR(" shape they match against. Moving them after
+  // toLowerCase() (the exact shape of bug that made the INCREMENTDICE/
+  // STEPDICE dead code elsewhere in this file's history unreachable) would
+  // make every "Math.foo(...)" formula throw an unrecognized-token
+  // FormulaError instead of evaluating — this is a real, advertised
+  // syntax (the formula help panel cites it), not a nice-to-have.
+  const char = makeCharacter({ level: 3, stats: { str: 1, dex: 2, int: 3, wil: 4 } });
+
+  it("normalizes Math.min/Math.max/Math.floor/Math.ceil regardless of case", () => {
+    expect(evalFormula("Math.min(3, 8)", char).value).toBe(3);
+    expect(evalFormula("MATH.MIN(3, 8)", char).value).toBe(3);
+    expect(evalFormula("math.min(3, 8)", char).value).toBe(3);
+    expect(evalFormula("Math.max(3, 8)", char).value).toBe(8);
+    expect(evalFormula("Math.floor(7 / 2)", char).value).toBe(3);
+    expect(evalFormula("Math.ceil(7 / 2)", char).value).toBe(4);
+  });
+
+  it("resolves the exact formulas cited in game data and the formula help panel, without error", () => {
+    // Rusty Mail (src/data/equipment.ts): "6 + Math.min(DEX, 2)"
+    const armor = evalFormula("6 + Math.min(DEX, 2)", char);
+    expect(armor.error).toBeUndefined();
+    expect(armor.value).toBe(6 + Math.min(char.stats.dex, 2));
+
+    // Flame Dart (src/data/spells.ts): "1d10 + (Math.floor(level / 5) * 5)"
+    const flameDart = evalFormula("1d10 + (Math.floor(level / 5) * 5)", char);
+    expect(flameDart.error).toBeUndefined();
+  });
+});
+
+describe("VARIABLE_TABLE structural invariants (point 6)", () => {
+  // These assert directly on VARIABLE_TABLE's own shape, not on
+  // listFormulaVariables()'s output. listFormulaVariables() is *derived*
+  // from this table, so a bug in the table (wrong order, a typo'd
+  // aliasOf) would silently reproduce in its output too — testing the
+  // output alone couldn't tell "correct" from "consistently wrong". The
+  // table's exported specifically so these two invariants can be checked
+  // at their actual source (see VARIABLE_TABLE's own doc comment).
+
+  it("orders MAXHP before HP", () => {
+    // A type-check can't catch a reordering (e.g. an alphabetical sort)
+    // that puts HP first — nothing about the table's type enforces this.
+    // See the @remarks above VARIABLE_TABLE for why the order still
+    // matters as defense in depth even though the `\b` boundary check
+    // already prevents HP from matching inside MAXHP today.
+    const names = VARIABLE_TABLE.map((entry) => entry.name);
+    expect(names.indexOf("MAXHP")).toBeLessThan(names.indexOf("HP"));
+  });
+
+  it("every aliasOf points to an existing entry name in the table", () => {
+    // listFormulaVariables() groups alias entries under `byName.get(entry.aliasOf)`,
+    // and silently drops the alias via `?.push` if that lookup misses
+    // (e.g. a typo'd aliasOf: "LEVELL"). The alias would keep working in
+    // substituteVariables (which applies every row regardless of
+    // aliasOf), while quietly vanishing from the help panel — the exact
+    // "documented behavior the code doesn't actually have" shape this
+    // table exists to prevent. Checking listFormulaVariables()'s output
+    // wouldn't catch this: the bug's entire nature is that the alias just
+    // doesn't show up, with nothing to assert against.
+    const names = new Set(VARIABLE_TABLE.map((entry) => entry.name));
+    for (const entry of VARIABLE_TABLE) {
+      if (entry.aliasOf !== undefined) {
+        expect(
+          names.has(entry.aliasOf),
+          `aliasOf "${entry.aliasOf}" on entry "${entry.name}" has no matching VARIABLE_TABLE entry`,
+        ).toBe(true);
+      }
+    }
+  });
+});
+
+describe("MATH_FUNCTIONS dispatch order regression (point 7)", () => {
+  // parsePrimary now checks floor/ceil/min/max (via the MATH_FUNCTIONS
+  // loop) before the bare-parenthesis and number branches; previously
+  // min(/max( were checked *after* both. The comment on that loop argues
+  // this reordering is safe because every function name starts with a
+  // letter and can never collide with a bare "(" or a digit — true, but
+  // not itself verified by anything. These exercise formulas that
+  // combine several of the reordered branches in the same expression,
+  // not just each branch in isolation, so a reordering mistake that only
+  // shows up when branches interact wouldn't slip through.
+
+  it("resolves a formula combining max(), floor(), a substituted variable, and a flat modifier", () => {
+    const char = makeCharacter({ level: 7 });
+    // floor(7/2) = 3, max(1, 3) = 3, + 2 = 5
+    expect(evalFormula("max(1, floor(LEVEL/2)) + 2", char).value).toBe(5);
+  });
+
+  it("resolves a formula combining bare parentheses, numbers, and nested helpers", () => {
+    // floor(9/2) = 4, min(4, 4) = 4, (2+3) * 4 = 20
+    expect(safeEval("(2 + 3) * min(4, floor(9 / 2))")).toBe(20);
+  });
+});
+
+describe("MATH_FUNCTIONS arity errors (point 7)", () => {
+  // The dispatch loop reads exactly fn.arity arguments then expects a
+  // ")". Before this fix, "min(1,2,3)" read 1 and 2, found "," instead of
+  // ")", and left ",3)" as unconsumed trailing input — a loud failure
+  // (the full-consumption check in Parser.parse), but with a misleading
+  // message ("unexpected trailing input") instead of naming the actual
+  // problem (wrong argument count). Same shape for too few arguments
+  // (e.g. "min(1)"), which used to fall through to parseExpr() hitting
+  // the closing ")" and throwing the generic "unrecognized token" error.
+
+  it("reports too many arguments by function name and expected arity, for both arities", () => {
+    expect(() => safeEval("min(1,2,3)")).toThrow(
+      "min() takes 2 arguments, got too many.",
+    );
+    expect(() => safeEval("floor(1,2)")).toThrow(
+      "floor() takes 1 argument, got too many.",
+    );
+  });
+
+  it("reports too few arguments by function name and expected arity, not a generic unrecognized-token error", () => {
+    expect(() => safeEval("min(1)")).toThrow(
+      "min() takes 2 arguments, got only 1.",
+    );
+  });
+
+  it("still tolerates a missing closing paren when the argument count is otherwise correct (non-regression)", () => {
+    // Pre-existing leniency, shared with every other call form in this
+    // parser (see the bare "(" branch and incrementdice/stepdice): an
+    // unbalanced paren isn't an argument-count problem, so it must not
+    // start throwing the new arity error instead of the old (lack of)
+    // error.
+    expect(safeEval("floor(3")).toBe(3);
   });
 });
 

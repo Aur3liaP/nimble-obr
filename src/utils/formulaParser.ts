@@ -159,14 +159,21 @@ interface VariableEntry {
 }
 
 /**
- * @remarks Order matters for two entries: MAXHP must precede HP, because
- * "HP" is a trailing substring of "MAXHP" and the left `\b` in
- * {@link variablePattern} doesn't prevent `\bHP` from matching inside
+ * @remarks MAXHP is kept ordered before HP as defense in depth: "HP" is a
+ * trailing substring of "MAXHP", but the left `\b` in
+ * {@link variablePattern} already prevents `\bHP` from matching inside
  * "MAXHP" on its own (no boundary between "X" and "H", both word
- * characters) — verified by test, not just asserted. Every other entry is
- * independent of order.
+ * characters). Ordering MAXHP first means correctness doesn't depend on
+ * that boundary reasoning continuing to hold — verified by test (both the
+ * substitution outcome and the table order itself), not just asserted.
+ * Every other entry is independent of order.
+ *
+ * Exported (read-only in spirit, not enforced by the type) so tests can
+ * assert directly on this ordering and on `aliasOf` integrity, rather than
+ * on {@link listFormulaVariables}'s output — which, being derived from this
+ * same table, would silently reflect the same bug instead of catching it.
  */
-const VARIABLE_TABLE: VariableEntry[] = [
+export const VARIABLE_TABLE: VariableEntry[] = [
   { name: "STR", value: (ctx) => ctx.stats.str },
   { name: "DEX", value: (ctx) => ctx.stats.dex },
   { name: "INT", value: (ctx) => ctx.stats.int },
@@ -408,6 +415,70 @@ export function parseDamageFormula(
 }
 
 /**
+ * One entry of the arithmetic-helper table {@link Parser.parsePrimary}
+ * dispatches through, in the same spirit as {@link VARIABLE_TABLE}: this
+ * table *is* the function's definition (name, arity, and what it computes),
+ * not a separate description of one living elsewhere. A hand-copied catalog
+ * of function names sitting only in the formula help UI would carry the
+ * exact same drift risk that once let FLAW go documented-but-dead — a
+ * function added straight into the parser's dispatch wouldn't show up in
+ * the help panel, and one added only to a UI catalog wouldn't actually
+ * work. {@link listFormulaFunctions} reflects over this same table to
+ * close both gaps, the same way {@link listFormulaVariables} does for
+ * variables.
+ *
+ * Deliberately limited to the fixed-arity, side-effect-free case (a
+ * function of 1 or 2 already-evaluated arguments). `incrementdice`/
+ * `stepdice` are not folded in here: their argument counts and branching
+ * logic vary per helper (see {@link Parser.parsePrimary}), so forcing them
+ * into this shape would either lose that logic or make the table
+ * misleadingly generic. They're documented separately, via worked examples
+ * in the formula help UI instead of a signature line.
+ */
+interface MathFunctionEntry {
+  /** Lowercase token as it appears in a formula, e.g. "floor", "min". */
+  name: string;
+  /** Number of comma-separated arguments this function takes. */
+  arity: 1 | 2;
+  /** Applies the function to its already-evaluated, in-order arguments. */
+  apply: (...args: number[]) => number;
+  /** One-line, human-readable description for the formula help panel. */
+  description: string;
+}
+
+const MATH_FUNCTIONS: MathFunctionEntry[] = [
+  { name: "floor", arity: 1, apply: (x) => Math.floor(x), description: "Rounds down" },
+  { name: "ceil", arity: 1, apply: (x) => Math.ceil(x), description: "Rounds up" },
+  { name: "min", arity: 2, apply: (a, b) => Math.min(a, b), description: "Smaller of the two" },
+  { name: "max", arity: 2, apply: (a, b) => Math.max(a, b), description: "Larger of the two" },
+];
+
+/** Describes one arithmetic helper function for display purposes (e.g. the in-app formula help panel). */
+export interface FormulaFunctionInfo {
+  /** Display signature, e.g. "floor(x)" or "min(a, b)". */
+  signature: string;
+  /** One-line, human-readable description. */
+  description: string;
+}
+
+/**
+ * Lists every fixed-arity arithmetic helper the parser accepts.
+ *
+ * @remarks Reflects over {@link MATH_FUNCTIONS} — the exact table
+ * {@link Parser.parsePrimary} dispatches through — so this can never
+ * advertise a function that doesn't actually work, or omit one that does.
+ * `incrementdice`/`stepdice` aren't included: see the remarks on
+ * {@link MATH_FUNCTIONS} for why they're documented via worked examples
+ * instead.
+ */
+export function listFormulaFunctions(): FormulaFunctionInfo[] {
+  return MATH_FUNCTIONS.map((fn) => ({
+    signature: fn.arity === 1 ? `${fn.name}(x)` : `${fn.name}(a, b)`,
+    description: fn.description,
+  }));
+}
+
+/**
  * Minimal recursive-descent arithmetic parser (no `eval`).
  *
  * Grammar (informal):
@@ -556,20 +627,51 @@ class Parser {
     this.skipWhitespace();
     this.enterDepth();
     try {
-      // floor(
-      if (this.input.startsWith("floor(", this.pos)) {
-        this.pos += 6; // skip "floor("
-        const val = this.parseExpr();
-        if (this.peek() === ")") this.consume();
-        return Math.floor(val);
-      }
-
-      // ceil(
-      if (this.input.startsWith("ceil(", this.pos)) {
-        this.pos += 5;
-        const val = this.parseExpr();
-        if (this.peek() === ")") this.consume();
-        return Math.ceil(val);
+      // floor(x) / ceil(x) / min(a, b) / max(a, b) — dispatched from
+      // MATH_FUNCTIONS (see its own doc comment for why it's the single
+      // source of truth shared with the formula help UI). Checked before
+      // the parenthesised-expression and number branches below; safe to
+      // do so since every one of these names starts with a letter, so it
+      // can never match a bare "(" or a digit.
+      for (const fn of MATH_FUNCTIONS) {
+        if (this.input.startsWith(`${fn.name}(`, this.pos)) {
+          this.pos += fn.name.length + 1;
+          const plural = fn.arity === 1 ? "argument" : "arguments";
+          const args: number[] = [];
+          for (let i = 0; i < fn.arity; i++) {
+            // Every argument after the first must be preceded by a comma.
+            // Anything else here (most commonly the closing ")" of a call
+            // with too few arguments, e.g. "min(1)") means an argument is
+            // missing — reported with the function name and expected
+            // arity, not left to fall through to parseExpr(), which would
+            // otherwise hit the ")" and throw the generic "unrecognized
+            // token" error instead.
+            if (i > 0) {
+              if (this.peek() !== ",") {
+                throw new FormulaError(
+                  `${fn.name}() takes ${fn.arity} ${plural}, got only ${i}.`,
+                );
+              }
+              this.consume();
+            }
+            args.push(this.parseExpr());
+          }
+          // A "," immediately after the last expected argument means more
+          // arguments were supplied than the function takes (e.g.
+          // "min(1,2,3)"), and is reported explicitly rather than left as
+          // unconsumed trailing input for the generic error in parse().
+          // Anything else here — notably a missing ")" — is tolerated the
+          // same as every other call in this parser (see the "(" branch
+          // and incrementdice/stepdice below), not treated as an arity
+          // error: an unbalanced paren isn't an argument-count problem.
+          if (this.peek() === ",") {
+            throw new FormulaError(
+              `${fn.name}() takes ${fn.arity} ${plural}, got too many.`,
+            );
+          }
+          if (this.peek() === ")") this.consume();
+          return fn.apply(...args);
+        }
       }
 
       // Parenthesised expression
@@ -614,25 +716,6 @@ class Parser {
           throw new FormulaError(`Malformed number in formula: "${text}".`);
         }
         return value;
-      }
-
-      // Min & Max
-      if (this.input.startsWith("min(", this.pos)) {
-        this.pos += 4;
-        const a = this.parseExpr();
-        if (this.peek() === ",") this.consume();
-        const b = this.parseExpr();
-        if (this.peek() === ")") this.consume();
-        return Math.min(a, b);
-      }
-
-      if (this.input.startsWith("max(", this.pos)) {
-        this.pos += 4;
-        const a = this.parseExpr();
-        if (this.peek() === ",") this.consume();
-        const b = this.parseExpr();
-        if (this.peek() === ")") this.consume();
-        return Math.max(a, b);
       }
 
       // Custom
