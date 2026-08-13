@@ -21,6 +21,7 @@ import { RowMeta } from "../ui/common/RowMeta";
 import { FormField, GridFields } from "../ui/common/FormField";
 import { NumericStepper } from "../ui/common/NumericStepper";
 import { ModalShell } from "../ui/common/ModalShell";
+import { FormulaHelpButton } from "../ui/common/FormulaHelp";
 import { ItemRowBase } from "../ui/common/ItemRowBase";
 
 // ── Types & helpers ───────────────────────────────────────────────
@@ -342,6 +343,7 @@ function AddItemModal({
             </FormField>
             <FormField
               label="Roll formula"
+              labelExtra={<FormulaHelpButton />}
               value={form.formula}
               onChange={(v) => setF("formula", v)}
               placeholder="e.g. 1d6+DEX"
@@ -704,6 +706,7 @@ function ItemRow({
       />
       <FormField
         label="Roll formula"
+        labelExtra={<FormulaHelpButton />}
         value={item.formula ?? ""}
         onChange={(v) => onUpdate({ formula: v || undefined })}
         placeholder="e.g. 1d6+STR"

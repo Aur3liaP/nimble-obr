@@ -27,6 +27,7 @@ import { RowDescriptionPanel } from "../ui/common/RowDescriptionPanel";
 import { FormField, GridFields } from "../ui/common/FormField";
 import { TabPills } from "../ui/common/TabPills";
 import { ModalShell } from "../ui/common/ModalShell";
+import { FormulaHelpButton } from "../ui/common/FormulaHelp";
 import { DraggableBar } from "../ui/common/DraggableBar";
 import { useDraggableValue } from "../../hooks/useDraggableValue";
 
@@ -401,6 +402,7 @@ function AddSpellModal({
             />
             <FormField
               label="Damage / Formula"
+              labelExtra={<FormulaHelpButton />}
               value={form.damage}
               onChange={(v) => setF("damage", v)}
               placeholder="e.g. 2d6+INT"
@@ -858,6 +860,7 @@ function SpellRow({
             />
             <FormField
               label="Formula"
+              labelExtra={<FormulaHelpButton />}
               value={spell.formula ?? spell.damage ?? ""}
               onChange={(v) => onUpdate({ formula: v, damage: v })}
               placeholder="e.g. 2d6+INT"

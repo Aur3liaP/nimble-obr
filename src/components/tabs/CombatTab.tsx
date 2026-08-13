@@ -28,6 +28,7 @@ import { RowDescriptionPanel } from "../ui/common/RowDescriptionPanel";
 import { FormField, GridFields } from "../ui/common/FormField";
 import { DraggableBar } from "../ui/common/DraggableBar";
 import { ItemRowBase } from "../ui/common/ItemRowBase";
+import { FormulaHelpButton } from "../ui/common/FormulaHelp";
 import { useDraggableValue } from "../../hooks/useDraggableValue";
 
 // ── Types ─────────────────────────────────────────────────────────
@@ -804,6 +805,7 @@ function ActionRow({
             />
             <FormField
               label="Formula"
+              labelExtra={<FormulaHelpButton />}
               value={action.formula ?? action.damage ?? ""}
               onChange={(v) => onUpdate({ formula: v, damage: v })}
               placeholder="e.g. 1d8+STR"
@@ -905,6 +907,7 @@ function AddActionModal({
             />
             <FormField
               label="Damage"
+              labelExtra={<FormulaHelpButton />}
               value={form.damage}
               onChange={(v) => set("damage", v)}
               placeholder="e.g. 1d8+STR"
