@@ -49,6 +49,8 @@ interface InputFieldProps extends FormFieldBaseProps {
   as?: "input";
   value: string | number;
   onChange: (v: string) => void;
+  /** Fires when the input loses focus (e.g. to reveal a deferred validation error). */
+  onBlur?: () => void;
   placeholder?: string;
   type?: InputHTMLAttributes<HTMLInputElement>["type"];
   min?: number;
@@ -112,6 +114,7 @@ export function FormField(props: FormFieldProps) {
           max={(props as InputFieldProps).max}
           disabled={(props as InputFieldProps).disabled}
           onChange={(e) => (props as InputFieldProps).onChange(e.target.value)}
+          onBlur={(props as InputFieldProps).onBlur}
           className={FIELD_BASE}
         />
       )}

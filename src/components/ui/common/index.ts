@@ -12,3 +12,4 @@ export { RowDescriptionPanel } from "./RowDescriptionPanel";
 export { DraggableBar } from "./DraggableBar";
 export { ItemRowBase } from "./ItemRowBase";
 export { FormulaHelpButton } from "./FormulaHelp";
+export { FormulaField, FormulaDiscardNotice } from "./FormulaField";

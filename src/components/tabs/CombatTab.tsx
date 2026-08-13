@@ -28,8 +28,9 @@ import { RowDescriptionPanel } from "../ui/common/RowDescriptionPanel";
 import { FormField, GridFields } from "../ui/common/FormField";
 import { DraggableBar } from "../ui/common/DraggableBar";
 import { ItemRowBase } from "../ui/common/ItemRowBase";
-import { FormulaHelpButton } from "../ui/common/FormulaHelp";
+import { FormulaField, FormulaDiscardNotice } from "../ui/common/FormulaField";
 import { useDraggableValue } from "../../hooks/useDraggableValue";
+import { useFormulaField } from "../../hooks/useFormulaField";
 
 // ── Types ─────────────────────────────────────────────────────────
 /**
@@ -712,6 +713,15 @@ function ActionRow({
   const icon = ACTION_ICONS[action.type] ?? "⚡";
   const { display: resolvedFormula, error: formulaError } =
     resolveFormulaDisplay(action.formula || action.damage, character);
+  // Called unconditionally (not only while isEditing) so a discard warning
+  // from closeEdit() survives the edit panel unmounting. Rows rendered
+  // without edit rights (e.g. favorited-action summaries) never get an
+  // onUpdate at all, so onCommit is a no-op there — editPanel itself is
+  // never rendered for those rows either.
+  const formulaField = useFormulaField(
+    action.formula ?? action.damage ?? "",
+    (v) => onUpdate?.({ formula: v, damage: v }),
+  );
 
   const handleHeaderClick = () => {
     if (isEditing) {
@@ -778,6 +788,8 @@ function ActionRow({
         </div>
       </div>
 
+      {!isEditing && <FormulaDiscardNotice message={formulaField.discardedWarning} />}
+
       {/* Description panel — only when not editing */}
       {expanded && !isEditing && (
         <RowDescriptionPanel
@@ -803,12 +815,10 @@ function ActionRow({
               onChange={(v) => onUpdate({ range: v })}
               placeholder="e.g. 1, range 6"
             />
-            <FormField
+            <FormulaField
               label="Formula"
-              labelExtra={<FormulaHelpButton />}
-              value={action.formula ?? action.damage ?? ""}
-              onChange={(v) => onUpdate({ formula: v, damage: v })}
               placeholder="e.g. 1d8+STR"
+              field={formulaField}
             />
           </GridFields>
           <FormField
@@ -832,7 +842,10 @@ function ActionRow({
               variant="danger"
             />
             <TextAction
-              onClick={() => onEditToggle?.()}
+              onClick={() => {
+                formulaField.closeEdit();
+                onEditToggle?.();
+              }}
               label="OK"
               variant="confirm"
             />
@@ -868,6 +881,10 @@ function AddActionModal({
     description: "",
   });
   const set = (k: string, v: string) => setForm((p) => ({ ...p, [k]: v }));
+
+  // Local form state, nothing here is persisted until "Add" is clicked —
+  // onCommit just updates local form state.
+  const formulaField = useFormulaField(form.damage, (v) => set("damage", v));
 
   return (
     <div
@@ -905,12 +922,10 @@ function AddActionModal({
               onChange={(v) => set("range", v)}
               placeholder="e.g. 1, range 6"
             />
-            <FormField
+            <FormulaField
               label="Damage"
-              labelExtra={<FormulaHelpButton />}
-              value={form.damage}
-              onChange={(v) => set("damage", v)}
               placeholder="e.g. 1d8+STR"
+              field={formulaField}
             />
           </GridFields>
           <FormField
@@ -931,6 +946,10 @@ function AddActionModal({
           <button
             onClick={() => {
               if (!form.name) return;
+              if (formulaField.error) {
+                formulaField.markTouched();
+                return;
+              }
               onAdd({
                 id: `a-${crypto.randomUUID()}`,
                 ...form,
@@ -939,7 +958,11 @@ function AddActionModal({
                 isCustom: true,
               });
             }}
-            className="flex-1 py-2 rounded-lg bg-amber-700 hover:bg-amber-600 text-amber-100 text-sm font-bold transition-colors"
+            className={`flex-1 py-2 rounded-lg text-sm font-bold transition-colors ${
+              formulaField.error
+                ? "bg-amber-900/40 text-amber-400/60 cursor-not-allowed"
+                : "bg-amber-700 hover:bg-amber-600 text-amber-100"
+            }`}
           >
             Add
           </button>

@@ -21,8 +21,9 @@ import { RowMeta } from "../ui/common/RowMeta";
 import { FormField, GridFields } from "../ui/common/FormField";
 import { NumericStepper } from "../ui/common/NumericStepper";
 import { ModalShell } from "../ui/common/ModalShell";
-import { FormulaHelpButton } from "../ui/common/FormulaHelp";
+import { FormulaField, FormulaDiscardNotice } from "../ui/common/FormulaField";
 import { ItemRowBase } from "../ui/common/ItemRowBase";
+import { useFormulaField } from "../../hooks/useFormulaField";
 
 // ── Types & helpers ───────────────────────────────────────────────
 /**
@@ -139,6 +140,11 @@ function AddItemModal({
   const setF = (k: string, v: string | number | boolean) =>
     setForm((p) => ({ ...p, [k]: v }));
 
+  // Custom-form formula never reaches OBR through this hook (nothing here
+  // is persisted until "Add" is clicked) — onCommit just updates local
+  // form state.
+  const formulaField = useFormulaField(form.formula, (v) => setF("formula", v));
+
   /** Official equipment list filtered by the current search text and category selection. */
   const filteredBase = useMemo(
     () =>
@@ -223,6 +229,10 @@ function AddItemModal({
       <button
         onClick={() => {
           if (!form.name.trim()) return;
+          if (formulaField.error) {
+            formulaField.markTouched();
+            return;
+          }
           onAdd({
             // #12 — was Date.now(), now uniformized on crypto.randomUUID()
             id: `i-${crypto.randomUUID()}`,
@@ -237,7 +247,11 @@ function AddItemModal({
             formula: form.formula || undefined,
           });
         }}
-        className="flex-1 py-2 rounded-lg bg-emerald-800 hover:bg-emerald-700 text-emerald-100 text-sm font-bold transition-colors"
+        className={`flex-1 py-2 rounded-lg text-sm font-bold transition-colors ${
+          formulaField.error
+            ? "bg-emerald-900/40 text-emerald-400/60 cursor-not-allowed"
+            : "bg-emerald-800 hover:bg-emerald-700 text-emerald-100"
+        }`}
       >
         Add
       </button>
@@ -341,12 +355,10 @@ function AddItemModal({
               <option value={1}>1 slot</option>
               <option value={2}>2 slots</option>
             </FormField>
-            <FormField
+            <FormulaField
               label="Roll formula"
-              labelExtra={<FormulaHelpButton />}
-              value={form.formula}
-              onChange={(v) => setF("formula", v)}
               placeholder="e.g. 1d6+DEX"
+              field={formulaField}
             />
           </GridFields>
           <FormField
@@ -697,6 +709,13 @@ function ItemRow({
     <span className="text-xs text-stone-400">×{item.quantity}</span>
   );
 
+  // Called unconditionally (not only while isEditing) so a discard warning
+  // from closeEdit() survives the edit panel unmounting and can still
+  // render via collapsedNotice below.
+  const formulaField = useFormulaField(item.formula ?? "", (v) =>
+    onUpdate({ formula: v || undefined }),
+  );
+
   const editPanel = isEditing ? (
     <div className="px-3 pb-3 border-t border-emerald-800/30 pt-2 flex flex-col gap-2">
       <FormField
@@ -704,12 +723,10 @@ function ItemRow({
         value={item.name}
         onChange={(v) => onUpdate({ name: v })}
       />
-      <FormField
+      <FormulaField
         label="Roll formula"
-        labelExtra={<FormulaHelpButton />}
-        value={item.formula ?? ""}
-        onChange={(v) => onUpdate({ formula: v || undefined })}
         placeholder="e.g. 1d6+STR"
+        field={formulaField}
       />
       <FormField
         label="Description"
@@ -742,7 +759,14 @@ function ItemRow({
       </GridFields>
       <div className="flex justify-between items-center mt-1">
         <TextAction onClick={onDelete} label="Remove item" variant="danger" />
-        <TextAction onClick={onEditToggle} label="OK" variant="confirm" />
+        <TextAction
+          onClick={() => {
+            formulaField.closeEdit();
+            onEditToggle();
+          }}
+          label="OK"
+          variant="confirm"
+        />
       </div>
     </div>
   ) : undefined;
@@ -770,6 +794,7 @@ function ItemRow({
       onEdit={onEditToggle}
       onDelete={onDelete}
       editPanel={editPanel}
+      collapsedNotice={<FormulaDiscardNotice message={formulaField.discardedWarning} />}
     />
   );
 }

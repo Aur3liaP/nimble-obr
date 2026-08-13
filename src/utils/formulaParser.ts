@@ -351,16 +351,23 @@ function assertDiceWithinLimits(
  * @param rawFormula - Original pre-substitution formula, for error
  * messages only; defaults to `formula` for direct callers (e.g. tests)
  * that have no separate "raw" version.
+ * @param enforceLimits - Whether to run {@link assertDiceWithinLimits} on
+ * each token. Defaults to `true` for every existing caller; only
+ * {@link validateFormulaSyntax} passes `false`, deliberately, since it
+ * validates syntax against a synthetic character and dice-count/sides
+ * bounds are a roll-time concern against the real one. See
+ * {@link validateFormulaSyntax}'s doc comment.
  */
 export function diceToAverage(
   formula: string,
   rawFormula: string = formula,
+  enforceLimits: boolean = true,
 ): string {
   // e.g.  2d6  →  7   (average of 2×(1+6)/2)
   return formula.replace(/(\d+)d(\d+)/gi, (match, count, sides) => {
     const n = parseInt(count, 10);
     const s = parseInt(sides, 10);
-    assertDiceWithinLimits(n, s, match, rawFormula);
+    if (enforceLimits) assertDiceWithinLimits(n, s, match, rawFormula);
     const avg = Math.round(n * ((1 + s) / 2));
     return String(avg);
   });
@@ -839,9 +846,20 @@ function normalizeImplicitDiceCount(formula: string): string {
  * @param rawFormula - Original pre-substitution formula, for error
  * messages only; defaults to `formula` for direct callers (e.g. tests)
  * that have no separate "raw" version.
+ * @param enforceLimits - Whether the choke-point loop below runs
+ * {@link assertDiceWithinLimits}. Defaults to `true` for every existing
+ * caller (`parseDamageFormula`/`rollFormula`, `evalFormulaWithContext`,
+ * `resolveFormulaDisplay`, `validateFormula`) — none of them pass `false`,
+ * so this change is behaviorally inert for all of them. Only
+ * {@link validateFormulaSyntax} passes `false`: see its doc comment for
+ * why dice bounds are deliberately not a write-time concern.
  * @returns The formula with custom dice helpers expanded to plain `NdX`.
  */
-function resolveDynamicDice(formula: string, rawFormula: string = formula): string {
+function resolveDynamicDice(
+  formula: string,
+  rawFormula: string = formula,
+  enforceLimits: boolean = true,
+): string {
   formula = formula.replace(/1dstepdice\(([^)]+)\)/gi, (_match, args) => {
     const [level, d1, d2, d3, d4] = args
       .split(",")
@@ -872,13 +890,15 @@ function resolveDynamicDice(formula: string, rawFormula: string = formula): stri
   // evalFormulaWithContext, resolveFormulaDisplay) calls this function
   // before reading count/sides, so this single check guards all of them —
   // none of those callers do their own limit check on the result.
-  for (const match of formula.matchAll(/(\d+)d(\d+)/gi)) {
-    assertDiceWithinLimits(
-      Number(match[1]),
-      Number(match[2]),
-      match[0],
-      rawFormula,
-    );
+  if (enforceLimits) {
+    for (const match of formula.matchAll(/(\d+)d(\d+)/gi)) {
+      assertDiceWithinLimits(
+        Number(match[1]),
+        Number(match[2]),
+        match[0],
+        rawFormula,
+      );
+    }
   }
 
   return formula;
@@ -981,6 +1001,130 @@ export function validateFormula(formula: string, ctx: FormulaContext): void {
     throw new FormulaError(
       `Could not evaluate formula: "${formula}" (resolved to "${averaged}").`,
     );
+  }
+}
+
+/**
+ * Synthetic {@link FormulaContext} used only by {@link validateFormulaSyntax},
+ * never by anything that resolves a formula to a value shown or rolled for
+ * a real character.
+ *
+ * @remarks Every field is `1`, deliberately not `0`. This project's own bug
+ * history (`KEYd20` resolving to `0d20` for a character with no `keyStat`
+ * set) is what {@link validateFormulaSyntax} exists to stop happening at
+ * write time instead of roll time — reusing `0` here would just relocate
+ * the exact same trap into the neutral context itself, for KEY and for
+ * every other variable that can legitimately be `0` on a real character
+ * (FLAW, HP). `1` avoids that for any directly-glued variable (`KEYd20`,
+ * `STRd6`, `LEVELd8`, `FLAWd6`) without being large enough to risk the
+ * upper bound either.
+ *
+ * That said, dice-count/sides bounds are not actually enforced by
+ * `validateFormulaSyntax` at all (see its doc comment) — bounds are a
+ * roll-time concern, checked against the real character. So today,
+ * nothing here strictly depends on these values being nonzero. They're
+ * `1` anyway as defense in depth, on the same reasoning already applied
+ * to `VARIABLE_TABLE`'s MAXHP/HP ordering: correctness shouldn't depend
+ * on `enforceLimits: false` staying that way forever if this ever changes.
+ */
+const NEUTRAL_VALIDATION_CONTEXT: FormulaContext = {
+  level: 1,
+  key: 1,
+  flaw: 1,
+  stats: { str: 1, dex: 1, int: 1, wil: 1 },
+  skills: {
+    arcana: 1,
+    examination: 1,
+    finesse: 1,
+    influence: 1,
+    insight: 1,
+    lore: 1,
+    might: 1,
+    naturecraft: 1,
+    perception: 1,
+    stealth: 1,
+  },
+  hp: 1,
+  maxHp: 1,
+};
+
+/**
+ * Write-time syntax gate for a formula, independent of any specific
+ * character. Intended for the UI's formula input fields (spell/item/action
+ * create-and-edit forms): a formula the parser can't read at all must
+ * never be persisted to OBR scene metadata and broadcast to the table,
+ * where it would only fail later, at roll time, for whoever tries to use
+ * it — possibly a different person, possibly a different session.
+ *
+ * @remarks Deliberately validates SYNTAX, not resolved VALUES: substitutes
+ * against {@link NEUTRAL_VALIDATION_CONTEXT} rather than a real character,
+ * and does not enforce `MAX_DICE_COUNT`/`MAX_DICE_SIDES`/the dice lower
+ * bound at all (passes `enforceLimits: false` to `resolveDynamicDice`/
+ * `diceToAverage`) — uniformly, including for a formula with no variables
+ * in it whatsoever (e.g. a hand-typed "99999d6"). Two concrete reasons,
+ * not just caution:
+ *
+ * - A real character's numeric fields (KEY before `keyStat` is set, FLAW,
+ *   HP) can legitimately be outside whatever range a synthetic context
+ *   picks, in either direction. `KEYd20` saved by a GM whose character
+ *   sheet doesn't have `keyStat` set yet resolves to `0d20` against the
+ *   real character right now, and would be wrongly rejected at save time
+ *   if this gate substituted with that same real, incomplete context.
+ * - Bounds are inherently level/context-dependent for dynamic dice (e.g.
+ *   `incrementdice(1,LEVEL)d6` is 1 die at level 1 and 5 dice at level
+ *   20): no single neutral context, and no pair of "extremes," makes a
+ *   bound check here mean anything about every level in between. Bounds
+ *   are checked once, correctly, at roll time — by this exact same
+ *   `assertDiceWithinLimits` choke point, against the real character
+ *   actually rolling (see `rollFormula` → `parseDamageFormula` →
+ *   `resolveDynamicDice`). Write-time validation only needs to confirm
+ *   the formula is well-formed enough to be evaluated at all: recognized
+ *   tokens, correct function arity, balanced/bounded nesting depth
+ *   (`MAX_PARSE_DEPTH`, still enforced — that's a parser-shape concern,
+ *   not a resolved-value one), and dice notation shaped like `NdX`.
+ *
+ * @param formula - Raw formula as a player/GM is about to save it.
+ * @throws {FormulaError} if the formula is too long, too deeply nested,
+ * uses an unrecognized token or wrong function arity, or otherwise fails
+ * to parse to a real number once substituted against the neutral context.
+ */
+export function validateFormulaSyntax(formula: string): void {
+  if (formula.length > MAX_FORMULA_LENGTH) {
+    throw new FormulaError(
+      `Formula too long (${formula.length} chars, max ${MAX_FORMULA_LENGTH}).`,
+    );
+  }
+  const substituted = substituteVariables(formula, NEUTRAL_VALIDATION_CONTEXT);
+  const resolved = resolveDynamicDice(substituted, formula, false);
+  const averaged = diceToAverage(resolved, formula, false);
+  const result = safeEval(averaged);
+  if (isNaN(result)) {
+    throw new FormulaError(
+      `Could not evaluate formula: "${formula}" (resolved to "${averaged}").`,
+    );
+  }
+}
+
+/**
+ * Non-throwing wrapper around {@link validateFormulaSyntax}, matching the
+ * `{ value, error? }`-shaped return convention used by {@link evalFormula}/
+ * {@link rollFormula}/{@link resolveFormulaDisplay} elsewhere in this file,
+ * for UI code (e.g. `useFormulaField`) that wants a value to render rather
+ * than a `try`/`catch`.
+ *
+ * @param formula - Raw formula as currently typed.
+ * @returns `undefined` if the formula is blank (an empty/optional formula
+ * is not an error) or syntactically valid; otherwise the {@link FormulaError}
+ * message.
+ */
+export function formulaSyntaxError(formula: string): string | undefined {
+  if (formula.trim() === "") return undefined;
+  try {
+    validateFormulaSyntax(formula);
+    return undefined;
+  } catch (err) {
+    if (!(err instanceof FormulaError)) throw err;
+    return err.message;
   }
 }
 

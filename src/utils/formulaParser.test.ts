@@ -16,12 +16,14 @@ import {
   diceToAverage,
   evalFormula,
   evalFormulaWithContext,
+  formulaSyntaxError,
   FormulaError,
   parseDamageFormula,
   resolveFormulaDisplay,
   rollFormula,
   safeEval,
   validateFormula,
+  validateFormulaSyntax,
   VARIABLE_TABLE,
 } from "./formulaParser";
 
@@ -1201,5 +1203,73 @@ describe("game data validation (point 4)", () => {
     }
 
     expect(failures).toEqual([]);
+  });
+});
+
+describe("validateFormulaSyntax: write-time gate validates syntax, not resolved values (point 8)", () => {
+  // validateFormula (still used with a real character/context elsewhere)
+  // enforces dice-count/sides bounds; validateFormulaSyntax deliberately
+  // does not, against any context, including the synthetic one it
+  // substitutes with internally — bounds are a roll-time concern. See the
+  // doc comment on validateFormulaSyntax for the full reasoning.
+
+  it("accepts KEYd20 regardless of any character's actual key stat", () => {
+    // The motivating case: a GM whose character has no keyStat set yet
+    // (KEY resolves to 0 for a real character in that state) must not
+    // have "KEYd20" rejected at save time — it's valid notation for
+    // whoever eventually uses it with a key stat set.
+    expect(() => validateFormulaSyntax("KEYd20")).not.toThrow();
+    expect(formulaSyntaxError("KEYd20")).toBeUndefined();
+  });
+
+  it("accepts a literal formula that would fail the dice-count/sides bounds, with no variables involved at all", () => {
+    // Not KEY-specific: the decision is "bounds are never a write-time
+    // concern", not "only when a variable happens to be involved".
+    expect(formulaSyntaxError("99999d6")).toBeUndefined();
+    expect(formulaSyntaxError("1d99999")).toBeUndefined();
+    expect(formulaSyntaxError("0d20")).toBeUndefined();
+  });
+
+  it("accepts dynamic dice whose count only exceeds the limit at a level nowhere near the neutral context's", () => {
+    // incrementdice(1, LEVEL)d6 is 1 die at level 1 (the neutral context)
+    // but would be well over MAX_DICE_COUNT at a very high level. No
+    // single neutral value, and no pair of "extremes", makes a bound
+    // check here meaningful for every level in between — so it isn't
+    // attempted at all. The real bound still applies at roll time; see
+    // the "still enforces bounds against a real character" tests below.
+    expect(formulaSyntaxError("incrementdice(1,LEVEL)d6")).toBeUndefined();
+
+    // A base large enough to exceed MAX_DICE_COUNT even at the neutral
+    // context's own level=1 (count = base + floor(level/5) = 150 + 0):
+    // unlike the base=1 case just above (which stays in-bounds at level 1
+    // either way), this one actually distinguishes "bounds are checked"
+    // from "bounds are not checked", so it would catch enforceLimits
+    // being wired back to true by mistake.
+    expect(formulaSyntaxError("incrementdice(150,LEVEL)d6")).toBeUndefined();
+  });
+
+  it("still enforces bounds against a real character, via the unchanged validateFormula, at the same LEVEL that validateFormulaSyntax waves through", () => {
+    const ctx = buildContext(makeCharacter({ level: 500 }));
+    expect(() => validateFormula("incrementdice(1,LEVEL)d6", ctx)).toThrow();
+    const charNoKey = makeCharacter({ keyStat: null });
+    // KEYd20 -> "0d20" for this real character; validateFormula (the
+    // context-bound gate, not validateFormulaSyntax) must still reject it.
+    expect(() => validateFormula("KEYd20", buildContext(charNoKey))).toThrow();
+  });
+
+  it("still rejects genuine syntax problems: unrecognized tokens, wrong function arity, and over-length formulas", () => {
+    expect(formulaSyntaxError("garbage(1)")).toBeDefined();
+    expect(formulaSyntaxError("min(1,2,3)")).toContain("min() takes 2 arguments");
+    expect(formulaSyntaxError("min(1)")).toContain("min() takes 2 arguments");
+    expect(formulaSyntaxError("1+".repeat(150) + "1")).toBeDefined();
+  });
+
+  it("treats a blank or whitespace-only formula as valid, not an error (an optional formula is not a syntax problem)", () => {
+    expect(formulaSyntaxError("")).toBeUndefined();
+    expect(formulaSyntaxError("   ")).toBeUndefined();
+  });
+
+  it("formulaSyntaxError never throws for a FormulaError, matching evalFormula/rollFormula's non-throwing contract", () => {
+    expect(() => formulaSyntaxError("garbage(1)")).not.toThrow();
   });
 });
