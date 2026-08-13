@@ -757,10 +757,8 @@ function SpellRow({
     ? SCHOOL_STYLES[school]
     : "text-violet-300 border-violet-800/60 bg-violet-950/30";
   const schoolIcon = school ? SCHOOL_ICONS[school] : "✨";
-  const { display: resolvedFormula } = resolveFormulaDisplay(
-    spell.formula || spell.damage,
-    character,
-  );
+  const { display: resolvedFormula, error: formulaError } =
+    resolveFormulaDisplay(spell.formula || spell.damage, character);
 
   return (
     <div
@@ -801,7 +799,17 @@ function SpellRow({
           <div className="flex items-center gap-3 mt-0.5">
             <RowMeta range={spell.range} actionCost={spell.actionCost} />
             {resolvedFormula && (
-              <span className="text-[10px] font-mono text-amber-300/80">
+              <span
+                className={`text-[10px] font-mono ${
+                  formulaError ? "text-rose-400" : "text-amber-300/80"
+                }`}
+                title={
+                  formulaError
+                    ? `Invalid formula, won't roll: ${formulaError}`
+                    : undefined
+                }
+              >
+                {formulaError ? "⚠ " : ""}
                 {resolvedFormula}
               </span>
             )}

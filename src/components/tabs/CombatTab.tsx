@@ -691,10 +691,8 @@ function ActionRow({
   const [expanded, setExpanded] = useState(false);
   const typeStyle = ACTION_COLORS[action.type] ?? "";
   const icon = ACTION_ICONS[action.type] ?? "⚡";
-  const { display: resolvedFormula } = resolveFormulaDisplay(
-    action.formula || action.damage,
-    character,
-  );
+  const { display: resolvedFormula, error: formulaError } =
+    resolveFormulaDisplay(action.formula || action.damage, character);
 
   const handleHeaderClick = () => {
     if (isEditing) {
@@ -732,7 +730,17 @@ function ActionRow({
           <div className="flex items-center gap-3 mt-0.5">
             <RowMeta range={action.range} actionCost={action.actionCost} />
             {resolvedFormula && (
-              <span className="text-[10px] font-mono text-amber-300/80">
+              <span
+                className={`text-[10px] font-mono ${
+                  formulaError ? "text-rose-400" : "text-amber-300/80"
+                }`}
+                title={
+                  formulaError
+                    ? `Invalid formula, won't roll: ${formulaError}`
+                    : undefined
+                }
+              >
+                {formulaError ? "⚠ " : ""}
                 {resolvedFormula}
               </span>
             )}
