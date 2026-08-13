@@ -8,12 +8,13 @@
  */
 
 import { useState } from "react";
-import type {
-  NimbleCharacter,
-  DiceRollRequest,
-  RollMode,
-  DiceType,
-  Stats,
+import {
+  MAX_LEVEL,
+  type NimbleCharacter,
+  type DiceRollRequest,
+  type RollMode,
+  type DiceType,
+  type Stats,
 } from "../../types/character";
 import { StatGrid } from "../ui/StatBox";
 import { LanguageSelector } from "../ui/LanguageSelector";
@@ -220,6 +221,7 @@ export function SummaryTab({
             value={character.level}
             canEdit={canEdit}
             min={1}
+            max={MAX_LEVEL}
             onChange={(v) => onUpdate({ level: v })}
             align="center"
             className="w-10 shrink-0"

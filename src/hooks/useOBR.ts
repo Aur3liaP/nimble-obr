@@ -17,6 +17,7 @@ import OBR, { type Item, type Player } from "@owlbear-rodeo/sdk";
 
 import {
   METADATA_KEY,
+  MAX_LEVEL,
   createDefaultCharacter,
   type NimbleCharacter,
   type DiceRollRequest,
@@ -253,6 +254,13 @@ export function useOBR(): UseOBRReturn {
    * stale UI (e.g. a button that should have been hidden/disabled but
    * briefly wasn't during a re-render).
    *
+   * Also clamps `level` to `[1, MAX_LEVEL]` when present in `updates` — an
+   * unbounded level can push a legitimate dynamic-dice spell formula
+   * (`incrementdice`/`stepdice`) past formulaParser's dice safety limits,
+   * turning it into one that always errors out. Clamped here, at the
+   * single write choke point, rather than only as an input hint, since an
+   * HTML `max` attribute doesn't stop a typed value from being committed.
+   *
    * @param updates - Partial character fields to merge into the current state.
    */
   const updateCharacter = async (updates: Partial<NimbleCharacter>) => {
@@ -264,7 +272,11 @@ export function useOBR(): UseOBRReturn {
       );
       return;
     }
-    const updated = { ...current, ...updates, updatedAt: Date.now() };
+    const clampedUpdates =
+      updates.level !== undefined
+        ? { ...updates, level: Math.min(Math.max(updates.level, 1), MAX_LEVEL) }
+        : updates;
+    const updated = { ...current, ...clampedUpdates, updatedAt: Date.now() };
     setCharacter(updated);
     await OBR.scene.items.updateItems([current.tokenId], (items) => {
       for (const item of items) {
@@ -310,6 +322,10 @@ export function useOBR(): UseOBRReturn {
    *
    * @param req - Label, formula, roll mode, and optional hidden flag.
    * @returns The resolved {@link DiceRollResult}, or `null` if no character is loaded.
+   * If the formula failed (`result.error` set), the result is still
+   * returned to the caller (so it can show the roller what went wrong) but
+   * is *not* pushed to the shared roll log — a failed roll must never reach
+   * the table looking like a legitimate total of 0.
    */
   const handleRoll = async (
     req: DiceRollRequest,
@@ -331,6 +347,7 @@ export function useOBR(): UseOBRReturn {
       timestamp: Date.now(),
       hidden: req.hidden || false,
     };
+    if (result.error) return result;
     await pushRollToLog(result);
     return result;
   };
@@ -341,7 +358,9 @@ export function useOBR(): UseOBRReturn {
    * so plain `NdX+modifier` formulas still resolve correctly.
    *
    * @param req - Label, formula, roll mode, and optional hidden flag.
-   * @returns The resolved {@link DiceRollResult}.
+   * @returns The resolved {@link DiceRollResult}. Same failure handling as
+   * {@link handleRoll}: a result with `.error` set is returned but not
+   * pushed to the shared roll log.
    */
   const handleFreeRoll = async (
     req: DiceRollRequest,
@@ -379,6 +398,7 @@ export function useOBR(): UseOBRReturn {
       timestamp: Date.now(),
       hidden: req.hidden || false,
     };
+    if (result.error) return result;
     await pushRollToLog(result);
     return result;
   };
