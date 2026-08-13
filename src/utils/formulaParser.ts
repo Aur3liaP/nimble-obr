@@ -5,6 +5,12 @@
  *  - Stat references: STR, DEX, INT, WIL (case-insensitive)
  *  - Skill references: MIGHT, STEALTH, etc.
  *  - LEVEL, KEY (key stat value), FLAW (flaw stat value)
+ *  - LVL as a deliberate alias for LEVEL: the Nimble rulebook itself uses
+ *    "LVL" (e.g. official formula shorthand like "+5/5lvl"), and the game
+ *    data in src/data/spells.ts has at least one real spell formula written
+ *    as "LVL" rather than "LEVEL" — both are genuine, supported notation,
+ *    not a typo to "fix" by rewriting the data. Do not remove this as
+ *    "redundant" with LEVEL.
  *  - Dice notation: NdX (e.g. 1d8, 2d6), or implicit-count dN (e.g. Nimble's
  *    single-die d44/d66/d88), normalized to 1dN — averaged for display/
  *    modifier math; actual random rolling is done separately by
@@ -102,6 +108,31 @@ export function buildContext(char: NimbleCharacter): FormulaContext {
 }
 
 /**
+ * Builds the substitution regex for a single variable name, operating on
+ * the uppercase, not-yet-lowercased string `substituteVariables` works on.
+ *
+ * The right boundary is deliberately not a plain `\b`: `\b` requires a
+ * transition between a word character and a non-word character, but
+ * digits count as word characters, so `\bKEY\b` never matches inside
+ * "KEYD20" — there's no boundary between "Y" and "D". That silently broke
+ * every "COUNTd20"-per-stat scaling formula the game actually uses (e.g.
+ * `spells.ts`'s "KEYd20", meaning "one dN per point of KEY").
+ *
+ * This custom right boundary instead requires what immediately follows to
+ * be one of: end of string, a non-alphanumeric character (operator, paren,
+ * comma, space), or specifically "D" followed by a digit (the dice-suffix
+ * shape) — so "KEY" substitutes in "KEYD20" but not in "KEYSTONE", and a
+ * bare trailing digit with no "D" (e.g. "KEY2", not a documented pattern
+ * anywhere in this project's data) is still left alone rather than
+ * silently concatenating into a wrong number.
+ *
+ * @param name - Uppercase variable name (e.g. "KEY", "MAXHP").
+ */
+function variablePattern(name: string): RegExp {
+  return new RegExp(`\\b${name}(?=$|[^A-Z0-9]|D\\d)`, "g");
+}
+
+/**
  * Replaces all known variable tokens (STR, DEX, LEVEL, skill names, HP…)
  * in a formula string with their numeric values from the given context.
  * Also normalizes `Math.floor(`/`Math.ceil(`/`Math.min(`/`Math.max(` to the
@@ -122,31 +153,43 @@ function substituteVariables(formula: string, ctx: FormulaContext): string {
   let f = formula.trim().toUpperCase();
 
   // Stats
-  f = f.replace(/\bSTR\b/g, String(ctx.stats.str));
-  f = f.replace(/\bDEX\b/g, String(ctx.stats.dex));
-  f = f.replace(/\bINT\b/g, String(ctx.stats.int));
-  f = f.replace(/\bWIL\b/g, String(ctx.stats.wil));
+  f = f.replace(variablePattern("STR"), String(ctx.stats.str));
+  f = f.replace(variablePattern("DEX"), String(ctx.stats.dex));
+  f = f.replace(variablePattern("INT"), String(ctx.stats.int));
+  f = f.replace(variablePattern("WIL"), String(ctx.stats.wil));
 
-  f = f.replace(/\bKEY\b/g, String(ctx.key));
+  f = f.replace(variablePattern("KEY"), String(ctx.key));
+  // FLAW is documented (see @file header) and already computed by
+  // buildContext, but had no substitution line at all — not a boundary
+  // bug like KEY/LEVEL, just never wired up. No real formula uses it yet,
+  // but it's intended, supported syntax.
+  f = f.replace(variablePattern("FLAW"), String(ctx.flaw));
 
-  // Level
-  f = f.replace(/\bLEVEL\b/g, String(ctx.level));
+  // Level — LVL is a deliberate alias, not a typo to remove; see the
+  // @file header for why.
+  f = f.replace(variablePattern("LEVEL"), String(ctx.level));
+  f = f.replace(variablePattern("LVL"), String(ctx.level));
 
   // Skills
-  f = f.replace(/\bARCANA\b/g, String(ctx.skills.arcana));
-  f = f.replace(/\bEXAMINATION\b/g, String(ctx.skills.examination));
-  f = f.replace(/\bFINESSE\b/g, String(ctx.skills.finesse));
-  f = f.replace(/\bINFLUENCE\b/g, String(ctx.skills.influence));
-  f = f.replace(/\bINSIGHT\b/g, String(ctx.skills.insight));
-  f = f.replace(/\bLORE\b/g, String(ctx.skills.lore));
-  f = f.replace(/\bMIGHT\b/g, String(ctx.skills.might));
-  f = f.replace(/\bNATURECRAFT\b/g, String(ctx.skills.naturecraft));
-  f = f.replace(/\bPERCEPTION\b/g, String(ctx.skills.perception));
-  f = f.replace(/\bSTEALTH\b/g, String(ctx.skills.stealth));
+  f = f.replace(variablePattern("ARCANA"), String(ctx.skills.arcana));
+  f = f.replace(variablePattern("EXAMINATION"), String(ctx.skills.examination));
+  f = f.replace(variablePattern("FINESSE"), String(ctx.skills.finesse));
+  f = f.replace(variablePattern("INFLUENCE"), String(ctx.skills.influence));
+  f = f.replace(variablePattern("INSIGHT"), String(ctx.skills.insight));
+  f = f.replace(variablePattern("LORE"), String(ctx.skills.lore));
+  f = f.replace(variablePattern("MIGHT"), String(ctx.skills.might));
+  f = f.replace(variablePattern("NATURECRAFT"), String(ctx.skills.naturecraft));
+  f = f.replace(variablePattern("PERCEPTION"), String(ctx.skills.perception));
+  f = f.replace(variablePattern("STEALTH"), String(ctx.skills.stealth));
 
-  // HP
-  f = f.replace(/\bHP\b/g, String(ctx.hp ?? 0));
-  f = f.replace(/\bMAXHP\b/g, String(ctx.maxHp ?? 0));
+  // HP — MAXHP must be replaced before HP. "HP" is a trailing substring of
+  // "MAXHP" (not a prefix of it), and the left `\b` in variablePattern
+  // already prevents `\bHP` from matching inside "MAXHP" on its own (no
+  // boundary between "X" and "H", both word characters) — verified by
+  // test, not just asserted. Ordering the longer/more-specific name first
+  // removes any need to rely on that reasoning holding forever.
+  f = f.replace(variablePattern("MAXHP"), String(ctx.maxHp ?? 0));
+  f = f.replace(variablePattern("HP"), String(ctx.hp ?? 0));
 
   // floor / ceil shorthands → keep as tokens for the parser
   f = f.replace(/MATH\.FLOOR\(/g, "floor(");
@@ -154,10 +197,6 @@ function substituteVariables(formula: string, ctx: FormulaContext): string {
   f = f.replace(/MATH\.MIN\(/g, "min(");
   f = f.replace(/MATH\.MAX\(/g, "max(");
   f = f.toLowerCase(); // parser works in lowercase
-
-  // Custom
-  f = f.replace(/\bINCREMENTDICE\(/g, "incrementdice(");
-  f = f.replace(/\bSTEPDICE\(/g, "stepdice(");
 
   return f;
 }
@@ -167,17 +206,64 @@ function substituteVariables(formula: string, ctx: FormulaContext): string {
 // ─────────────────────────────────────────────────────────────────
 
 /**
- * Throws if a resolved dice token's count or sides exceed the configured
- * safety limits. This is the shared guard behind every legitimate entry
- * point that reads final count/sides values — {@link diceToAverage} (direct
- * display-path callers) and {@link resolveDynamicDice} (the choke point all
- * dice-rolling paths pass through) — so the limit is defined once and
- * cannot be bypassed by going through one path instead of the other.
+ * Throws if a resolved dice token's count or sides are out of range —
+ * either above the upper safety limits, or below the lower bound of what a
+ * die can even mean (a 0-count roll, or a die with fewer than 2 sides).
+ * This is the shared guard behind every legitimate entry point that reads
+ * final count/sides values — {@link diceToAverage} (direct display-path
+ * callers) and {@link resolveDynamicDice} (the choke point all dice-rolling
+ * paths pass through) — so the limit is defined once and cannot be
+ * bypassed by going through one path instead of the other.
+ *
+ * The lower bound matters in practice, not just in theory: `buildContext`
+ * returns `key: 0` whenever `char.keyStat` isn't set yet, which is the
+ * normal state of a character sheet mid-creation — a very reachable way to
+ * turn a real formula like "KEYd20" into "0d20". This must fail loudly, not
+ * silently clamp to 1 die — a silent clamp is exactly the kind of
+ * degradation the last two batches removed.
+ *
+ * In practice the lower bound only ever fires for `count === 0`: a
+ * *negative* count (e.g. "-1d6" from a stat that went negative) is never
+ * seen here at all. It's caught earlier, deliberately, by
+ * {@link Parser.parse}'s full-consumption check instead — the choke-point
+ * regex that reads count/sides never captures a leading "-", because that
+ * "-" is ambiguous between "part of a negative number" and a subtraction
+ * operator (e.g. "10-1d6", a flat 10 minus a legitimate 1d6 roll), and
+ * treating it as always-negative would misdiagnose the subtraction case.
+ * See rollFormula's tests for both.
+ *
+ * @param count - Resolved dice count.
+ * @param sides - Resolved die size.
+ * @param token - The specific `NdX` substring that resolved to `count`/`sides`.
+ * @param rawFormula - The original, pre-substitution formula the caller
+ * started from. Included in the error message alongside `token` so a
+ * player/GM sees *why* a count went to 0 (e.g. `"KEYd20" resolved to
+ * "0d20"`), not just the already-substituted number with no stat name left
+ * in it to explain it.
  */
-function assertDiceWithinLimits(count: number, sides: number, token: string): void {
+function assertDiceWithinLimits(
+  count: number,
+  sides: number,
+  token: string,
+  rawFormula: string,
+): void {
+  const source =
+    token === rawFormula
+      ? `"${token}"`
+      : `"${rawFormula}" resolved to "${token}"`;
   if (count > MAX_DICE_COUNT || sides > MAX_DICE_SIDES) {
     throw new FormulaError(
-      `Dice count/sides out of range (${token}, max ${MAX_DICE_COUNT}d${MAX_DICE_SIDES}).`,
+      `Dice count/sides out of range (${source}, max ${MAX_DICE_COUNT}d${MAX_DICE_SIDES}).`,
+    );
+  }
+  if (count < 1) {
+    throw new FormulaError(
+      `Dice count must be at least 1 (${source}, got count ${count}).`,
+    );
+  }
+  if (sides < 2) {
+    throw new FormulaError(
+      `A die needs at least 2 sides (${source}, got ${sides}).`,
     );
   }
 }
@@ -185,13 +271,21 @@ function assertDiceWithinLimits(count: number, sides: number, token: string): vo
 /**
  * Replace NdX tokens with their *average* value (for static display /
  * modifier computation).  Actual random rolling uses OBR dice or rollDice().
+ *
+ * @param formula - Formula to average, already variable-substituted.
+ * @param rawFormula - Original pre-substitution formula, for error
+ * messages only; defaults to `formula` for direct callers (e.g. tests)
+ * that have no separate "raw" version.
  */
-export function diceToAverage(formula: string): string {
+export function diceToAverage(
+  formula: string,
+  rawFormula: string = formula,
+): string {
   // e.g.  2d6  →  7   (average of 2×(1+6)/2)
   return formula.replace(/(\d+)d(\d+)/gi, (match, count, sides) => {
     const n = parseInt(count, 10);
     const s = parseInt(sides, 10);
-    assertDiceWithinLimits(n, s, match);
+    assertDiceWithinLimits(n, s, match, rawFormula);
     const avg = Math.round(n * ((1 + s) / 2));
     return String(avg);
   });
@@ -214,21 +308,35 @@ export function parseDamageFormula(
 ): { diceNotation: string; modifier: number } {
   // Substitute variables first, then split dice from modifiers
   let subbed = substituteVariables(formula, ctx);
-  subbed = resolveDynamicDice(subbed);
+  subbed = resolveDynamicDice(subbed, formula);
 
   // Extract leading NdX
   const diceMatch = subbed.match(/^(\d+d\d+)/i);
   if (!diceMatch) {
     // No dice — pure modifier
     const mod = safeEval(subbed);
-    return { diceNotation: "", modifier: isNaN(mod) ? 0 : mod };
+    // NaN is a parse failure (safeEval's whitelist rejected something left
+    // after substitution), not a legitimate flat 0 — must not look like
+    // one. rollFormula, the main caller, already wraps this call in a
+    // try/catch and surfaces FormulaError via its `.error` field.
+    if (isNaN(mod)) {
+      throw new FormulaError(
+        `Could not evaluate formula: "${formula}" (resolved to "${subbed}").`,
+      );
+    }
+    return { diceNotation: "", modifier: mod };
   }
 
   const diceNotation = diceMatch[1];
   const rest = subbed.slice(diceNotation.length); // e.g.  "+2+3"
   const modifier = rest.trim() ? safeEval(rest) : 0;
+  if (isNaN(modifier)) {
+    throw new FormulaError(
+      `Could not evaluate the modifier in formula: "${formula}" (resolved to "${subbed}").`,
+    );
+  }
 
-  return { diceNotation, modifier: isNaN(modifier) ? 0 : modifier };
+  return { diceNotation, modifier };
 }
 
 /**
@@ -408,13 +516,36 @@ class Parser {
       const start = this.pos;
       this.skipWhitespace();
       if (/[\d.]/.test(this.input[this.pos] ?? "")) {
-        while (
-          this.pos < this.input.length &&
-          /[\d.]/.test(this.input[this.pos])
-        ) {
+        // Only a single "." is consumed as part of the number — a second
+        // one stops the scan here and is left for the caller, so it
+        // surfaces as trailing input rather than being silently absorbed.
+        // Without this, the old naive "any run of digits/dots" scan would
+        // consume all of "1..2" in one go and quietly hand it to
+        // parseFloat, which itself stops at the first invalid character
+        // and returns just the valid prefix (parseFloat("1..2") === 1) —
+        // the ".2" tail vanishes with no trailing-input error to catch it.
+        let sawDot = false;
+        while (this.pos < this.input.length) {
+          const ch = this.input[this.pos];
+          if (ch === ".") {
+            if (sawDot) break;
+            sawDot = true;
+          } else if (!/\d/.test(ch)) {
+            break;
+          }
           this.pos++;
         }
-        return parseFloat(this.input.slice(start, this.pos)) || 0;
+        const text = this.input.slice(start, this.pos);
+        const value = parseFloat(text);
+        // A bare "." (no digits at all, e.g. the tail of "1d6+.") passes
+        // the character scan above but isn't a valid number — parseFloat
+        // returns NaN. The old `|| 0` here silently turned that into a
+        // legitimate-looking 0 instead of rejecting the malformed input,
+        // the same silent-success shape fixed everywhere else in this file.
+        if (isNaN(value)) {
+          throw new FormulaError(`Malformed number in formula: "${text}".`);
+        }
+        return value;
       }
 
       // Min & Max
@@ -554,9 +685,12 @@ function normalizeImplicitDiceCount(formula: string): string {
  *   `floor(level / 5)` on top of `base`.
  *
  * @param formula - Formula string with variables already substituted.
+ * @param rawFormula - Original pre-substitution formula, for error
+ * messages only; defaults to `formula` for direct callers (e.g. tests)
+ * that have no separate "raw" version.
  * @returns The formula with custom dice helpers expanded to plain `NdX`.
  */
-function resolveDynamicDice(formula: string): string {
+function resolveDynamicDice(formula: string, rawFormula: string = formula): string {
   formula = formula.replace(/1dstepdice\(([^)]+)\)/gi, (_match, args) => {
     const [level, d1, d2, d3, d4] = args
       .split(",")
@@ -588,7 +722,12 @@ function resolveDynamicDice(formula: string): string {
   // before reading count/sides, so this single check guards all of them —
   // none of those callers do their own limit check on the result.
   for (const match of formula.matchAll(/(\d+)d(\d+)/gi)) {
-    assertDiceWithinLimits(Number(match[1]), Number(match[2]), match[0]);
+    assertDiceWithinLimits(
+      Number(match[1]),
+      Number(match[2]),
+      match[0],
+      rawFormula,
+    );
   }
 
   return formula;
@@ -602,20 +741,24 @@ function resolveDynamicDice(formula: string): string {
  * Evaluates a formula to a single number for a given character, treating
  * any dice notation as its statistical average (not a real roll).
  *
- * @example evalFormula("1d10 + STR + floor(LEVEL / 2)", char) // → 7
+ * @example evalFormula("1d10 + STR + floor(LEVEL / 2)", char) // → { value: 7 }
  *
  * @param formula - Formula string (variables + optional dice notation).
  * @param char - Character providing stats/skills/level context.
- * @returns The resolved numeric value, or 0 if the formula violates a
- * safety limit or fails to parse. Note this is a plain `number`, not an
- * `{ value, error }` pair — a genuinely invalid formula feeding a displayed
- * stat (e.g. {@link computeDefense} in CombatTab, which evaluates an
- * equipped armor's formula) is currently indistinguishable from a formula
- * that legitimately computes to 0.
+ * @returns `value`: the resolved number, 0 if the formula violates a
+ * safety limit or fails to parse. `error` is set only in that case — same
+ * shape as {@link rollFormula}/{@link resolveFormulaDisplay}, so a caller
+ * feeding this into a permanently-displayed stat (e.g. {@link computeDefense}
+ * in CombatTab, evaluating an equipped armor's formula) can tell "formula
+ * legitimately computes to 0" apart from "formula is broken" instead of
+ * both silently looking like the same 0.
  * @throws Rethrows anything that isn't a {@link FormulaError} (a real bug,
  * not an invalid-formula case).
  */
-export function evalFormula(formula: string, char: NimbleCharacter): number {
+export function evalFormula(
+  formula: string,
+  char: NimbleCharacter,
+): { value: number; error?: string } {
   const ctx = buildContext(char);
   return evalFormulaWithContext(formula, ctx);
 }
@@ -628,16 +771,26 @@ export function evalFormula(formula: string, char: NimbleCharacter): number {
 export function evalFormulaWithContext(
   formula: string,
   ctx: FormulaContext,
-): number {
+): { value: number; error?: string } {
   try {
     let f = substituteVariables(formula, ctx);
-    f = resolveDynamicDice(f);
-    f = diceToAverage(f); // Replace NdX with average before arithmetic
+    f = resolveDynamicDice(f, formula);
+    f = diceToAverage(f, formula); // Replace NdX with average before arithmetic
     const result = safeEval(f);
-    return isNaN(result) ? 0 : result;
+    // A NaN result (safeEval's character-whitelist check failed on
+    // whatever's left after substitution) is a genuine parse failure, not
+    // a legitimate zero — reporting it as `value: 0` with no `error` would
+    // be exactly the silent-success-that-isn't the last three batches
+    // removed everywhere else, just reintroduced here.
+    if (isNaN(result)) {
+      throw new FormulaError(
+        `Could not evaluate formula: "${formula}" (resolved to "${f}").`,
+      );
+    }
+    return { value: result };
   } catch (err) {
     if (!(err instanceof FormulaError)) throw err;
-    return 0;
+    return { value: 0, error: err.message };
   }
 }
 
@@ -664,9 +817,20 @@ export function validateFormula(formula: string, ctx: FormulaContext): void {
     );
   }
   const substituted = substituteVariables(formula, ctx);
-  const resolved = resolveDynamicDice(substituted);
-  const averaged = diceToAverage(resolved);
-  safeEval(averaged); // lets a MAX_PARSE_DEPTH violation propagate as FormulaError
+  const resolved = resolveDynamicDice(substituted, formula);
+  const averaged = diceToAverage(resolved, formula);
+  const result = safeEval(averaged); // lets a MAX_PARSE_DEPTH violation propagate as FormulaError
+  // A NaN result (safeEval's character whitelist rejected something left
+  // after substitution) must reject the save the same way
+  // evalFormulaWithContext/resolveFormulaDisplay reject it at read time —
+  // otherwise a formula this write-time gate waves through can still fail
+  // the moment someone actually rolls or displays it, which defeats the
+  // point of having the gate.
+  if (isNaN(result)) {
+    throw new FormulaError(
+      `Could not evaluate formula: "${formula}" (resolved to "${averaged}").`,
+    );
+  }
 }
 
 /**
@@ -691,20 +855,38 @@ export function resolveFormulaDisplay(
   const ctx = buildContext(char);
   try {
     let f = substituteVariables(formula, ctx);
-    f = resolveDynamicDice(f);
+    f = resolveDynamicDice(f, formula);
     // Evaluate non-dice parts but keep dice notation
     // e.g. "1d8 + 2 + 1" → "1d8+3"
     const diceMatch = f.match(/\d+d\d+/i);
     if (!diceMatch) {
       const val = safeEval(f);
-      return { display: isNaN(val) ? formula : String(val) };
+      // NaN here means safeEval's character whitelist rejected whatever's
+      // left after substitution — a genuine parse failure, not "nothing to
+      // display". Previously fell back to silently showing the raw
+      // formula with no error, the same silent-success shape removed
+      // elsewhere; routed through the catch below instead, consistently.
+      if (isNaN(val)) {
+        throw new FormulaError(
+          `Could not evaluate formula: "${formula}" (resolved to "${f}").`,
+        );
+      }
+      return { display: String(val) };
     }
 
     const dicePart = diceMatch[0];
     const rest = f.replace(dicePart, "0");
     const modifier = safeEval(rest);
+    // Same reasoning as above: a NaN modifier is a parse failure, not a
+    // legitimate zero — keep those two outcomes visibly distinct instead
+    // of both falling through to "just show the dice part".
+    if (isNaN(modifier)) {
+      throw new FormulaError(
+        `Could not evaluate the modifier in formula: "${formula}" (resolved to "${f}").`,
+      );
+    }
 
-    if (isNaN(modifier) || modifier === 0) return { display: dicePart };
+    if (modifier === 0) return { display: dicePart };
     if (modifier > 0) return { display: `${dicePart}+${modifier}` };
     return { display: `${dicePart}${modifier}` }; // negative already has the sign
   } catch (err) {
@@ -755,6 +937,14 @@ export function rollDice(count: number, sides: number): number[] {
  * the formula failed to parse or violated a safety limit, `error` carries
  * the message and every numeric field is zeroed rather than clamped —
  * the caller must not treat that as "rolled a 0".
+ *
+ * @remarks `isCritical` and `isFumble` can never both be true today: that
+ * would require `kept[0]` to equal both `sides` and `1`, i.e. a 1-sided
+ * die, which `assertDiceWithinLimits`'s lower bound (`sides >= 2`) makes
+ * unreachable. This isn't handled as a special case on purpose — if that
+ * lower bound is ever relaxed, this simultaneous-crit-fumble state comes
+ * back and will need an explicit decision (which one wins?), not a silent
+ * "whichever check happens to run last".
  */
 export function rollFormula(
   formula: string,
