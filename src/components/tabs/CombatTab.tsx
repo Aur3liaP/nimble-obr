@@ -28,7 +28,9 @@ import { RowDescriptionPanel } from "../ui/common/RowDescriptionPanel";
 import { FormField, GridFields } from "../ui/common/FormField";
 import { DraggableBar } from "../ui/common/DraggableBar";
 import { ItemRowBase } from "../ui/common/ItemRowBase";
+import { FormulaField, FormulaDiscardNotice } from "../ui/common/FormulaField";
 import { useDraggableValue } from "../../hooks/useDraggableValue";
+import { useFormulaField } from "../../hooks/useFormulaField";
 
 // ── Types ─────────────────────────────────────────────────────────
 /**
@@ -82,19 +84,27 @@ const ACTION_ICONS = {
  * DEX + the flat bonus (unarmored).
  *
  * @param character - The character to compute defense for.
- * @returns The resolved numeric defense value.
+ * @returns `value`: the resolved defense number. `error` is set when the
+ * equipped armor's formula is broken — in that case `value` is *not* a
+ * trustworthy defense number (just `defenseBonus` with no armor
+ * contribution) and the caller must show that distinctly rather than
+ * rendering it as if the character really has that little defense.
  */
-function computeDefense(character: NimbleCharacter): number {
+function computeDefense(character: NimbleCharacter): {
+  value: number;
+  error?: string;
+} {
   const armorItem = character.inventory.find(
     (i) => i.id === character.armor.equippedItemId && i.isArmor,
   );
   if (armorItem?.formula) {
-    return (
-      evalFormula(armorItem.formula, character) +
-      (character.armor.defenseBonus ?? 0)
-    );
+    const { value, error } = evalFormula(armorItem.formula, character);
+    return {
+      value: value + (character.armor.defenseBonus ?? 0),
+      error,
+    };
   }
-  return character.stats.dex + (character.armor.defenseBonus ?? 0);
+  return { value: character.stats.dex + (character.armor.defenseBonus ?? 0) };
 }
 
 /**
@@ -153,7 +163,8 @@ export function CombatTab({
     onUpdate({ hp: { ...character.hp, current: Math.max(0, v) } }),
   );
 
-  const defenseValue = computeDefense(character);
+  const { value: defenseValue, error: defenseError } =
+    computeDefense(character);
   const armorItems = character.inventory.filter((i) => i.isArmor);
   const equippedArmorItem = armorItems.find(
     (i) => i.id === character.armor.equippedItemId,
@@ -389,8 +400,17 @@ export function CombatTab({
       <BentoSection>
         <div className="flex items-center justify-between -mt-2">
           <p className="bento-label">Defense</p>
-          <span className="text-3xl font-black text-sky-300">
-            {defenseValue}
+          <span
+            className={`text-3xl font-black ${
+              defenseError ? "text-rose-400" : "text-sky-300"
+            }`}
+            title={
+              defenseError
+                ? `Armor formula is broken, can't compute defense: ${defenseError}`
+                : undefined
+            }
+          >
+            {defenseError ? "⚠" : defenseValue}
           </span>
         </div>
         <div className="flex flex-col gap-2">
@@ -691,9 +711,16 @@ function ActionRow({
   const [expanded, setExpanded] = useState(false);
   const typeStyle = ACTION_COLORS[action.type] ?? "";
   const icon = ACTION_ICONS[action.type] ?? "⚡";
-  const resolvedFormula = resolveFormulaDisplay(
-    action.formula || action.damage,
-    character,
+  const { display: resolvedFormula, error: formulaError } =
+    resolveFormulaDisplay(action.formula || action.damage, character);
+  // Called unconditionally (not only while isEditing) so a discard warning
+  // from closeEdit() survives the edit panel unmounting. Rows rendered
+  // without edit rights (e.g. favorited-action summaries) never get an
+  // onUpdate at all, so onCommit is a no-op there — editPanel itself is
+  // never rendered for those rows either.
+  const formulaField = useFormulaField(
+    action.formula ?? action.damage ?? "",
+    (v) => onUpdate?.({ formula: v, damage: v }),
   );
 
   const handleHeaderClick = () => {
@@ -732,7 +759,17 @@ function ActionRow({
           <div className="flex items-center gap-3 mt-0.5">
             <RowMeta range={action.range} actionCost={action.actionCost} />
             {resolvedFormula && (
-              <span className="text-[10px] font-mono text-amber-300/80">
+              <span
+                className={`text-[10px] font-mono ${
+                  formulaError ? "text-rose-400" : "text-amber-300/80"
+                }`}
+                title={
+                  formulaError
+                    ? `Invalid formula, won't roll: ${formulaError}`
+                    : undefined
+                }
+              >
+                {formulaError ? "⚠ " : ""}
                 {resolvedFormula}
               </span>
             )}
@@ -750,6 +787,8 @@ function ActionRow({
           {canEdit && onRoll && <RollButton onClick={onRoll} />}
         </div>
       </div>
+
+      {!isEditing && <FormulaDiscardNotice message={formulaField.discardedWarning} />}
 
       {/* Description panel — only when not editing */}
       {expanded && !isEditing && (
@@ -776,11 +815,10 @@ function ActionRow({
               onChange={(v) => onUpdate({ range: v })}
               placeholder="e.g. 1, range 6"
             />
-            <FormField
+            <FormulaField
               label="Formula"
-              value={action.formula ?? action.damage ?? ""}
-              onChange={(v) => onUpdate({ formula: v, damage: v })}
               placeholder="e.g. 1d8+STR"
+              field={formulaField}
             />
           </GridFields>
           <FormField
@@ -804,7 +842,10 @@ function ActionRow({
               variant="danger"
             />
             <TextAction
-              onClick={() => onEditToggle?.()}
+              onClick={() => {
+                formulaField.closeEdit();
+                onEditToggle?.();
+              }}
               label="OK"
               variant="confirm"
             />
@@ -840,6 +881,10 @@ function AddActionModal({
     description: "",
   });
   const set = (k: string, v: string) => setForm((p) => ({ ...p, [k]: v }));
+
+  // Local form state, nothing here is persisted until "Add" is clicked —
+  // onCommit just updates local form state.
+  const formulaField = useFormulaField(form.damage, (v) => set("damage", v));
 
   return (
     <div
@@ -877,11 +922,10 @@ function AddActionModal({
               onChange={(v) => set("range", v)}
               placeholder="e.g. 1, range 6"
             />
-            <FormField
+            <FormulaField
               label="Damage"
-              value={form.damage}
-              onChange={(v) => set("damage", v)}
               placeholder="e.g. 1d8+STR"
+              field={formulaField}
             />
           </GridFields>
           <FormField
@@ -902,6 +946,10 @@ function AddActionModal({
           <button
             onClick={() => {
               if (!form.name) return;
+              if (formulaField.error) {
+                formulaField.markTouched();
+                return;
+              }
               onAdd({
                 id: `a-${crypto.randomUUID()}`,
                 ...form,
@@ -910,7 +958,11 @@ function AddActionModal({
                 isCustom: true,
               });
             }}
-            className="flex-1 py-2 rounded-lg bg-amber-700 hover:bg-amber-600 text-amber-100 text-sm font-bold transition-colors"
+            className={`flex-1 py-2 rounded-lg text-sm font-bold transition-colors ${
+              formulaField.error
+                ? "bg-amber-900/40 text-amber-400/60 cursor-not-allowed"
+                : "bg-amber-700 hover:bg-amber-600 text-amber-100"
+            }`}
           >
             Add
           </button>

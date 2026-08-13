@@ -56,6 +56,13 @@ export default function App() {
 
   const [activeTab, setActiveTab] = useState<TabId>("summary");
 
+  // Local-only feedback for a roll that failed a safety-limit/parse check
+  // (DiceRollResult.error set). Never written to OBR — a failed roll is
+  // never pushed to the shared log in the first place (see useOBR's
+  // pushRollToLog gating), so this exists purely to tell the person who
+  // triggered the roll why nothing showed up in the log.
+  const [rollError, setRollError] = useState<string | null>(null);
+
   // ── Loading — only truly empty screen, no DicePanel needed yet ──
   if (!isReady) {
     return (
@@ -68,9 +75,28 @@ export default function App() {
     );
   }
 
-  const onRoll = (req: DiceRollRequest) => handleRoll(req);
-  const onRollInitiative = (mode: RollMode = "standard") =>
-    rollInitiative(mode);
+  const onRoll = (req: DiceRollRequest) => {
+    setRollError(null);
+    void handleRoll(req).then((result) => {
+      if (result?.error) setRollError(result.error);
+    });
+  };
+  const onFreeRoll = (req: DiceRollRequest) => {
+    setRollError(null);
+    void handleFreeRoll(req).then((result) => {
+      if (result?.error) setRollError(result.error);
+    });
+  };
+  const onRollInitiative = (mode: RollMode = "standard") => {
+    setRollError(null);
+    // Unlike onRoll/onFreeRoll, CombatTab awaits this and reads `.total`
+    // off the resolved result to derive the starting action count, so the
+    // result must still be returned, not swallowed.
+    return rollInitiative(mode).then((result) => {
+      if (result?.error) setRollError(result.error);
+      return result;
+    });
+  };
 
   // ─────────────────────────────────────────────────────────────────────
   // All post-ready states share ONE layout so DicePanel is never unmounted.
@@ -148,6 +174,25 @@ export default function App() {
         </div>
       )}
 
+      {/* ── Roll error banner — local-only feedback for a failed roll.
+          Never touches OBR; a failed roll never reaches the shared log. ── */}
+      {rollError && (
+        <div
+          role="alert"
+          className="shrink-0 mx-3 mt-2 flex items-start gap-2 rounded-lg border border-rose-800/60 bg-rose-950/40 px-3 py-2 text-[11px] text-rose-300"
+        >
+          <span className="shrink-0">⚠</span>
+          <span className="flex-1">{rollError}</span>
+          <button
+            onClick={() => setRollError(null)}
+            aria-label="Dismiss"
+            className="shrink-0 text-rose-500 hover:text-rose-300 transition-colors"
+          >
+            ✕
+          </button>
+        </div>
+      )}
+
       {/* ── Scrollable content area ───────────────────────────────── */}
       <main className="flex-1 overflow-y-auto scrollbar-thin">
         {/* Sheet tabs */}
@@ -199,7 +244,7 @@ export default function App() {
           <DicePanel
             isGM={isGM}
             playerName={playerName}
-            onRoll={handleFreeRoll}
+            onRoll={onFreeRoll}
             defaultCollapsed={true}
           />
           {(showNoToken || showNoSheet) && (

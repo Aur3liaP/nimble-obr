@@ -88,6 +88,15 @@ export interface CharacterAction {
   slots?: number;
   isCustom?: boolean;
   actionCost?: number;
+  /**
+   * If true, `formula` is flavor-text shorthand for the GM to interpret
+   * manually rather than a formula meant to be evaluated or rolled by the
+   * engine. Mirrors {@link InventoryItem.manualResolution}; not currently
+   * set on any spell in src/data/spells.ts, but the field exists so a
+   * future flavor-only spell formula has somewhere to be marked instead of
+   * failing the game-data validation test with no way to exclude it.
+   */
+  manualResolution?: boolean;
 }
 
 export interface InventoryItem {
@@ -104,6 +113,14 @@ export interface InventoryItem {
   isArmor?: boolean;
   armorValue?: number;
   actionCost?: number;
+  /**
+   * If true, `formula` is flavor-text shorthand for the GM to interpret
+   * manually (e.g. "WeaponDamage + 1d4" on a magic weapon, referencing
+   * whatever weapon it's enchanting — a concept this app has no variable
+   * for), not a formula meant to be evaluated or rolled by the engine.
+   * Content-validation tests exclude these instead of treating them as bugs.
+   */
+  manualResolution?: boolean;
 }
 
 /**
@@ -165,6 +182,21 @@ export interface NimbleCharacter {
  */
 export const METADATA_KEY = "com.nimble-obr.nimble/character_sheet";
 
+/**
+ * Highest level a character can be set to.
+ *
+ * @remarks `level` feeds directly into the formula parser's dynamic-dice
+ * helpers (`incrementdice(base, level)dSIDES`, `stepdice(level, ...)`). An
+ * unbounded level lets a large-enough value push a *legitimate* spell's
+ * dice count past `MAX_DICE_COUNT` in formulaParser.ts (e.g. level 500
+ * pushes `incrementdice(1,level)d12` to 101 dice), which turns a normal
+ * spell into one that always fails its own safety-limit check. Clamped at
+ * write time in `useOBR.ts`'s `updateCharacter`, not just as an input
+ * hint — an HTML `max` attribute doesn't stop a typed value from being
+ * committed.
+ */
+export const MAX_LEVEL = 20;
+
 export type RollMode = "standard" | "advantage" | "disadvantage";
 export type AdvantageCount = number;
 
@@ -179,6 +211,12 @@ export interface DiceRollRequest {
 /**
  * Result of a resolved dice roll, broadcast to the table via scene metadata
  * (or kept client-side only when `hidden` is true and the roller is the GM).
+ *
+ * When `error` is set, the roll failed a safety-limit or parse check and
+ * every numeric field below is zeroed rather than a real result — a
+ * `DiceRollResult` with `error` set is never pushed to the shared roll log
+ * (see `pushRollToLog` in `useOBR.ts`); it only ever reaches the roller
+ * themselves, to show what went wrong.
  */
 export interface DiceRollResult {
   label: string;
@@ -192,6 +230,7 @@ export interface DiceRollResult {
   hidden: boolean;
   playerId: string;
   playerName: string;
+  error?: string;
   timestamp: number;
 }
 

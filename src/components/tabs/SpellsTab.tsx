@@ -27,8 +27,10 @@ import { RowDescriptionPanel } from "../ui/common/RowDescriptionPanel";
 import { FormField, GridFields } from "../ui/common/FormField";
 import { TabPills } from "../ui/common/TabPills";
 import { ModalShell } from "../ui/common/ModalShell";
+import { FormulaField, FormulaDiscardNotice } from "../ui/common/FormulaField";
 import { DraggableBar } from "../ui/common/DraggableBar";
 import { useDraggableValue } from "../../hooks/useDraggableValue";
+import { useFormulaField } from "../../hooks/useFormulaField";
 
 // ── Constants ─────────────────────────────────────────────────────
 /** Display labels for spell tiers (0 = Cantrips, 1–9 = Tier I–IX). */
@@ -141,6 +143,12 @@ function AddSpellModal({
   const setF = (k: string, v: string | number) =>
     setForm((p) => ({ ...p, [k]: v }));
 
+  // Custom-form damage never reaches OBR through this hook (nothing here
+  // is persisted until "Add" is clicked) — onCommit just updates local
+  // form state, so the field can't hold an invalid, uncommitted draft
+  // when "Add" is checked below.
+  const formulaField = useFormulaField(form.damage, (v) => setF("damage", v));
+
   // Suppress unused warning — kept for future duplicate detection
   void existingIds;
 
@@ -232,6 +240,10 @@ function AddSpellModal({
       <button
         onClick={() => {
           if (!form.name.trim()) return;
+          if (formulaField.error) {
+            formulaField.markTouched();
+            return;
+          }
           onAdd({
             id: `sp-${crypto.randomUUID()}`,
             name: form.name,
@@ -247,7 +259,11 @@ function AddSpellModal({
             manaCost: form.tier === 0 ? 0 : form.manaCost,
           });
         }}
-        className="flex-1 py-2 rounded-lg bg-violet-800 hover:bg-violet-700 text-violet-100 text-sm font-bold transition-colors"
+        className={`flex-1 py-2 rounded-lg text-sm font-bold transition-colors ${
+          formulaField.error
+            ? "bg-violet-900/40 text-violet-400/60 cursor-not-allowed"
+            : "bg-violet-800 hover:bg-violet-700 text-violet-100"
+        }`}
       >
         Add
       </button>
@@ -399,11 +415,10 @@ function AddSpellModal({
               onChange={(v) => setF("range", v)}
               placeholder="e.g. range 6"
             />
-            <FormField
+            <FormulaField
               label="Damage / Formula"
-              value={form.damage}
-              onChange={(v) => setF("damage", v)}
               placeholder="e.g. 2d6+INT"
+              field={formulaField}
             />
           </GridFields>
           {form.tier > 0 && (
@@ -757,9 +772,13 @@ function SpellRow({
     ? SCHOOL_STYLES[school]
     : "text-violet-300 border-violet-800/60 bg-violet-950/30";
   const schoolIcon = school ? SCHOOL_ICONS[school] : "✨";
-  const resolvedFormula = resolveFormulaDisplay(
-    spell.formula || spell.damage,
-    character,
+  const { display: resolvedFormula, error: formulaError } =
+    resolveFormulaDisplay(spell.formula || spell.damage, character);
+  // Called unconditionally (not only while isEditing) so a discard
+  // warning from closeEdit() survives the edit panel unmounting and can
+  // still render in the collapsed view below.
+  const formulaField = useFormulaField(spell.formula ?? spell.damage ?? "", (v) =>
+    onUpdate({ formula: v, damage: v }),
   );
 
   return (
@@ -801,7 +820,17 @@ function SpellRow({
           <div className="flex items-center gap-3 mt-0.5">
             <RowMeta range={spell.range} actionCost={spell.actionCost} />
             {resolvedFormula && (
-              <span className="text-[10px] font-mono text-amber-300/80">
+              <span
+                className={`text-[10px] font-mono ${
+                  formulaError ? "text-rose-400" : "text-amber-300/80"
+                }`}
+                title={
+                  formulaError
+                    ? `Invalid formula, won't roll: ${formulaError}`
+                    : undefined
+                }
+              >
+                {formulaError ? "⚠ " : ""}
                 {resolvedFormula}
               </span>
             )}
@@ -822,6 +851,8 @@ function SpellRow({
           )}
         </div>
       </div>
+
+      {!isEditing && <FormulaDiscardNotice message={formulaField.discardedWarning} />}
 
       {/* Description panel */}
       {isExpanded && !isEditing && (
@@ -848,11 +879,10 @@ function SpellRow({
               onChange={(v) => onUpdate({ range: v })}
               placeholder="e.g. 8"
             />
-            <FormField
+            <FormulaField
               label="Formula"
-              value={spell.formula ?? spell.damage ?? ""}
-              onChange={(v) => onUpdate({ formula: v, damage: v })}
               placeholder="e.g. 2d6+INT"
+              field={formulaField}
             />
           </GridFields>
           <GridFields>
@@ -909,7 +939,14 @@ function SpellRow({
               label="Remove spell"
               variant="danger"
             />
-            <TextAction onClick={onEditToggle} label="OK" variant="confirm" />
+            <TextAction
+              onClick={() => {
+                formulaField.closeEdit();
+                onEditToggle();
+              }}
+              label="OK"
+              variant="confirm"
+            />
           </div>
         </div>
       )}

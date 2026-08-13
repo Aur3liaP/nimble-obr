@@ -52,6 +52,8 @@ interface ItemRowBaseProps {
   onDelete?: () => void;
   /** Extra content rendered below the base row entirely (e.g. an inline edit form), shown instead of the description panel when present. */
   editPanel?: ReactNode;
+  /** Extra content rendered below the header row whenever `editPanel` is absent (e.g. a notice that survives an edit panel closing, unlike the description panel it renders alongside). */
+  collapsedNotice?: ReactNode;
   className?: string;
 }
 
@@ -81,6 +83,7 @@ export function ItemRowBase({
   onEdit,
   onDelete,
   editPanel,
+  collapsedNotice,
   className = "",
 }: ItemRowBaseProps) {
   return (
@@ -124,6 +127,8 @@ export function ItemRowBase({
           )}
         </div>
       </div>
+
+      {!editPanel && collapsedNotice}
 
       {isExpanded && !editPanel && (
         <RowDescriptionPanel

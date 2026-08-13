@@ -12,7 +12,16 @@ Owlbear Rodeo (OBR) extension: a real-time-synced character sheet panel for the 
 - `npm run build` : `tsc -b && vite build`
 - `npm run type-check` : `tsc --noEmit`
 - `npm run lint` : `eslint . --ext ts,tsx --report-unused-disable-directives --max-warnings 0`
-- **No test suite exists** (no vitest/jest/playwright configured). `type-check` + `lint` passing is the bar for "done". Changes touching permissions, sync, or roll flow need manual multiplayer verification in OBR (multiple accounts). Flag this rather than claiming it's tested.
+- `npm run test` : Vitest suite on `src/utils/formulaParser.test.ts` (113 tests).
+  Pure functions only, no OBR dependency. Deterministic dice via a `Math.random`
+  spy (`mockRolls` helper), not by mocking `rollDice` (ESM mocking limitations
+  in Vitest, and mocking it would leak into the public API signature).
+- `type-check` + `lint` + `test` passing is the bar for "done". Changes touching
+  permissions, sync, or roll flow still need manual multiplayer verification in
+  OBR (multiple accounts, multiple clients). There is no automated substitute.
+  Flag this rather than claiming it's tested.
+- After writing a test, reintroduce the bug it targets by hand and confirm the
+  test goes red. A test that stays green on the known bug isn't doing its job.
 
 ## Architecture
 
@@ -33,6 +42,7 @@ These exist because of bugs already diagnosed and fixed. Changing them reintrodu
 - **`App.tsx` is a single JSX tree, not multiple early-return branches.** `DicePanel` must never unmount, or in-progress dice state is lost whenever `selectionState` changes. Consolidating the tree is the fix; "improving readability" with early returns undoes it.
 - **The roll log has a single source of truth.** Pushing a visible roll writes to `OBR.scene.setMetadata` only; local `recentRolls` state is updated **only** by the `onMetadataChange` listener, never directly by the push function. The double update remounts conditional UI in `App.tsx`. Hidden (GM-only) rolls are the deliberate exception: they skip scene metadata and go straight to local state.
 - **Drag interactions keep local state during the drag and commit once on release.** Writing to OBR on every `mousemove` floods the network. Resync protection when external changes arrive mid-drag is required, not optional.
+- **Formula input fields keep local state and only commit when valid.** Every other text `FormField` in an edit-row panel (Name, Range, Description...) writes to `onUpdate`/OBR on every keystroke by design — that's fine, any string is a valid value. Formula fields are the deliberate exception: `useFormulaField` (mirroring `useDraggableValue`) buffers a local draft and only commits once it's syntactically valid or empty, so an in-progress, unparseable formula is never broadcast to the table. Unlike a drag (~2s), a formula edit can run long enough that an external change to the same field can arrive mid-edit; `useFormulaField`'s resync is skip-and-warn (`conflictWarning`), not skip-and-silent, specifically so that case doesn't quietly overwrite someone else's change on commit. See the write-time-syntax-only bullet under Formula parser below for why the commit gate checks syntax, not resolved values.
 - **Tailwind cannot compile dynamic class names.** When `colorClass` is a function, use an inline `style` prop, not a computed class string.
 
 ### Permission model
@@ -50,7 +60,115 @@ These exist because of bugs already diagnosed and fixed. Changing them reintrodu
 
 ### Formula parser (`src/utils/formulaParser.ts`)
 
-Hand-rolled recursive-descent parser. **Never use `eval()` or `Function()`** here, by design, to avoid arbitrary code execution from a player- or GM-typed formula. Preserve the existing safety limits when touching it: `MAX_FORMULA_LENGTH = 200`, `MAX_PARSE_DEPTH = 30`, `MAX_DICE_COUNT = 100`, `MAX_DICE_SIDES = 1000`. Syntax supports dice (`1d8`), stats (`STR/DEX/INT/WIL`), `KEY`/`FLAW`, skills, `LEVEL`, arithmetic, `floor()`/`ceil()`/`min()`/`max()`, and dynamic dice (`incrementdice(1, level)d12`, `stepdice(...)`).
+Hand-rolled recursive-descent parser. **Never use `eval()` or `Function()`**
+here, by design, to avoid arbitrary code execution from a player- or GM-typed
+formula.
+
+Syntax: dice (`1d8`, or implicit-count `d66`), stats (`STR/DEX/INT/WIL`),
+`KEY`/`FLAW`, skills, `LEVEL`/`LVL`, arithmetic, `floor()`/`ceil()`/`min()`/
+`max()`, and dynamic dice (`incrementdice(1, level)d12`, `1dstepdice(...)`).
+
+#### Decisions (do not "fix" these)
+
+Each of these was a real bug or a deliberate trade-off, diagnosed and settled.
+Reverting one reintroduces the bug.
+
+- **The rulebook's notation is the spec, not the parser's.** Three separate
+  bugs came from data being "wrong" when the parser was too strict: `d66`
+  (implicit count), `KEYd20` (variable glued to a die), `LVL` (book shorthand).
+  When game data doesn't parse, fix the parser, don't rewrite `spells.ts`.
+- **`LVL` is a deliberate alias for `LEVEL`.** The book uses it, so a GM
+  writing a custom spell will too. Not redundant, do not remove.
+- **Validation lives at the choke point.** `resolveDynamicDice` validates every
+  `NdX` token after resolution; `assertDiceWithinLimits` is the single shared
+  guard. The original DoS existed because limits were enforced on the display
+  path (`diceToAverage`) only. Never add a dice path that skips it. The one
+  narrow, explicit exception is `resolveDynamicDice`/`diceToAverage`'s
+  `enforceLimits` parameter (default `true`, unchanged for every existing
+  caller), which `validateFormulaSyntax` alone passes `false` — see the
+  write-time-syntax-only bullet below for why, and don't read this as
+  license to add a second one elsewhere.
+- **`validateFormulaSyntax` validates syntax, not resolved values — dice
+  bounds are a roll-time concern only.** It substitutes against a synthetic,
+  all-`1`s context (`NEUTRAL_VALIDATION_CONTEXT`, never `0`s: reusing `0`
+  would relocate the exact `KEYd20` trap below into the neutral context
+  itself) and never enforces `MAX_DICE_COUNT`/`MAX_DICE_SIDES`/the lower
+  bound, uniformly, even for a hand-typed literal with no variables at all
+  (`99999d6`). Two reasons: (1) a real character's KEY/FLAW/HP can
+  legitimately be outside any fixed neutral range in either direction —
+  `KEYd20` saved before `keyStat` is set must not be rejected at save time
+  for resolving to `0d20` against the *current, incomplete* character; (2)
+  bounds are inherently level-dependent for dynamic dice
+  (`incrementdice(1,LEVEL)d6` is 1 die at level 1, 5 at level 20) — no
+  neutral context or pair of "extremes" makes a bound check here mean
+  anything for every level in between. The bound is still enforced,
+  correctly, once — at roll time, against the real character, by the same
+  `assertDiceWithinLimits` choke point (`rollFormula` → `parseDamageFormula`
+  → `resolveDynamicDice`, `enforceLimits` defaulted `true` as always).
+- **Failures are loud, never a silent zero.** Unknown tokens throw; `NaN`
+  throws; a 0 dice count throws. `rollFormula`, `evalFormula` and
+  `resolveFormulaDisplay` all return `{ ..., error? }` and every caller must
+  check `error` before writing to OBR or displaying a value. A roll that failed
+  must never reach the shared log as a legitimate 0. This cost several rounds
+  to clean up: do not reintroduce a `|| 0`, `?? 0` or `isNaN(x) ? 0 : x`
+  fallback on a failure path.
+- **Error state never lives in a module variable.** It travels on the return
+  value. A previous `lastFormulaError` module-level variable was written during
+  render (`resolveFormulaDisplay` is called from row components) and
+  desynchronised. Module-level mutable state read during render is unsupported
+  in React 19.
+- **The lower dice bound only ever catches `count === 0`.** A negative count
+  (`-1d6`) is caught earlier by `Parser.parse`'s full-consumption check, on
+  purpose: the choke-point regex can't capture a leading `-` without
+  misdiagnosing legitimate subtraction (`10-1d6`).
+- **`stepdice` only supports the `1d` prefix, and no nested arguments.** Not an
+  oversight: no real game content needs either, and any deviation now fails
+  loudly rather than returning a wrong number.
+- **`MAX_DICE_COUNT` / `MAX_DICE_SIDES` are sanity bounds, not balance
+  bounds.** A legal level-20 character's real spells top out around 5 dice and
+  d12, roughly 20x and 80x below the limits. They guard against a hand-typed
+  formula, nothing more. Don't tighten them to "match the game".
+- **`Parser.parse` requires full input consumption.** Without it, a recognised
+  prefix followed by garbage returns a plausible number.
+- **`parseUnary` handles unary `+` explicitly.** Flat bonuses (`+8`) and
+  stripped formula tails (`+3+2`) previously worked only by accident, via the
+  unknown-token fallback that returned 0.
+- **`manualResolution: true` marks flavour-text formulas** (e.g. equipment
+  reading `WeaponDamage + ...`, resolved by the GM by hand). The exhaustive
+  data test filters on this field, so exclusions live in the data, never as a
+  hardcoded list in the test.
+- **Three paths must reject identically:** `validateFormula` (write-time,
+  against a real context), `evalFormulaWithContext` (display value),
+  `resolveFormulaDisplay` (display string). A cross-consistency test enforces
+  this. If you add a check to one, add it to all three. `validateFormulaSyntax`
+  is a deliberate fourth, separate path (see above) and is NOT required to
+  agree with these three on dice bounds — only on syntax-level rejections
+  (unknown tokens, wrong arity, over-length, over-depth).
+- **A reflexive test iterates `FormulaContext`'s own keys** to verify every
+  documented variable actually substitutes. `FLAW` was documented in the
+  README and computed in `buildContext` but never wired up, and nothing caught
+  it. Any field added to the context must be substituted or that test fails.
+  - `VARIABLE_TABLE` and `MATH_FUNCTIONS` are the logic, not a description of it.
+  `substituteVariables` and `Parser.parsePrimary` loop over these tables, and
+  `listFormulaVariables()` / `listFormulaFunctions()` reflect over the same
+  tables to build the in-app formula help. Never duplicate either list in the
+  UI: a hand-copied catalog is how FLAW ended up documented but never wired up.
+- `MAXHP` must stay before `HP` in `VARIABLE_TABLE`. Do not sort the table.
+  Guarded by an explicit index-order test.
+- The four `MATH.FLOOR(` / `MATH.CEIL(` / `MATH.MIN(` / `MATH.MAX(` replaces in
+  `substituteVariables` must run BEFORE the final `toLowerCase()`. They are
+  case-sensitive and match the uppercase shape. Moving them after is the exact
+  bug that made the old `INCREMENTDICE` / `STEPDICE` lines dead code.
+- `incrementdice` / `stepdice` are deliberately not in `MATH_FUNCTIONS`: their
+  arity and branching differ per helper. They are documented via worked
+  examples in the help panel instead.
+- `LVL` is a deliberate alias for `LEVEL` (rulebook notation), not a typo.
+- Implicit dice count (`d66`, `d44`, `d88`) is rulebook notation for a single
+  die with N faces, normalized to `1dN`. Not a two-digit table roll.
+- The dice lower bound only ever fires for `count === 0`. A negative count is
+  caught upstream by the full-consumption check, on purpose, because a leading
+  `-` is ambiguous with subtraction (`10-1d6`).
+  - An unclosed paren (`floor(3`) is currently swallowed silently by `Parser.parsePrimary`. Known leniency, pinned by a non-regression test, not yet a deliberate decision. Revisit.
 
 ## Code style
 

@@ -40,6 +40,8 @@ interface FormFieldBaseProps {
   label: string;
   /** Extra classes on the wrapper div */
   className?: string;
+  /** Optional content rendered inline after the label (e.g. a help button). */
+  labelExtra?: ReactNode;
 }
 
 /** Props for the default "input" variant (text/number/etc. single-line input). */
@@ -47,6 +49,8 @@ interface InputFieldProps extends FormFieldBaseProps {
   as?: "input";
   value: string | number;
   onChange: (v: string) => void;
+  /** Fires when the input loses focus (e.g. to reveal a deferred validation error). */
+  onBlur?: () => void;
   placeholder?: string;
   type?: InputHTMLAttributes<HTMLInputElement>["type"];
   min?: number;
@@ -90,12 +94,15 @@ type FormFieldProps =
  * (defaults to a plain text/number input when `as` is omitted).
  */
 export function FormField(props: FormFieldProps) {
-  const { label, className = "" } = props;
+  const { label, className = "", labelExtra } = props;
 
   return (
     <div className={`flex flex-col gap-0.5 ${className}`}>
-      <span className="text-[10px] text-stone-500 uppercase tracking-wide">
-        {label}
+      <span className="flex items-center gap-1">
+        <span className="text-[10px] text-stone-500 uppercase tracking-wide">
+          {label}
+        </span>
+        {labelExtra}
       </span>
 
       {(!props.as || props.as === "input") && (
@@ -107,6 +114,7 @@ export function FormField(props: FormFieldProps) {
           max={(props as InputFieldProps).max}
           disabled={(props as InputFieldProps).disabled}
           onChange={(e) => (props as InputFieldProps).onChange(e.target.value)}
+          onBlur={(props as InputFieldProps).onBlur}
           className={FIELD_BASE}
         />
       )}
