@@ -17,6 +17,7 @@ import { InventoryTab } from "./components/tabs/InventoryTab";
 import { RollLog } from "./components/ui/RollLog";
 import { DicePanel } from "./components/ui/DicePanel";
 import { CharacterHeader } from "./components/ui/CharacterHeader";
+import { SyncStatusBanner } from "./components/ui/SyncStatusBanner";
 import type { DiceRollRequest, RollMode } from "./types/character";
 
 /** Identifiers for the four character sheet tabs. */
@@ -43,6 +44,7 @@ export default function App() {
     playerId,
     playerName,
     permissions,
+    syncStatus,
     updateCharacter,
     handleRoll,
     handleFreeRoll,
@@ -112,6 +114,11 @@ export default function App() {
 
   return (
     <div className="relative flex flex-col h-full bg-stone-950 text-stone-200 overflow-hidden font-sans pb-7">
+      {/* ── Sync status — always mounted, renders nothing when idle.
+          Not scoped to showSheet: a roll log write can fail with no
+          character sheet open at all. ── */}
+      <SyncStatusBanner status={syncStatus} />
+
       {/* ── Header — only when a sheet is open ───────────────────── */}
       {showSheet && character && (
         <CharacterHeader
