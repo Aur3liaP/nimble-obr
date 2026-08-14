@@ -217,6 +217,19 @@ export function useOBR(): UseOBRReturn {
 
   useEffect(() => {
     if (!OBR.isAvailable) return;
+    // Registration happens inside OBR.onReady's async callback, so the
+    // unsubscribe functions the SDK hands back (player.onChange,
+    // scene.items.onChange, scene.onMetadataChange all return `() => void`)
+    // can't be returned directly from this effect the way a synchronous
+    // subscription would be. Collected here instead, and the effect's
+    // cleanup calls all of them. `cancelled` additionally guards the
+    // registration itself: in StrictMode/HMR an effect can be torn down
+    // (cleanup runs) while this async callback is still in flight, and
+    // without the guard it would register fresh listeners *after* its own
+    // cleanup already ran, leaking them for the lifetime of the page.
+    let cancelled = false;
+    const unsubscribers: Array<() => void> = [];
+
     OBR.onReady(async () => {
       const [pid, pname, prole, initialSelection] = await Promise.all([
         OBR.player.getId(),
@@ -233,27 +246,41 @@ export function useOBR(): UseOBRReturn {
       await OBR.action.setWidth(400);
       await OBR.action.setHeight(800);
       await OBR.action.setTitle("Nimble Sheet");
-      OBR.player.onChange(async (player: Player) => {
-        await handleSelectionChange(player.selection || []);
-      });
 
-      OBR.scene.items.onChange(async (items) => {
-        const currentChar = characterRef.current;
-        if (!currentChar) return;
-        const updatedItem = items.find((i) => i.id === currentChar.tokenId);
-        if (updatedItem) {
-          const fresh = loadCharacterFromItem(updatedItem);
-          if (fresh) setCharacter(fresh);
-        }
-      });
+      if (cancelled) return;
+
+      unsubscribers.push(
+        OBR.player.onChange(async (player: Player) => {
+          await handleSelectionChange(player.selection || []);
+        }),
+      );
+
+      unsubscribers.push(
+        OBR.scene.items.onChange(async (items) => {
+          const currentChar = characterRef.current;
+          if (!currentChar) return;
+          const updatedItem = items.find((i) => i.id === currentChar.tokenId);
+          if (updatedItem) {
+            const fresh = loadCharacterFromItem(updatedItem);
+            if (fresh) setCharacter(fresh);
+          }
+        }),
+      );
 
       // Single source of truth for the roll log — only update from metadata,
       // never from local setRecentRolls after a push (avoids double-update re-mounts)
-      OBR.scene.onMetadataChange((meta) => {
-        const log = meta[ROLL_LOG_KEY] as DiceRollResult[] | undefined;
-        if (log) setRecentRolls(log.slice(-MAX_ROLL_HISTORY));
-      });
+      unsubscribers.push(
+        OBR.scene.onMetadataChange((meta) => {
+          const log = meta[ROLL_LOG_KEY] as DiceRollResult[] | undefined;
+          if (log) setRecentRolls(log.slice(-MAX_ROLL_HISTORY));
+        }),
+      );
     });
+
+    return () => {
+      cancelled = true;
+      unsubscribers.forEach((unsubscribe) => unsubscribe());
+    };
   }, [handleSelectionChange, loadCharacterFromItem]);
 
   /**
