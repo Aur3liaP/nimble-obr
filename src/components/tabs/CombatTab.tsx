@@ -8,7 +8,7 @@
  * so changing armor in the Inventory tab is immediately reflected here.
  */
 
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import type {
   NimbleCharacter,
   CharacterAction,
@@ -141,18 +141,33 @@ export function CombatTab({
   const [rollPending, setRollPending] = useState<RollPending | null>(null);
   const [addingAction, setAddingAction] = useState(false);
   const [editingActionId, setEditingActionId] = useState<string | null>(null);
-  const [actionsUsed, setActionsUsed] = useState([false, false, false]);
-  const [initiativeResult, setInitiativeResult] = useState<number | null>(null);
 
+  // Latest character, read inside the initiative-result timeout below so
+  // that write doesn't clobber an actionsRemaining change made during the
+  // 5s window with a stale closure value (same pattern as useOBR's
+  // characterRef, for the same reason).
+  const characterRef = useRef(character);
   useEffect(() => {
-    if (initiativeResult === null) return;
+    characterRef.current = character;
+  }, [character]);
 
+  // Clears the displayed initiative result 5s after a roll, matching the
+  // tab's previous local-only behavior. Now that the value lives in
+  // metadata, this write is visible to every client for that window, not
+  // just the roller. If this tab unmounts before the timer fires, the
+  // cleanup below cancels the write and the result simply stays visible in
+  // metadata until the next roll or reset — a strictly safer outcome than
+  // silently discarding it, and not something the previous local-state
+  // version had to worry about.
+  useEffect(() => {
+    if (character.combat.initiativeResult === null) return;
     const timer = setTimeout(() => {
-      setInitiativeResult(null);
+      onUpdate({
+        combat: { ...characterRef.current.combat, initiativeResult: null },
+      });
     }, 5000);
-
     return () => clearTimeout(timer);
-  }, [initiativeResult]);
+  }, [character.combat.initiativeResult, onUpdate]);
 
   const hpMaxCombat = character.hp.max + character.hp.temp;
   const {
@@ -175,18 +190,32 @@ export function CombatTab({
     ...character.inventory.filter((i) => i.isFavorite && i.formula),
   ];
 
-  /** Flips the used/unused state of one of the three action tokens (no-op for non-editors). */
-  const toggleActionUsed = (i: number) => {
+  /** Sets the action counter directly (no-op for non-editors). */
+  const setActionsRemaining = (n: number) => {
     if (!canEdit) return;
-    const next = [...actionsUsed];
-    next[i] = !next[i];
-    setActionsUsed(next);
+    onUpdate({ combat: { ...character.combat, actionsRemaining: n } });
   };
 
   /**
-   * Rolls initiative, then automatically marks actions as used/unused on
-   * the turn tracker to reflect how many actions the result grants
-   * (see {@link initiativeToActions}).
+   * Handles a click on pip `slotIndex` (1-based, 1..3) of the action
+   * tracker.
+   *
+   * Actions are spent from the highest pip down: clicking a *lit* (still
+   * available) pip spends it and everything above it, setting the counter
+   * to `slotIndex - 1`. Clicking a *dark* (already spent) pip undoes back
+   * up to and including it, setting the counter to `slotIndex` — this is
+   * the correction path for a misclick, not part of normal play.
+   *
+   * @param slotIndex - 1-based pip position that was clicked.
+   */
+  const handlePipClick = (slotIndex: number) => {
+    const lit = slotIndex <= character.combat.actionsRemaining;
+    setActionsRemaining(lit ? slotIndex - 1 : slotIndex);
+  };
+
+  /**
+   * Rolls initiative, then sets the turn tracker's counter to the number of
+   * actions the result grants (see {@link initiativeToActions}).
    *
    * @param mode - Roll mode, defaults to "standard".
    */
@@ -194,8 +223,9 @@ export function CombatTab({
     const result = await onRollInitiative(mode);
     if (result && typeof result.total === "number") {
       const ac = initiativeToActions(result.total);
-      setInitiativeResult(result.total);
-      setActionsUsed([ac < 1, ac < 2, ac < 3]);
+      onUpdate({
+        combat: { actionsRemaining: ac, initiativeResult: result.total },
+      });
     }
   };
 
@@ -357,7 +387,7 @@ export function CombatTab({
               <p className="bento-label">Actions this turn</p>
               {canEdit && (
                 <button
-                  onClick={() => setActionsUsed([false, false, false])}
+                  onClick={() => setActionsRemaining(3)}
                   className="text-[10px] text-stone-500 hover:text-amber-300 border border-stone-700 px-2 py-0.5 rounded transition-colors"
                 >
                   Reset
@@ -365,33 +395,38 @@ export function CombatTab({
               )}
             </div>
             <div className="flex gap-2">
-              {actionsUsed.map((used, i) => (
-                <button
-                  key={i}
-                  onClick={() => toggleActionUsed(i)}
-                  className={`
-                    flex-1 py-2 rounded-lg border-2 font-bold text-sm transition-all
-                    ${
-                      used
-                        ? "border-stone-700 bg-stone-800/40 text-stone-600"
-                        : "border-amber-600 bg-amber-950/40 text-amber-300 shadow-amber-900/30 shadow-md"
-                    }
-                  `}
-                >
-                  {used ? "✓" : `${i + 1}`}
-                </button>
-              ))}
+              {[1, 2, 3].map((slotIndex) => {
+                const spent = slotIndex > character.combat.actionsRemaining;
+                return (
+                  <button
+                    key={slotIndex}
+                    onClick={() => canEdit && handlePipClick(slotIndex)}
+                    className={`
+                      flex-1 py-2 rounded-lg border-2 font-bold text-sm transition-all
+                      ${
+                        spent
+                          ? "border-stone-700 bg-stone-800/40 text-stone-600"
+                          : "border-amber-600 bg-amber-950/40 text-amber-300 shadow-amber-900/30 shadow-md"
+                      }
+                    `}
+                  >
+                    {spent ? "✓" : `${slotIndex}`}
+                  </button>
+                );
+              })}
             </div>
             <p className="text-[10px] text-stone-600 mt-1.5 italic">
               Initiative: &lt;10 = 1 action · 10–19 = 2 · 20+ = 3
             </p>
           </div>
         </div>
-        {initiativeResult !== null && (
+        {character.combat.initiativeResult !== null && (
           <p className="text-[10px] font-medium text-amber-400 text-center mt-1.5 -mb-1 ">
-            Result: {initiativeResult} → {initiativeToActions(initiativeResult)}{" "}
-            action
-            {initiativeToActions(initiativeResult) > 1 ? "s" : ""}
+            Result: {character.combat.initiativeResult} →{" "}
+            {initiativeToActions(character.combat.initiativeResult)} action
+            {initiativeToActions(character.combat.initiativeResult) > 1
+              ? "s"
+              : ""}
           </p>
         )}
       </BentoSection>

@@ -73,6 +73,35 @@ export interface Armor {
   defenseBonus?: number;
 }
 
+/**
+ * Turn-scoped combat state: the action economy tracker and the last
+ * initiative roll.
+ *
+ * @remarks Lives on {@link NimbleCharacter} (item metadata) rather than a
+ * separate metadata key, deliberately: it rides the same per-token write
+ * path, the same `canEdit` gate (`updateCharacter` in `useOBR.ts`), and the
+ * same real-time sync as HP/wounds, so the GM sees it with no extra
+ * listener wiring. Previously this was `CombatTab`-local `useState`, which
+ * was lost every time the tab unmounted (switching tabs); moving it here
+ * fixes that by construction.
+ */
+export interface CombatState {
+  /**
+   * Actions left to spend this turn, out of the fixed 3-action budget
+   * (0-3). Named for what the player is actually tracking at the table
+   * ("how many do I have left"), not what's been spent — an earlier
+   * `actionsUsed` version had a decrement direction that read backwards
+   * against real usage (rolling 1 action set the counter to 2 instead of
+   * 1). A single counter rather than 3 independent booleans, so a "gap"
+   * state (e.g. action 3 available but not action 2) can't be represented.
+   * See `CombatTab`'s pip click handler for how a click maps to this
+   * value.
+   */
+  actionsRemaining: number;
+  /** Most recent initiative roll total, or null if none rolled yet (or the 5s display window has elapsed). */
+  initiativeResult: number | null;
+}
+
 export interface CharacterAction {
   id: string;
   name: string;
@@ -156,6 +185,7 @@ export interface NimbleCharacter {
 
   armor: Armor;
   initiativeBonus: number;
+  combat: CombatState;
 
   languages: string[];
   abilities: string[];
@@ -294,6 +324,7 @@ export function createDefaultCharacter(
       defenseBonus: 0,
     },
     initiativeBonus: 0,
+    combat: { actionsRemaining: 3, initiativeResult: null },
     languages: ["Common"],
     abilities: [],
     notes: "",

@@ -154,10 +154,26 @@ export function useOBR(): UseOBRReturn {
     isUnclaimed,
   };
 
-  /** Reads a {@link NimbleCharacter} out of an OBR item's metadata, or `null` if the item has no sheet attached. */
+  /**
+   * Reads a {@link NimbleCharacter} out of an OBR item's metadata, or
+   * `null` if the item has no sheet attached.
+   *
+   * @remarks Defaults `combat` when absent: tokens saved before that field
+   * existed have no `combat` key at all (not just an empty one), and there
+   * is no schema versioning/migration step in this project, so this is the
+   * single choke point that patches old data on read rather than crashing
+   * on `character.combat.actionsRemaining` downstream.
+   */
   const loadCharacterFromItem = useCallback(
     (item: Item): NimbleCharacter | null => {
-      return (item.metadata?.[METADATA_KEY] as NimbleCharacter) ?? null;
+      const loaded = (item.metadata?.[METADATA_KEY] as NimbleCharacter) ?? null;
+      if (!loaded) return null;
+      return loaded.combat
+        ? loaded
+        : {
+            ...loaded,
+            combat: { actionsRemaining: 3, initiativeResult: null },
+          };
     },
     [],
   );
