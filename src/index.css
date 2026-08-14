@@ -54,6 +54,22 @@ body {
   background: #0c0a09; /* stone-950 */
 }
 
+/* Keyboard focus indicator, global.
+   Most interactive elements in this app use Tailwind's `outline-none`
+   utility on individual inputs/buttons (relying on `focus:border-color`
+   instead), which leaves nothing for keyboard/AT users on anything that
+   isn't a text input (icon buttons, DraggableBar's slider role, tab
+   pills...). This rule restores a visible indicator on `:focus-visible`
+   (keyboard focus only, not mouse clicks) for every element, without a
+   per-element opt-in. It's placed outside any `@layer` block, same as the
+   resets below, so it always wins over `outline-none` regardless of
+   Tailwind's utility layer ordering. Color matches the amber focus ring
+   already used by FormulaHelp's info button. */
+:focus-visible:not(input):not(textarea):not(select) {
+  outline: 1.5px solid #e8dfc8;
+  outline-offset: 1.5px;
+}
+
 /* Remove number input spinners (they clutter the stat boxes) */
 input[type="number"]::-webkit-inner-spin-button,
 input[type="number"]::-webkit-outer-spin-button {

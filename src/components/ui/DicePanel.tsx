@@ -150,6 +150,8 @@ export function DicePanel({
       {/* Header toggle */}
       <button
         onClick={() => setCollapsed((c) => !c)}
+        aria-expanded={!collapsed}
+        aria-label={collapsed ? "Expand free roll panel" : "Collapse free roll panel"}
         className="w-full flex items-center justify-between px-3 py-2 hover:bg-stone-800/40 transition-colors"
       >
         <div className="flex items-center gap-2">

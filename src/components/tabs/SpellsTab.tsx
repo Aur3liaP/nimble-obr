@@ -587,6 +587,7 @@ export function SpellsTab({
               onCommit={onManaDragCommit}
               color="#a78bfa"
               valueSuffix=" mana"
+              ariaLabel="Mana"
             />
             <p className="text-[10px] text-stone-500 mt-1">
               Spell tier ≈ mana cost · cantrips are free

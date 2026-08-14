@@ -15,6 +15,7 @@
  */
 
 import { useCallback, useEffect, useRef, useState } from "react";
+import type { KeyboardEvent } from "react";
 
 /**
  * @property value - Valeur actuelle (ex: HP courant).
@@ -30,6 +31,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
  * @property className - Classes supplémentaires sur le conteneur.
  * @property showValueOnDrag - Affiche un tooltip flottant avec la valeur courante au-dessus du curseur pendant le drag. Défaut: true.
  * @property valueSuffix - Texte ajouté après le nombre dans le tooltip (ex: " HP", " mana").
+ * @property ariaLabel - Nom accessible du slider (ex: "HP", "Mana"), exposé via `aria-label` quand `canEdit` est vrai. Un `role="slider"` sans nom ne dit rien d'utile à un lecteur d'écran au-delà du chiffre brut.
  */
 interface DraggableBarProps {
   value: number;
@@ -45,6 +47,7 @@ interface DraggableBarProps {
   className?: string;
   showValueOnDrag?: boolean;
   valueSuffix?: string;
+  ariaLabel?: string;
 }
 
 /**
@@ -66,6 +69,7 @@ export function DraggableBar({
   className = "",
   showValueOnDrag = true,
   valueSuffix = "",
+  ariaLabel,
 }: DraggableBarProps) {
   const barRef = useRef<HTMLDivElement>(null);
   const [isDragging, setIsDragging] = useState(false);
@@ -109,6 +113,39 @@ export function DraggableBar({
     handlePointerMove(clientX);
   };
 
+  /**
+   * Standard WAI-ARIA slider keyboard interaction: arrow keys step by 1,
+   * Home/End jump to the extremes. Each press commits immediately (there's
+   * no separate press/release the way a drag has mousedown/mouseup, so
+   * `onChange` and `onCommit` both fire per keystroke, same as
+   * `InlineNumberField`'s direct-entry path elsewhere in this app).
+   */
+  const handleKeyDown = (e: KeyboardEvent<HTMLDivElement>) => {
+    if (!canEdit) return;
+    let next: number;
+    switch (e.key) {
+      case "ArrowRight":
+      case "ArrowUp":
+        next = Math.min(max, value + 1);
+        break;
+      case "ArrowLeft":
+      case "ArrowDown":
+        next = Math.max(0, value - 1);
+        break;
+      case "Home":
+        next = 0;
+        break;
+      case "End":
+        next = max;
+        break;
+      default:
+        return;
+    }
+    e.preventDefault();
+    onChange(next);
+    onCommit?.(next);
+  };
+
   // ── Listeners globaux pendant le drag ──────────────────────────
   useEffect(() => {
     if (!isDragging) return;
@@ -150,6 +187,9 @@ export function DraggableBar({
         ${className}
       `}
       role={canEdit ? "slider" : undefined}
+      tabIndex={canEdit ? 0 : undefined}
+      onKeyDown={canEdit ? handleKeyDown : undefined}
+      aria-label={canEdit ? ariaLabel : undefined}
       aria-valuenow={canEdit ? value : undefined}
       aria-valuemin={canEdit ? 0 : undefined}
       aria-valuemax={canEdit ? max : undefined}

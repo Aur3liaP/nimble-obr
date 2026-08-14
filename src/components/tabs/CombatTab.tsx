@@ -292,6 +292,7 @@ export function CombatTab({
                 onChange={onHpDragChangeCombat}
                 onCommit={onHpDragCommitCombat}
                 valueSuffix=" HP"
+                ariaLabel="HP"
                 color={(ratio) =>
                   ratio <= 0.25
                     ? "#ef4444"
@@ -388,9 +389,10 @@ export function CombatTab({
               {canEdit && (
                 <button
                   onClick={() => setActionsRemaining(3)}
-                  className="text-[10px] text-stone-500 hover:text-amber-300 border border-stone-700 px-2 py-0.5 rounded transition-colors"
+                  className="text-[10px] text-amber-300 border border-stone-700 px-2 py-0.5 rounded transition-colors hover:border-amber-600"
+                  title="Restore all 3 actions"
                 >
-                  Reset
+                  End Turn
                 </button>
               )}
             </div>

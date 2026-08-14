@@ -32,7 +32,7 @@ const ALIGN_CLASS: Record<Align, string> = {
 
 /** Shared base style for the underline-style input used by {@link InlineEditField}. */
 const INPUT_UNDERLINE =
-  "bg-transparent border-b border-stone-700 focus:border-amber-600 outline-none " +
+  "bg-transparent border-b border-stone-700 focus:border-amber-600 focus:shadow-[0_1px_0_0_theme(colors.amber.600)] outline-none rounded-xs " +
   "transition-colors w-full pb-0.5";
 
 /**
@@ -213,8 +213,7 @@ export function InlineNumberField({
             if (!isNaN(v)) onChange?.(v);
           }}
           className={`
-            bg-transparent border-b border-stone-700 focus:border-amber-600
-            outline-none transition-colors w-full pb-0.5 font-bold
+            ${INPUT_UNDERLINE} font-bold
             ${sizeCls} ${alignCls} ${staticColorCls}
           `}
           style={resolvedColor ? { color: resolvedColor } : undefined}

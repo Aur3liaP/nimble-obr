@@ -129,6 +129,8 @@ export default function App() {
               <button
                 key={tab.id}
                 onClick={() => setActiveTab(tab.id)}
+                aria-label={tab.label}
+                aria-current={activeTab === tab.id ? "page" : undefined}
                 className={`flex-1 flex flex-col items-center py-1.5 rounded-t-lg border-b-2 text-[10px] font-semibold tracking-wide transition-all duration-150 ${
                   activeTab === tab.id
                     ? "border-amber-600 bg-stone-800/80 text-amber-300"

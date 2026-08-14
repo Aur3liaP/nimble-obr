@@ -313,6 +313,7 @@ export function SummaryTab({
                 onChange={onHpDragChange}
                 onCommit={onHpDragCommit}
                 valueSuffix=" HP"
+                ariaLabel="HP"
                 color={(ratio) =>
                   ratio <= 0.25
                     ? "#ef4444"
