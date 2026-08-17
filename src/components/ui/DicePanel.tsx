@@ -13,7 +13,6 @@ import { NumericStepper } from "./common";
 
 interface DicePanelProps {
   isGM?: boolean;
-  playerName: string;
   onRoll: (req: DiceRollRequest) => void;
   defaultCollapsed?: boolean;
 }
@@ -112,7 +111,6 @@ function dieFace(sides: number): string {
  * toggle.
  *
  * @param isGM - Enables the hidden-roll checkbox when true.
- * @param playerName - Currently unused directly here but kept for future label use.
  * @param onRoll - Callback invoked with a constructed {@link DiceRollRequest} on each die click.
  * @param defaultCollapsed - Whether the panel starts collapsed.
  */

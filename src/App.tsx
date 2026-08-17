@@ -44,7 +44,6 @@ export default function App() {
     character,
     selectedItems,
     playerId,
-    playerName,
     permissions,
     syncStatus,
     updateCharacter,
@@ -289,7 +288,6 @@ export default function App() {
         <div className="px-3 pt-2 pb-3 flex flex-col gap-3">
           <DicePanel
             isGM={isGM}
-            playerName={playerName}
             onRoll={onFreeRoll}
             defaultCollapsed={true}
           />
