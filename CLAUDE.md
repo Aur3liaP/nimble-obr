@@ -12,8 +12,9 @@ Owlbear Rodeo (OBR) extension: a real-time-synced character sheet panel for the 
 - `npm run build` : `tsc -b && vite build`
 - `npm run type-check` : `tsc --noEmit`
 - `npm run lint` : `eslint . --ext ts,tsx --report-unused-disable-directives --max-warnings 0`
-- `npm run test` : Vitest suite on `src/utils/formulaParser.test.ts` (113 tests).
-  Pure functions only, no OBR dependency. Deterministic dice via a `Math.random`
+- `npm run test` : Vitest suite on `src/utils/formulaParser.test.ts` (113 tests)
+  and `src/utils/characterMigrations.test.ts` (25 tests), 138 total. Pure
+  functions only, no OBR dependency. Deterministic dice via a `Math.random`
   spy (`mockRolls` helper), not by mocking `rollDice` (ESM mocking limitations
   in Vitest, and mocking it would leak into the public API signature).
 - `type-check` + `lint` + `test` passing is the bar for "done". Changes touching
@@ -58,6 +59,37 @@ These exist because of bugs already diagnosed and fixed. Changing them reintrodu
 - `updateCharacter` re-checks `canEdit` before every write and no-ops with `console.warn` if the caller lacks rights. This is **not a real security boundary** (OBR has no server-side ACL on metadata); it only guards against accidental stale-UI writes.
 - Rolling dice is intentionally **not** gated by `canEdit`. A read-only viewer can roll using another character's stats. Only persisting sheet changes is guarded. This is a design decision, not an oversight.
 - Claiming or taking over a sheet is also intentionally **not** gated. Any player can currently take over another player's claimed sheet (deliberate design for a trusted table). If GM-only claiming is ever wanted, add the guard at the call site (`App.tsx`/`CharacterHeader.tsx`), not in `useOBR`.
+
+### Schema versioning (`src/utils/characterMigrations.ts`)
+
+`NimbleCharacter` carries a `schemaVersion` field (`CURRENT_SCHEMA_VERSION` in
+`types/character.ts`). `migrateCharacter` is the single choke point that
+brings an old record up to date, refuses one from a newer, not-yet-reloaded
+client (`"unsupported"`), and refuses one that's corrupted even after
+migration (`"invalid"`) — `useOBR.ts`'s `loadCharacterFromItem` is the only
+caller. To add a migration: change `NimbleCharacter`, bump
+`CURRENT_SCHEMA_VERSION` by exactly 1, and append one `v(n) -> v(n+1)`
+function to `MIGRATIONS`. Full procedure and the reasoning behind each
+design choice (why `MIGRATIONS` is an ordered array of single-step
+functions, why a versionless record is treated as v0, why there's no
+downward migration, why shape validation is a template walk over
+`createDefaultCharacter()` rather than a hand-written schema) are in that
+file's header and JSDoc — read it before touching this, don't reinvent an
+ad hoc patch in `loadCharacterFromItem` the way the old `combat` backfill
+used to be. See `docs/schema-migrations.md` for the full picture (the
+procedure to add a field, what deploy-time looks like across clients, and
+why `MIGRATIONS[0]` is a generic fill legitimate only for v0).
+
+`validateCharacterShape`'s template-walk approach is deliberately scoped to
+validating this project's own migration output, not arbitrary external
+data — see its JSDoc for the exact gaps (optional fields, array element
+shape, enum values). If `NimbleCharacter` grows substantially, or a sheet
+ever needs to come from outside this app's own migration chain (a file
+import, a copy pasted between scenes), replace it with a real schema
+library (Zod or equivalent) and derive `NimbleCharacter` from the schema
+(`z.infer`) rather than maintaining both by hand — two hand-maintained
+descriptions of the same shape is exactly how `FLAW` (see Formula parser
+below) went undetected.
 
 ### Formula parser (`src/utils/formulaParser.ts`)
 

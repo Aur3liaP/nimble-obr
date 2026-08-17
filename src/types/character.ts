@@ -203,6 +203,16 @@ export interface NimbleCharacter {
   tokenId: string;
   ownerId: string;
   updatedAt: number;
+
+  /**
+   * Schema version this record was written at. Used by `migrateCharacter`
+   * (`src/utils/characterMigrations.ts`) to bring older records up to
+   * {@link CURRENT_SCHEMA_VERSION} on load, and to refuse a record whose
+   * version is newer than this build understands, rather than guessing at
+   * fields it doesn't know about. See that file's header for the procedure
+   * to follow when `NimbleCharacter`'s shape changes.
+   */
+  schemaVersion: number;
 }
 
 /**
@@ -211,6 +221,16 @@ export interface NimbleCharacter {
  * collisions with metadata written by other OBR extensions.
  */
 export const METADATA_KEY = "com.nimble-obr.nimble/character_sheet";
+
+/**
+ * Current schema version of {@link NimbleCharacter}. Bump this by exactly 1,
+ * and add a matching entry to `MIGRATIONS` in
+ * `src/utils/characterMigrations.ts`, every time `NimbleCharacter`'s shape
+ * changes in a way that a record already persisted in OBR item metadata
+ * needs transforming to match. See that file's header for the full
+ * procedure.
+ */
+export const CURRENT_SCHEMA_VERSION = 1;
 
 /**
  * Highest level a character can be set to.
@@ -339,5 +359,6 @@ export function createDefaultCharacter(
     tokenId,
     ownerId,
     updatedAt: Date.now(),
+    schemaVersion: CURRENT_SCHEMA_VERSION,
   };
 }

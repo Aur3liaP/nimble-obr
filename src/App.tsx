@@ -110,6 +110,8 @@ export default function App() {
   const showSheet = selectionState === "ready" && character !== null;
   const showNoToken = selectionState === "none";
   const showNoSheet = selectionState === "no-sheet";
+  const showUnsupportedVersion = selectionState === "unsupported-version";
+  const showInvalidSheet = selectionState === "invalid-sheet";
   const firstItem = selectedItems[0];
 
   return (
@@ -180,6 +182,27 @@ export default function App() {
               Create sheet
             </button>
           )}
+        </div>
+      )}
+
+      {/* ── Unsupported schema version — a newer client wrote this sheet
+          than this build understands; no downward migration exists ──── */}
+      {showUnsupportedVersion && (
+        <div className="flex flex-col items-center justify-center gap-4 py-10 px-6 text-center">
+          <span className="text-5xl opacity-40">⬆️</span>
+          <p className="text-sm text-stone-500 max-w-50 leading-relaxed">
+            This character sheet was saved by a newer version of this extension. Reload the page to get the latest version.
+          </p>
+        </div>
+      )}
+
+      {/* ── Invalid sheet data — corrupted metadata, or a migration failed ── */}
+      {showInvalidSheet && (
+        <div className="flex flex-col items-center justify-center gap-4 py-10 px-6 text-center">
+          <span className="text-5xl opacity-40">⚠️</span>
+          <p className="text-sm text-stone-500 max-w-50 leading-relaxed">
+            This character sheet's data could not be read. It may be corrupted. Check the browser console for details.
+          </p>
         </div>
       )}
 
@@ -256,7 +279,7 @@ export default function App() {
             onRoll={onFreeRoll}
             defaultCollapsed={true}
           />
-          {(showNoToken || showNoSheet) && (
+          {(showNoToken || showNoSheet || showUnsupportedVersion || showInvalidSheet) && (
             <RollLog
               rolls={recentRolls}
               isGM={isGM}

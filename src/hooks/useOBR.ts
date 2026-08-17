@@ -25,6 +25,7 @@ import {
   type RollMode,
 } from "../types/character";
 import { rollFormula } from "../utils/formulaParser";
+import { migrateCharacter } from "../utils/characterMigrations";
 
 /** OBR player role as reported by the SDK. */
 
@@ -34,10 +35,24 @@ import { rollFormula } from "../utils/formulaParser";
  * - "none": no character token selected.
  * - "multiple": more than one token selected (sheet not shown).
  * - "no-sheet": a single character token is selected but has no sheet yet.
+ * - "unsupported-version": a single character token is selected whose
+ *   stored `schemaVersion` is newer than this build understands (e.g. a
+ *   browser tab left open across a deploy). There is no downward migration,
+ *   so the sheet refuses to load rather than guessing at unknown fields.
+ * - "invalid-sheet": a single character token is selected whose stored data
+ *   doesn't match the expected shape even after migration (corrupted
+ *   metadata, or a migration itself failed). See the console for the
+ *   technical reason; see `migrateCharacter` in `characterMigrations.ts`.
  * - "ready": a single character token with a valid sheet is selected.
  */
 export type OBRRole = "GM" | "PLAYER";
-export type SelectionState = "none" | "multiple" | "no-sheet" | "ready";
+export type SelectionState =
+  | "none"
+  | "multiple"
+  | "no-sheet"
+  | "unsupported-version"
+  | "invalid-sheet"
+  | "ready";
 
 /**
  * Centralized permission state for the currently loaded character,
@@ -368,6 +383,12 @@ export function useOBR(): UseOBRReturn {
   // whether a newer, unrelated failure has already replaced it — see
   // performWrite.
   const currentErrorIdRef = useRef(0);
+  // Set to a token id right after loading a character whose stored
+  // schemaVersion was behind CURRENT_SCHEMA_VERSION (migrateCharacter's
+  // `migrated: true`), cleared once the write-back effect below has
+  // consumed it. Not touched for the "multiple selection" branch, which
+  // never triggers a write-back — see that branch's comment.
+  const pendingMigrationTokenIdRef = useRef<string | null>(null);
 
   const permissions: CharacterPermissions = {
     canEdit,
@@ -377,28 +398,28 @@ export function useOBR(): UseOBRReturn {
   };
 
   /**
-   * Reads a {@link NimbleCharacter} out of an OBR item's metadata, or
-   * `null` if the item has no sheet attached.
+   * Reads an OBR item's metadata and runs it through {@link migrateCharacter},
+   * or returns `null` if the item has no sheet attached at all (a distinct
+   * case from a sheet whose data is unreadable, see {@link MigrationResult}).
    *
-   * @remarks Defaults `combat` when absent: tokens saved before that field
-   * existed have no `combat` key at all (not just an empty one), and there
-   * is no schema versioning/migration step in this project, so this is the
-   * single choke point that patches old data on read rather than crashing
-   * on `character.combat.actionsRemaining` downstream.
+   * @remarks Single choke point for both entry points that read a character
+   * off an item: {@link handleSelectionChange} and the `scene.items.onChange`
+   * resync listener registered in the main effect below. Logs `"invalid"`
+   * reasons to the console: they're a technical detail (a thrown error
+   * message, a field path), not something to show a player mid-game — the
+   * UI only ever gets the generic `"invalid-sheet"` selection state.
    */
-  const loadCharacterFromItem = useCallback(
-    (item: Item): NimbleCharacter | null => {
-      const loaded = (item.metadata?.[METADATA_KEY] as NimbleCharacter) ?? null;
-      if (!loaded) return null;
-      return loaded.combat
-        ? loaded
-        : {
-            ...loaded,
-            combat: { actionsRemaining: 3, initiativeResult: null },
-          };
-    },
-    [],
-  );
+  const loadCharacterFromItem = useCallback((item: Item) => {
+    const raw = item.metadata?.[METADATA_KEY];
+    if (raw === undefined) return null;
+    const result = migrateCharacter(raw);
+    if (result.status === "invalid") {
+      console.error(
+        `[Nimble] Character sheet on token ${item.id} failed validation: ${result.reason}`,
+      );
+    }
+    return result;
+  }, []);
 
   /**
    * Recomputes `selectionState`, `selectedItems`, and `character` whenever
@@ -422,14 +443,27 @@ export function useOBR(): UseOBRReturn {
         setCharacter(null);
       } else if (tokens.length > 1) {
         setSelectionState("multiple");
-        setCharacter(loadCharacterFromItem(tokens[0]));
+        // Display (and free-roll stat source) only — never triggers a
+        // migration write-back. A bulk selection isn't a deliberate "open
+        // this sheet" action on any one token, and writing to every stale
+        // token a multi-select happens to sweep over is not something the
+        // player asked for.
+        const loaded = loadCharacterFromItem(tokens[0]);
+        setCharacter(loaded && loaded.status === "ok" ? loaded.character : null);
       } else {
         const loaded = loadCharacterFromItem(tokens[0]);
         if (!loaded) {
           setSelectionState("no-sheet");
           setCharacter(null);
+        } else if (loaded.status === "unsupported") {
+          setSelectionState("unsupported-version");
+          setCharacter(null);
+        } else if (loaded.status === "invalid") {
+          setSelectionState("invalid-sheet");
+          setCharacter(null);
         } else {
-          setCharacter(loaded);
+          if (loaded.migrated) pendingMigrationTokenIdRef.current = tokens[0].id;
+          setCharacter(loaded.character);
           setSelectionState("ready");
         }
       }
@@ -482,9 +516,18 @@ export function useOBR(): UseOBRReturn {
           const currentChar = characterRef.current;
           if (!currentChar) return;
           const updatedItem = items.find((i) => i.id === currentChar.tokenId);
-          if (updatedItem) {
-            const fresh = loadCharacterFromItem(updatedItem);
-            if (fresh) setCharacter(fresh);
+          if (!updatedItem) return;
+          const fresh = loadCharacterFromItem(updatedItem);
+          if (!fresh) return; // sheet removed mid-session — leave state as-is
+          if (fresh.status === "ok") {
+            if (fresh.migrated) pendingMigrationTokenIdRef.current = updatedItem.id;
+            setCharacter(fresh.character);
+          } else if (fresh.status === "unsupported") {
+            setSelectionState("unsupported-version");
+            setCharacter(null);
+          } else {
+            setSelectionState("invalid-sheet");
+            setCharacter(null);
           }
         }),
       );
@@ -706,6 +749,65 @@ export function useOBR(): UseOBRReturn {
       });
     }
   };
+
+  // Kept in sync with `performWrite` every render so the migration
+  // write-back effect below can call the latest `performWrite` without
+  // listing it as a dependency — same "ref for latest closure" pattern as
+  // `characterRef`/`canEditRef`/`playerIdRef` above. `performWrite` itself
+  // stays a plain (non-memoized) function: it self-references its own name
+  // inside its `retry` closure for the retry-of-retry case, which the
+  // react-hooks/immutability rule flags as unsafe on a `useCallback`-wrapped
+  // value (its identity finalizes only after `retry`'s closure is created).
+  const performWriteRef = useRef(performWrite);
+  useEffect(() => {
+    performWriteRef.current = performWrite;
+  });
+
+  /**
+   * Writes back a character that was just migrated on read (see
+   * {@link loadCharacterFromItem}), so the persisted `schemaVersion` catches
+   * up and other clients stop re-migrating the same old data on every load.
+   *
+   * Runs as its own effect, keyed off `pendingMigrationTokenIdRef`, rather
+   * than inline in `handleSelectionChange`: by the time this effect runs,
+   * `character` (and therefore `canEdit`/`isOwner`, both derived from it
+   * above) already reflects the just-loaded record, so this reuses the same
+   * `canEdit` every other write in this hook is gated on instead of
+   * re-deriving permission from `ownerId` a second way. `pendingMigrationTokenIdRef`
+   * only exists because `NimbleCharacter` itself can't carry an ephemeral
+   * "this copy was just migrated" flag — `character.schemaVersion` is
+   * always `CURRENT_SCHEMA_VERSION` once loaded, migrated or not.
+   *
+   * A read-only viewer (not GM, not owner) never reaches the write: `canEdit`
+   * is `false` for them, so the ref is cleared and nothing is sent. Two
+   * clients that both hold edit rights and load the same stale sheet at
+   * nearly the same time both write here; since the migration is a pure
+   * function of the same stored data, both writes carry identical content,
+   * so whichever lands last simply repeats the same result — no different
+   * from any other pair of near-simultaneous writes this hook already
+   * doesn't defend against (there is no compare-and-swap on the OBR side).
+   * A sheet nobody with edit rights ever selects stays at its old
+   * `schemaVersion` in storage indefinitely, migrated only in memory for
+   * whoever views it — accepted, not solved here.
+   */
+  useEffect(() => {
+    if (!character) return;
+    if (pendingMigrationTokenIdRef.current !== character.tokenId) return;
+    pendingMigrationTokenIdRef.current = null;
+    if (!canEdit) return;
+    const tokenId = character.tokenId;
+    void performWriteRef.current({
+      verifyTokenId: tokenId,
+      execute: async () => {
+        assertOnline();
+        await OBR.scene.items.updateItems([tokenId], (items) => {
+          for (const item of items) {
+            item.metadata[METADATA_KEY] = character;
+          }
+        });
+      },
+    });
+  }, [character, canEdit]);
 
   /**
    * Applies a partial update to the currently loaded character and persists
