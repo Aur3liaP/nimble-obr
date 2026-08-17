@@ -18,14 +18,44 @@ import {
   evalFormulaWithContext,
   formulaSyntaxError,
   FormulaError,
+  type FormulaContext,
   parseDamageFormula,
   resolveFormulaDisplay,
   rollFormula,
+  rollFormulaWithContext,
   safeEval,
   validateFormula,
   validateFormulaSyntax,
   VARIABLE_TABLE,
 } from "./formulaParser";
+
+/**
+ * A context with no real character behind it, shaped like the one
+ * `useOBR.ts`'s `handleFreeRoll` passes to `rollFormulaWithContext` for the
+ * standalone free-roll widget: every stat/skill/HP field is 0 (not a
+ * fabricated neutral value), only `level` is 1, matching Nimble's actual
+ * minimum level. Defined locally rather than imported from `useOBR.ts`,
+ * which pulls in the OBR SDK and would break this file's "pure, no OBR
+ * dependency" test contract.
+ */
+const NO_CHARACTER_CTX: FormulaContext = {
+  level: 1,
+  key: 0,
+  flaw: 0,
+  stats: { str: 0, dex: 0, int: 0, wil: 0 },
+  skills: {
+    arcana: 0,
+    examination: 0,
+    finesse: 0,
+    influence: 0,
+    insight: 0,
+    lore: 0,
+    might: 0,
+    naturecraft: 0,
+    perception: 0,
+    stealth: 0,
+  },
+};
 
 function makeCharacter(overrides: Partial<NimbleCharacter> = {}): NimbleCharacter {
   const char = createDefaultCharacter("token-1", "owner-1");
@@ -631,6 +661,62 @@ describe("cross-path consistency: an invalid formula must be rejected identicall
 
     const displayResult = resolveFormulaDisplay(formula, char);
     expect(displayResult.error).toBeTruthy();
+  });
+});
+
+describe("rollFormulaWithContext", () => {
+  // Covers useOBR.ts's handleFreeRoll switching from a fake, cast-to-
+  // NimbleCharacter stub to rollFormulaWithContext(formula, FREE_ROLL_CONTEXT, ...).
+
+  it("rolls a plain dice+modifier formula given only a FormulaContext, no NimbleCharacter required", () => {
+    mockRolls([4, 2], 6);
+    const result = rollFormulaWithContext("2d6+3", NO_CHARACTER_CTX);
+    expect(result.rolls).toEqual([4, 2]);
+    expect(result.modifier).toBe(3);
+    expect(result.total).toBe(4 + 2 + 3);
+    expect(result.error).toBeUndefined();
+  });
+
+  it("does not inject a value for a referenced variable the context sets to zero, so a free roll never gets a parasitic bonus", () => {
+    mockRolls([3], 6);
+    const zeroResult = rollFormulaWithContext("1d6+STR", NO_CHARACTER_CTX);
+    expect(zeroResult.modifier).toBe(0);
+    expect(zeroResult.total).toBe(3);
+
+    // Same formula, a context where STR is actually non-zero: proves the
+    // zero result above reflects the context's STR value, not a formula
+    // that silently drops the "+STR" term.
+    mockRolls([3], 6);
+    const nonZeroResult = rollFormulaWithContext("1d6+STR", {
+      ...NO_CHARACTER_CTX,
+      stats: { ...NO_CHARACTER_CTX.stats, str: 5 },
+    });
+    expect(nonZeroResult.modifier).toBe(5);
+    expect(nonZeroResult.total).toBe(8);
+  });
+
+  it("returns an error instead of throwing for an invalid formula, same contract as rollFormula", () => {
+    const result = rollFormulaWithContext("101d6", NO_CHARACTER_CTX);
+    expect(result.rolls).toEqual([]);
+    expect(result.total).toBe(0);
+    expect(result.error).toMatch(/out of range/i);
+  });
+
+  it("matches rollFormula's result when given that same character's buildContext() output", () => {
+    const char = makeCharacter();
+
+    mockRolls([5, 10], 20);
+    const viaChar = rollFormula("1d20+STR", char, "advantage", 1);
+
+    mockRolls([5, 10], 20);
+    const viaCtx = rollFormulaWithContext(
+      "1d20+STR",
+      buildContext(char),
+      "advantage",
+      1,
+    );
+
+    expect(viaCtx).toEqual(viaChar);
   });
 });
 

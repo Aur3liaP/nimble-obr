@@ -24,7 +24,11 @@ import {
   type DiceRollResult,
   type RollMode,
 } from "../types/character";
-import { rollFormula } from "../utils/formulaParser";
+import {
+  rollFormula,
+  rollFormulaWithContext,
+  type FormulaContext,
+} from "../utils/formulaParser";
 import { migrateCharacter } from "../utils/characterMigrations";
 
 /** OBR player role as reported by the SDK. */
@@ -227,6 +231,45 @@ const EXISTENCE_CHECK_DEBOUNCE_MS = 600;
  * subclass.
  */
 const OFFLINE_ERROR_MESSAGE = "offline: navigator.onLine is false";
+
+/**
+ * {@link FormulaContext} for {@link handleFreeRoll}, which has no character
+ * at all to build one from.
+ *
+ * @remarks Every field is `0`, not `1` — contrast
+ * `NEUTRAL_VALIDATION_CONTEXT` in `formulaParser.ts`, which uses `1`s, but
+ * only to keep write-time *syntax* validation from rejecting a formula
+ * over a variable that can legitimately resolve to `0` on a real character
+ * (see that file's header). Here there is no real character, and a free
+ * roll's formula only ever comes from {@link DicePanel}'s own dice grid —
+ * `${count}d${sides}${modStr}` with `modStr` a signed number literal,
+ * never a variable — so no token in `VARIABLE_TABLE` is expected to
+ * substitute here at all. `0` is deliberate for the case where one
+ * eventually does: it resolves to "this bonus doesn't exist" rather than
+ * silently injecting a fabricated `+1`-per-stat into someone's free roll.
+ * `level: 1` is the one exception, matching Nimble's actual minimum
+ * character level rather than a nonexistent "level 0".
+ */
+const FREE_ROLL_CONTEXT: FormulaContext = {
+  level: 1,
+  key: 0,
+  flaw: 0,
+  stats: { str: 0, dex: 0, int: 0, wil: 0 },
+  skills: {
+    arcana: 0,
+    examination: 0,
+    finesse: 0,
+    influence: 0,
+    insight: 0,
+    lore: 0,
+    might: 0,
+    naturecraft: 0,
+    perception: 0,
+    stealth: 0,
+  },
+  hp: 0,
+  maxHp: 0,
+};
 
 /**
  * Called from inside each write's `execute`, right before the actual SDK
@@ -984,8 +1027,9 @@ export function useOBR(): UseOBRReturn {
 
   /**
    * Rolls a formula with no character context (used by the standalone
-   * {@link DicePanel} free-roll widget). Builds a zeroed-out stub character
-   * so plain `NdX+modifier` formulas still resolve correctly.
+   * {@link DicePanel} free-roll widget), via {@link rollFormulaWithContext}
+   * and {@link FREE_ROLL_CONTEXT} instead of building a fake
+   * {@link NimbleCharacter} to satisfy {@link rollFormula}'s signature.
    *
    * @param req - Label, formula, roll mode, and optional hidden flag.
    * @returns The resolved {@link DiceRollResult}. Same failure handling as
@@ -995,27 +1039,9 @@ export function useOBR(): UseOBRReturn {
   const handleFreeRoll = async (
     req: DiceRollRequest,
   ): Promise<DiceRollResult | null> => {
-    const stub = {
-      level: 1,
-      stats: { str: 0, dex: 0, int: 0, wil: 0 },
-      skills: {
-        arcana: 0,
-        examination: 0,
-        finesse: 0,
-        influence: 0,
-        insight: 0,
-        lore: 0,
-        might: 0,
-        naturecraft: 0,
-        perception: 0,
-        stealth: 0,
-      },
-      hp: { current: 0, max: 0, temp: 0 },
-    } as unknown as NimbleCharacter;
-
-    const rolled = rollFormula(
+    const rolled = rollFormulaWithContext(
       req.formula,
-      stub,
+      FREE_ROLL_CONTEXT,
       req.mode,
       req.advantageCount ?? 0,
     );

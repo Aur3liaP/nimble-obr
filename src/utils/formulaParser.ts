@@ -75,7 +75,7 @@ export class FormulaError extends Error {}
 // Variable substitution
 // ─────────────────────────────────────────────────────────────────
 
-type FormulaContext = {
+export type FormulaContext = {
   level: number;
   stats: Stats;
   key: number;
@@ -1246,7 +1246,12 @@ export function rollFormula(
   char: NimbleCharacter,
   mode: "standard" | "advantage" | "disadvantage" = "standard",
   extraDice = 0,
-): {
+): RollFormulaResult {
+  return rollFormulaWithContext(formula, buildContext(char), mode, extraDice);
+}
+
+/** Return shape shared by {@link rollFormula} and {@link rollFormulaWithContext}. */
+export interface RollFormulaResult {
   diceNotation: string;
   rolls: number[];
   kept: number[];
@@ -1255,8 +1260,27 @@ export function rollFormula(
   isCritical: boolean;
   isFumble: boolean;
   error?: string;
-} {
-  const ctx = buildContext(char);
+}
+
+/**
+ * Same as {@link rollFormula} but takes a pre-built {@link FormulaContext}
+ * directly, for call sites with no full `NimbleCharacter` to build one from
+ * (e.g. the standalone {@link DicePanel} free-roll widget, which rolls with
+ * no character selected at all). Mirrors {@link evalFormulaWithContext}'s
+ * relationship to {@link evalFormula}.
+ *
+ * @param formula - Raw formula, e.g. "2d6+3".
+ * @param ctx - Context used to resolve any variable the formula references.
+ * @param mode - "standard" | "advantage" | "disadvantage".
+ * @param extraDice - See {@link rollFormula}.
+ * @returns See {@link rollFormula}.
+ */
+export function rollFormulaWithContext(
+  formula: string,
+  ctx: FormulaContext,
+  mode: "standard" | "advantage" | "disadvantage" = "standard",
+  extraDice = 0,
+): RollFormulaResult {
   let sides = 20;
   let count = 1;
   let diceNotation: string;
