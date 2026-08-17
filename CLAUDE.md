@@ -12,12 +12,16 @@ Owlbear Rodeo (OBR) extension: a real-time-synced character sheet panel for the 
 - `npm run build` : `tsc -b && vite build`
 - `npm run type-check` : `tsc --noEmit`
 - `npm run lint` : `eslint . --ext ts,tsx --report-unused-disable-directives --max-warnings 0`
-- `npm run test` : Vitest suite on `src/utils/formulaParser.test.ts` (113 tests),
-  `src/utils/characterMigrations.test.ts` (25 tests), and
-  `src/utils/entryUndo.test.ts` (7 tests), 145 total. Pure functions only, no
-  OBR dependency. Deterministic dice via a `Math.random` spy (`mockRolls`
+- `npm run test` : Vitest suite covering the formula parser
+  (`src/utils/formulaParser.test.ts`), schema migrations
+  (`src/utils/characterMigrations.test.ts`), delete-undo logic
+  (`src/utils/entryUndo.test.ts`), and the shared search-filter hook
+  (`src/hooks/useSearchFilter.test.ts`). Pure functions only, no OBR
+  dependency. Deterministic dice via a `Math.random` spy (`mockRolls`
   helper), not by mocking `rollDice` (ESM mocking limitations in Vitest, and
-  mocking it would leak into the public API signature).
+  mocking it would leak into the public API signature). Don't hardcode a
+  test count here or in the README: it drifts every time a test file is
+  added, run `npm test` for the current number.
 - `type-check` + `lint` + `test` passing is the bar for "done". Changes touching
   permissions, sync, or roll flow still need manual multiplayer verification in
   OBR (multiple accounts, multiple clients). There is no automated substitute.
