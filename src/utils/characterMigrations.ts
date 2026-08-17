@@ -1,0 +1,335 @@
+/**
+ * @file Schema versioning and migration for `NimbleCharacter` records
+ * persisted in OBR item metadata.
+ *
+ * Pure TypeScript, no OBR dependency, like `formulaParser.ts` — testable in
+ * isolation, same discipline (`characterMigrations.test.ts`).
+ *
+ * ## Procedure to add a migration
+ *
+ * 1. Change `NimbleCharacter` in `types/character.ts`.
+ * 2. Bump `CURRENT_SCHEMA_VERSION` in `types/character.ts` by exactly 1.
+ * 3. Append exactly one function to `MIGRATIONS` below that transforms a
+ *    record from the old shape to the new one. `MIGRATIONS[i]` must
+ *    transform version `i` to version `i + 1` — `migrateCharacter` applies
+ *    them in order, one step at a time, from a record's own `schemaVersion`
+ *    up to `CURRENT_SCHEMA_VERSION`. Never write a migration that jumps more
+ *    than one version.
+ * 4. Leave every earlier migration function alone. A migration function is
+ *    a permanent, append-only record of what changed between two versions,
+ *    not something to go back and edit — a record still sitting at that old
+ *    version needs it to keep doing exactly what it always did.
+ *
+ * `MIGRATIONS.length === CURRENT_SCHEMA_VERSION` is enforced by a test.
+ * Forgetting step 2 or step 3 fails the suite immediately, instead of
+ * silently shipping a record that can never reach `CURRENT_SCHEMA_VERSION`
+ * (array too short) or a version bump with no transform to get there (array
+ * too long).
+ */
+
+import {
+  createDefaultCharacter,
+  CURRENT_SCHEMA_VERSION,
+  type NimbleCharacter,
+} from "../types/character";
+
+/**
+ * Transforms a character record one schema version forward: from the
+ * version at array index `i` to `i + 1`. Operates on loosely-typed data on
+ * purpose — the input is whatever shape actually got persisted at that old
+ * version, which by definition does not match the current
+ * `NimbleCharacter` interface (that's exactly why it needs migrating).
+ */
+type Migration = (character: Record<string, unknown>) => Record<string, unknown>;
+
+/**
+ * Type guard for a plain data object (not `null`, not an array) — the
+ * shape {@link fillMissingFields} recurses into.
+ */
+function isPlainObject(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+/**
+ * Deep-merges `record` onto `template`, field by field: every key present
+ * in `record` is kept exactly as-is — presence is checked with `in`, never
+ * by truthiness, so a legitimate `0`, `""`, `false`, or already-present
+ * `null` survives this merge instead of being mistaken for "missing" and
+ * overwritten by the default — and only a key genuinely absent from
+ * `record` is filled in from `template`. Descends into matching
+ * plain-object sub-trees on both sides (`hp`, `stats`, `skills`, `armor`,
+ * `combat`, ...) so a sub-object missing just one field doesn't lose the
+ * rest of its real data to the default. Arrays and primitives are never
+ * merged piecewise: if the key is present at all, `record`'s value for it
+ * is taken wholesale.
+ *
+ * `template` is expected to be {@link createDefaultCharacter}'s own return
+ * value, cast loosely — same reasoning as {@link validateCharacterShape}:
+ * every field that function returns is forced to exist by the compiler, so
+ * this can't fall out of sync with `NimbleCharacter`'s required fields the
+ * way a hand-written list of "fields that might be missing" could.
+ *
+ * @remarks Deliberately used only by the v0 -> v1 migration below. See the
+ * comment on `MIGRATIONS[0]` for why a fully generic backfill is
+ * legitimate there specifically, and not a pattern to reuse for later
+ * migrations.
+ */
+function fillMissingFields(
+  record: Record<string, unknown>,
+  template: Record<string, unknown>,
+): Record<string, unknown> {
+  const result: Record<string, unknown> = { ...record };
+  for (const key of Object.keys(template)) {
+    if (!(key in record)) {
+      result[key] = template[key];
+      continue;
+    }
+    const recordValue = record[key];
+    const templateValue = template[key];
+    if (isPlainObject(recordValue) && isPlainObject(templateValue)) {
+      result[key] = fillMissingFields(recordValue, templateValue);
+    }
+    // else: key already present on record — keep it exactly as-is, falsy
+    // or not, rather than falling through to template's value.
+  }
+  return result;
+}
+
+/**
+ * Ordered migrations, one function per schema version transition.
+ * `MIGRATIONS[i]` moves a record from version `i` to version `i + 1`. See
+ * the file header for the procedure to append to this list.
+ */
+const MIGRATIONS: Migration[] = [
+  // v0 -> v1: "v0" doesn't name one known, fixed shape — it means
+  // "everything written before schemaVersion existed at all", an
+  // open-ended range covering every shape NimbleCharacter has ever had.
+  // `combat` was the only KNOWN gap (formerly patched ad hoc, with no
+  // versioning, in useOBR.ts's loadCharacterFromItem), but the type
+  // changed several times before versioning existed without that ever
+  // being visible anywhere: JS silently accepts a missing field right up
+  // until something reads it. So the only useful definition of "v0" is
+  // "whatever is missing relative to v1" — which is exactly what
+  // createDefaultCharacter() already encodes, and reusing it here keeps
+  // this migration and validateCharacterShape's template walk consistent
+  // by construction.
+  //
+  // This is why — and ONLY why — this one migration is a full, generic
+  // deep-fill rather than a small targeted patch. Every migration added
+  // AFTER this one knows exactly which fields changed between two fixed,
+  // already-shipped versions, and must stay a small, explicit, deliberate
+  // transform of just those fields, the way this one used to be for
+  // `combat` alone. A future migration reusing this same blanket fill
+  // would silently paper over a real shape bug (a field missing because
+  // of an actual mistake introduced between two versioned releases, not
+  // because the record predates versioning) instead of surfacing it as
+  // "invalid" — and would also erase the changelog value of this file,
+  // where each migration function is a record of exactly what changed at
+  // that version.
+  (character) =>
+    fillMissingFields(
+      character,
+      createDefaultCharacter("", "") as unknown as Record<string, unknown>,
+    ),
+];
+
+/**
+ * Outcome of {@link migrateCharacter}.
+ *
+ * - `"ok"` — the record is now a valid `NimbleCharacter` at
+ *   `CURRENT_SCHEMA_VERSION`. `migrated` says whether any migration
+ *   actually ran (`false` when the record was already current), which
+ *   callers use to decide whether the migrated record is worth writing
+ *   back to OBR.
+ * - `"unsupported"` — the record's `schemaVersion` is newer than
+ *   `CURRENT_SCHEMA_VERSION`. There is no downward migration: a client
+ *   running older code cannot know what a newer field means. Callers
+ *   should refuse to load rather than render partial or guessed data.
+ * - `"invalid"` — the record is not a valid character even after
+ *   migration: not an object, a migration threw, or the migrated result
+ *   failed {@link validateCharacterShape}. `reason` is a short technical
+ *   description for logs/debugging, not phrased for a player mid-game —
+ *   callers should show a generic message and log `reason` separately
+ *   (see `console.error` in `useOBR.ts`'s `loadCharacterFromItem`).
+ */
+export type MigrationResult =
+  | { status: "ok"; character: NimbleCharacter; migrated: boolean }
+  | { status: "unsupported"; foundVersion: number }
+  | { status: "invalid"; reason: string };
+
+/**
+ * Recursively checks that `value` has every key `template` has, with a
+ * matching `typeof` at each key, descending one level into plain nested
+ * objects and requiring arrays to be arrays.
+ *
+ * @returns `null` if `value` matches, or a short `path: problem`
+ * description of the first mismatch found otherwise.
+ */
+function findShapeMismatch(value: unknown, template: unknown, path: string): string | null {
+  if (template === null || template === undefined) return null;
+  if (value === null) return null; // see validateCharacterShape's "known gaps"
+  if (value === undefined) return `${path}: missing`;
+
+  if (Array.isArray(template)) {
+    return Array.isArray(value) ? null : `${path}: expected array, got ${typeof value}`;
+  }
+
+  if (typeof template === "object") {
+    if (typeof value !== "object") {
+      return `${path}: expected object, got ${typeof value}`;
+    }
+    for (const key of Object.keys(template as Record<string, unknown>)) {
+      const mismatch = findShapeMismatch(
+        (value as Record<string, unknown>)[key],
+        (template as Record<string, unknown>)[key],
+        path ? `${path}.${key}` : key,
+      );
+      if (mismatch) return mismatch;
+    }
+    return null;
+  }
+
+  return typeof value === typeof template
+    ? null
+    : `${path}: expected ${typeof template}, got ${typeof value}`;
+}
+
+/**
+ * Structural check run on the output of the migration chain, before it is
+ * trusted as a real `NimbleCharacter`.
+ *
+ * Deliberately not a hand-written field-by-field schema — that would be a
+ * second description of `NimbleCharacter`'s shape, maintained by hand and
+ * free to drift from the interface (the `FLAW` bug documented in
+ * `formulaParser.ts`/CLAUDE.md happened exactly this way: a field was
+ * documented and computed but never wired into the one place that used a
+ * hand-copied list). Instead this walks `createDefaultCharacter()`'s own
+ * return value as a template: every field that function returns is already
+ * forced to exist by the TypeScript compiler (a missing required field in
+ * its return statement is a compile error), so the template can't silently
+ * fall out of sync with `NimbleCharacter`'s required fields the way a
+ * separate schema could.
+ *
+ * @remarks Known gaps, accepted rather than solved here:
+ * - Fields genuinely optional on `NimbleCharacter` (`Armor.equippedItemId`,
+ *   `Armor.defenseBonus`) are only checked when `createDefaultCharacter`
+ *   happens to give them a concrete value; nothing forces the template to
+ *   have an opinion about a field that's allowed to be absent, so this
+ *   check cannot promise coverage of every field the interface declares.
+ * - Array elements are only checked for being an array, not the shape of
+ *   each element — `actions`/`inventory` entries are polymorphic per
+ *   `type`, and validating that generically from one template instance
+ *   would need per-type shapes hand-listed here, the exact problem this
+ *   function exists to avoid.
+ * - Enum-like string fields (`hitDice.dice`, `saveMods.str`, ...) are
+ *   checked as `string`, not against their specific allowed values.
+ * - `null` is accepted at any key regardless of the template's type there,
+ *   rather than hand-listing the handful of fields that are legitimately
+ *   nullable (`keyStat`, `flawStat`, `combat.initiativeResult`).
+ *
+ * Good enough for what this actually validates in practice: the output of
+ * this project's own migration chain, not arbitrary external data. See
+ * CLAUDE.md for when a real schema library becomes the right tool instead.
+ *
+ * @returns `null` if `value` matches the template's shape, or a short
+ * description of the first mismatch found otherwise.
+ */
+export function validateCharacterShape(value: unknown): string | null {
+  return findShapeMismatch(value, createDefaultCharacter("", ""), "character");
+}
+
+/**
+ * Applies `migrations[fromVersion]`, `migrations[fromVersion + 1]`, ... in
+ * order, up to (not including) `migrations.length`, threading each
+ * function's output into the next. Extracted from {@link migrateCharacter}
+ * so the chaining behavior itself — applying more than one migration in
+ * sequence — is directly testable against a small local migrations array,
+ * independent of `CURRENT_SCHEMA_VERSION` or the real `MIGRATIONS` array
+ * (which today only has one entry).
+ *
+ * @param migrations - Ordered migrations; `migrations[i]` transforms
+ * version `i` to `i + 1`.
+ * @param record - The record to migrate, at `fromVersion`.
+ * @param fromVersion - The record's own schema version to start from.
+ * @returns The record after every applicable migration has run, still
+ * untyped — `migrateCharacter` is the one that stamps `schemaVersion` and
+ * validates the result.
+ */
+function applyMigrations(
+  migrations: Migration[],
+  record: Record<string, unknown>,
+  fromVersion: number,
+): Record<string, unknown> {
+  let current = record;
+  for (let v = fromVersion; v < migrations.length; v++) {
+    current = migrations[v](current);
+  }
+  return current;
+}
+
+/**
+ * Runs `value` (as read from OBR item metadata, of unknown shape) through
+ * whatever migrations are needed to reach {@link CURRENT_SCHEMA_VERSION},
+ * validates the result, and hands back a `NimbleCharacter` the rest of the
+ * app can trust — or a typed reason it couldn't.
+ *
+ * A record with no `schemaVersion` field at all (nothing in production has
+ * ever written one before this change) is treated as version 0 and run
+ * through the full migration chain, same as an explicit `schemaVersion: 0`.
+ *
+ * @param value - Raw metadata value read from `item.metadata[METADATA_KEY]`.
+ * Callers are expected to have already excluded `undefined` (no sheet
+ * attached at all is a different case than a sheet with bad data — see
+ * `loadCharacterFromItem` in `useOBR.ts`).
+ * @returns See {@link MigrationResult}.
+ */
+export function migrateCharacter(value: unknown): MigrationResult {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) {
+    return {
+      status: "invalid",
+      reason: `expected an object, got ${Array.isArray(value) ? "array" : typeof value}`,
+    };
+  }
+
+  const record = value as Record<string, unknown>;
+  const foundVersion = typeof record.schemaVersion === "number" ? record.schemaVersion : 0;
+
+  if (foundVersion > CURRENT_SCHEMA_VERSION) {
+    return { status: "unsupported", foundVersion };
+  }
+
+  try {
+    // A negative foundVersion enters the loop and immediately throws
+    // indexing an out-of-range MIGRATIONS entry (caught below, reported as
+    // "invalid"). A NaN foundVersion never enters the loop at all (NaN
+    // comparisons are always false) and falls through unchanged to the
+    // shape check, which reports it as invalid instead.
+    const current = applyMigrations(MIGRATIONS, record, foundVersion);
+    const migrated = { ...current, schemaVersion: CURRENT_SCHEMA_VERSION };
+
+    const mismatch = validateCharacterShape(migrated);
+    if (mismatch) {
+      return { status: "invalid", reason: `shape mismatch after migration: ${mismatch}` };
+    }
+
+    return {
+      status: "ok",
+      // Shape-checked immediately above; see validateCharacterShape's
+      // "known gaps" for exactly how much that check does and doesn't cover.
+      character: migrated as unknown as NimbleCharacter,
+      migrated: foundVersion < CURRENT_SCHEMA_VERSION,
+    };
+  } catch (err) {
+    return {
+      status: "invalid",
+      reason: err instanceof Error ? err.message : String(err),
+    };
+  }
+}
+
+/**
+ * Exposed for the invariant test (`MIGRATIONS.length === CURRENT_SCHEMA_VERSION`)
+ * and for tests targeting the migration chain directly. Not meant to be
+ * imported by application code — go through {@link migrateCharacter}.
+ */
+export { MIGRATIONS, applyMigrations };

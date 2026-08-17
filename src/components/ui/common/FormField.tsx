@@ -28,7 +28,7 @@ import type {
 /** Shared Tailwind classes applied to every native input/textarea/select rendered by this component. */
 const FIELD_BASE =
   "bg-stone-900/60 border border-stone-700 rounded px-2 py-1 text-xs text-stone-200 outline-none " +
-  "focus:border-amber-600 placeholder-stone-600 w-full transition-colors";
+  "focus-visible:border-amber-600 placeholder-stone-600 w-full transition-colors";
 
 /** Same as {@link FIELD_BASE} with an extra opaque background, since `<select>` needs a solid backdrop for its native dropdown to read correctly. */
 const FIELD_SELECT =

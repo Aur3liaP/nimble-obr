@@ -24,6 +24,8 @@ import { ModalShell } from "../ui/common/ModalShell";
 import { FormulaField, FormulaDiscardNotice } from "../ui/common/FormulaField";
 import { ItemRowBase } from "../ui/common/ItemRowBase";
 import { useFormulaField } from "../../hooks/useFormulaField";
+import { useSearchFilter } from "../../hooks/useSearchFilter";
+import type { UndoableArrayKey } from "../../hooks/useDeleteUndo";
 
 // ── Types & helpers ───────────────────────────────────────────────
 /**
@@ -32,6 +34,10 @@ import { useFormulaField } from "../../hooks/useFormulaField";
  * @property isGM - Whether the current player is the GM (enables hidden-roll option in the modal).
  * @property onUpdate - Persists a partial character update.
  * @property onRoll - Triggers a dice roll request after modal confirmation.
+ * @property onDeleteEntry - Deletes an item (stored in `character.inventory`,
+ * `arrayKey: "inventory"`) with undo support — see `useDeleteUndo`. Replaces
+ * a plain `onUpdate({ inventory: character.inventory.filter(...) })` so the
+ * removed item can be restored via the App-level undo toast.
  */
 interface Props {
   character: NimbleCharacter;
@@ -39,6 +45,7 @@ interface Props {
   isGM: boolean;
   onUpdate: (u: Partial<NimbleCharacter>) => void;
   onRoll: (req: DiceRollRequest) => void;
+  onDeleteEntry: (arrayKey: UndoableArrayKey, id: string) => Promise<void>;
 }
 
 /** Coarse category used only for filtering the "Add Item" list view (not persisted on the item itself). */
@@ -93,6 +100,17 @@ function guessCategory(item: (typeof BASIC_EQUIPMENTS)[0]): ItemCategory {
   return "gear";
 }
 
+/**
+ * Text fields {@link useSearchFilter} searches for both the equipment
+ * picker ({@link BASIC_EQUIPMENTS}) and the character's own inventory list.
+ * Declared at module scope so it has a stable identity across renders
+ * (see {@link useSearchFilter}'s `getFields` doc).
+ */
+const ITEM_SEARCH_FIELDS = (item: { name: string; description?: string }) => [
+  item.name,
+  item.description,
+];
+
 /** Returns an emoji icon for an item based on its armor/weapon/consumable/gear shape. */
 function itemIcon(item: {
   isArmor?: boolean;
@@ -126,7 +144,6 @@ function AddItemModal({
   onCancel: () => void;
 }) {
   const [mode, setMode] = useState<AddMode>("list");
-  const [search, setSearch] = useState("");
   const [filterCat, setFilterCat] = useState<ItemCategory>("all");
 
   const [form, setForm] = useState({
@@ -146,19 +163,16 @@ function AddItemModal({
   const formulaField = useFormulaField(form.formula, (v) => setF("formula", v));
 
   /** Official equipment list filtered by the current search text and category selection. */
+  const { search, setSearch, filtered: searchedBase } = useSearchFilter(
+    BASIC_EQUIPMENTS,
+    ITEM_SEARCH_FIELDS,
+  );
   const filteredBase = useMemo(
     () =>
-      BASIC_EQUIPMENTS.filter((item) => {
-        const matchSearch =
-          search === "" ||
-          item.name.toLowerCase().includes(search.toLowerCase()) ||
-          (item.description?.toLowerCase().includes(search.toLowerCase()) ??
-            false);
-        const matchCat =
-          filterCat === "all" || guessCategory(item) === filterCat;
-        return matchSearch && matchCat;
-      }),
-    [search, filterCat],
+      searchedBase.filter(
+        (item) => filterCat === "all" || guessCategory(item) === filterCat,
+      ),
+    [searchedBase, filterCat],
   );
 
   /**
@@ -409,13 +423,13 @@ export function InventoryTab({
   isGM,
   onUpdate,
   onRoll,
+  onDeleteEntry,
 }: Props) {
   const [rollPending, setRollPending] = useState<{
     label: string;
     formula: string;
   } | null>(null);
   const [addingItem, setAddingItem] = useState(false);
-  const [search, setSearch] = useState("");
   const [expandedId, setExpandedId] = useState<string | null>(null);
   const [editingId, setEditingId] = useState<string | null>(null);
 
@@ -439,19 +453,12 @@ export function InventoryTab({
       ),
     });
 
-  /** Removes an inventory item by id. */
-  const remove = (id: string) =>
-    onUpdate({ inventory: character.inventory.filter((i) => i.id !== id) });
-
   /** Inventory items filtered by the current search text (name or description match). */
-  const filteredItems = useMemo(() => {
-    if (search === "") return character.inventory;
-    return character.inventory.filter(
-      (i) =>
-        i.name.toLowerCase().includes(search.toLowerCase()) ||
-        (i.description?.toLowerCase().includes(search.toLowerCase()) ?? false),
-    );
-  }, [character.inventory, search]);
+  const {
+    search,
+    setSearch,
+    filtered: filteredItems,
+  } = useSearchFilter(character.inventory, ITEM_SEARCH_FIELDS);
 
   /** Toggles an item row's expanded (description) state; closes edit mode first if it was open on this row. */
   const handleRowClick = (id: string) => {
@@ -591,7 +598,7 @@ export function InventoryTab({
                   update(item.id, { quantity: Math.max(0, q) })
                 }
                 onDelete={() => {
-                  remove(item.id);
+                  void onDeleteEntry("inventory", item.id);
                   setEditingId(null);
                   setExpandedId(null);
                 }}

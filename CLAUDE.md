@@ -12,10 +12,16 @@ Owlbear Rodeo (OBR) extension: a real-time-synced character sheet panel for the 
 - `npm run build` : `tsc -b && vite build`
 - `npm run type-check` : `tsc --noEmit`
 - `npm run lint` : `eslint . --ext ts,tsx --report-unused-disable-directives --max-warnings 0`
-- `npm run test` : Vitest suite on `src/utils/formulaParser.test.ts` (113 tests).
-  Pure functions only, no OBR dependency. Deterministic dice via a `Math.random`
-  spy (`mockRolls` helper), not by mocking `rollDice` (ESM mocking limitations
-  in Vitest, and mocking it would leak into the public API signature).
+- `npm run test` : Vitest suite covering the formula parser
+  (`src/utils/formulaParser.test.ts`), schema migrations
+  (`src/utils/characterMigrations.test.ts`), delete-undo logic
+  (`src/utils/entryUndo.test.ts`), and the shared search-filter hook
+  (`src/hooks/useSearchFilter.test.ts`). Pure functions only, no OBR
+  dependency. Deterministic dice via a `Math.random` spy (`mockRolls`
+  helper), not by mocking `rollDice` (ESM mocking limitations in Vitest, and
+  mocking it would leak into the public API signature). Don't hardcode a
+  test count here or in the README: it drifts every time a test file is
+  added, run `npm test` for the current number.
 - `type-check` + `lint` + `test` passing is the bar for "done". Changes touching
   permissions, sync, or roll flow still need manual multiplayer verification in
   OBR (multiple accounts, multiple clients). There is no automated substitute.
@@ -28,6 +34,7 @@ Owlbear Rodeo (OBR) extension: a real-time-synced character sheet panel for the 
 - **No backend.** Persistence is entirely via the OBR SDK:
   - Character sheet: per-token item metadata, key `com.nimble-obr.nimble/character_sheet` (`METADATA_KEY` in `src/types/character.ts`), written via `OBR.scene.items.updateItems()`.
   - Shared roll log: scene metadata (`ROLL_LOG_KEY = ${METADATA_KEY}/roll_log`), capped at 20 entries.
+  - Write-failure detection (`useOBR.ts`'s `performWrite`/`SyncStatus`) covers errors the OBR host reports and total loss of network interface (`navigator.onLine`). It does NOT cover the OBR host's own WebSocket relay to the multiplayer server dropping while the network interface stays up: `updateItems`/`setMetadata` resolve successfully either way, since the extension-host handshake is `window.postMessage` between iframe and parent frame, never the network. This residual gap is undetectable from the extension — see the `"idle"` case in `SyncStatus`'s JSDoc.
 - HTTPS is mandatory even for local dev (OBR loads extensions in an iframe requiring HTTPS). `@vitejs/plugin-basic-ssl` is loaded only when `command === 'serve'` in `vite.config.ts`, never in production builds.
 - `OBR.isAvailable` is checked before `OBR.onReady(...)` since the app also runs fine outside an OBR host during plain `vite dev`/build.
 - Only items with `layer === "CHARACTER"` are treated as valid character tokens (selection filtering in `useOBR.ts`).
@@ -57,6 +64,37 @@ These exist because of bugs already diagnosed and fixed. Changing them reintrodu
 - `updateCharacter` re-checks `canEdit` before every write and no-ops with `console.warn` if the caller lacks rights. This is **not a real security boundary** (OBR has no server-side ACL on metadata); it only guards against accidental stale-UI writes.
 - Rolling dice is intentionally **not** gated by `canEdit`. A read-only viewer can roll using another character's stats. Only persisting sheet changes is guarded. This is a design decision, not an oversight.
 - Claiming or taking over a sheet is also intentionally **not** gated. Any player can currently take over another player's claimed sheet (deliberate design for a trusted table). If GM-only claiming is ever wanted, add the guard at the call site (`App.tsx`/`CharacterHeader.tsx`), not in `useOBR`.
+
+### Schema versioning (`src/utils/characterMigrations.ts`)
+
+`NimbleCharacter` carries a `schemaVersion` field (`CURRENT_SCHEMA_VERSION` in
+`types/character.ts`). `migrateCharacter` is the single choke point that
+brings an old record up to date, refuses one from a newer, not-yet-reloaded
+client (`"unsupported"`), and refuses one that's corrupted even after
+migration (`"invalid"`) — `useOBR.ts`'s `loadCharacterFromItem` is the only
+caller. To add a migration: change `NimbleCharacter`, bump
+`CURRENT_SCHEMA_VERSION` by exactly 1, and append one `v(n) -> v(n+1)`
+function to `MIGRATIONS`. Full procedure and the reasoning behind each
+design choice (why `MIGRATIONS` is an ordered array of single-step
+functions, why a versionless record is treated as v0, why there's no
+downward migration, why shape validation is a template walk over
+`createDefaultCharacter()` rather than a hand-written schema) are in that
+file's header and JSDoc — read it before touching this, don't reinvent an
+ad hoc patch in `loadCharacterFromItem` the way the old `combat` backfill
+used to be. See `docs/schema-migrations.md` for the full picture (the
+procedure to add a field, what deploy-time looks like across clients, and
+why `MIGRATIONS[0]` is a generic fill legitimate only for v0).
+
+`validateCharacterShape`'s template-walk approach is deliberately scoped to
+validating this project's own migration output, not arbitrary external
+data — see its JSDoc for the exact gaps (optional fields, array element
+shape, enum values). If `NimbleCharacter` grows substantially, or a sheet
+ever needs to come from outside this app's own migration chain (a file
+import, a copy pasted between scenes), replace it with a real schema
+library (Zod or equivalent) and derive `NimbleCharacter` from the schema
+(`z.infer`) rather than maintaining both by hand — two hand-maintained
+descriptions of the same shape is exactly how `FLAW` (see Formula parser
+below) went undetected.
 
 ### Formula parser (`src/utils/formulaParser.ts`)
 

@@ -13,7 +13,6 @@ import { NumericStepper } from "./common";
 
 interface DicePanelProps {
   isGM?: boolean;
-  playerName: string;
   onRoll: (req: DiceRollRequest) => void;
   defaultCollapsed?: boolean;
 }
@@ -112,7 +111,6 @@ function dieFace(sides: number): string {
  * toggle.
  *
  * @param isGM - Enables the hidden-roll checkbox when true.
- * @param playerName - Currently unused directly here but kept for future label use.
  * @param onRoll - Callback invoked with a constructed {@link DiceRollRequest} on each die click.
  * @param defaultCollapsed - Whether the panel starts collapsed.
  */
@@ -150,6 +148,8 @@ export function DicePanel({
       {/* Header toggle */}
       <button
         onClick={() => setCollapsed((c) => !c)}
+        aria-expanded={!collapsed}
+        aria-label={collapsed ? "Expand free roll panel" : "Collapse free roll panel"}
         className="w-full flex items-center justify-between px-3 py-2 hover:bg-stone-800/40 transition-colors"
       >
         <div className="flex items-center gap-2">

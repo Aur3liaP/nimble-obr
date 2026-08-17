@@ -43,12 +43,22 @@ export function RowActions({
     <div className="flex items-center gap-1 shrink-0">
       {extra}
       {canEdit && onEdit && (
-        <button onClick={onEdit} title="Edit" className={ICON_BTN}>
+        <button
+          onClick={onEdit}
+          title="Edit"
+          aria-label="Edit"
+          className={ICON_BTN}
+        >
           ✏️
         </button>
       )}
       {onDelete && (
-        <button onClick={onDelete} title="Remove" className={ICON_BTN}>
+        <button
+          onClick={onDelete}
+          title="Remove"
+          aria-label="Remove"
+          className={ICON_BTN}
+        >
           🗑️
         </button>
       )}

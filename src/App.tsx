@@ -10,6 +10,7 @@
 
 import { useState } from "react";
 import { useOBR } from "./hooks/useOBR";
+import { useDeleteUndo } from "./hooks/useDeleteUndo";
 import { SummaryTab } from "./components/tabs/SummaryTab";
 import { CombatTab } from "./components/tabs/CombatTab";
 import { SpellsTab } from "./components/tabs/SpellsTab";
@@ -17,6 +18,8 @@ import { InventoryTab } from "./components/tabs/InventoryTab";
 import { RollLog } from "./components/ui/RollLog";
 import { DicePanel } from "./components/ui/DicePanel";
 import { CharacterHeader } from "./components/ui/CharacterHeader";
+import { SyncStatusBanner } from "./components/ui/SyncStatusBanner";
+import { DeleteUndoToast } from "./components/ui/DeleteUndoToast";
 import type { DiceRollRequest, RollMode } from "./types/character";
 
 /** Identifiers for the four character sheet tabs. */
@@ -41,8 +44,8 @@ export default function App() {
     character,
     selectedItems,
     playerId,
-    playerName,
     permissions,
+    syncStatus,
     updateCharacter,
     handleRoll,
     handleFreeRoll,
@@ -55,6 +58,14 @@ export default function App() {
   const { canEdit, isGM } = permissions;
 
   const [activeTab, setActiveTab] = useState<TabId>("summary");
+
+  // Mounted here, above the conditionally-rendered tabs, so a pending undo
+  // survives switching tabs — see useDeleteUndo's file header for why a
+  // tab-local useState would lose it.
+  const { pendingUndo, deleteWithUndo, undo } = useDeleteUndo(
+    character,
+    updateCharacter,
+  );
 
   // Local-only feedback for a roll that failed a safety-limit/parse check
   // (DiceRollResult.error set). Never written to OBR — a failed roll is
@@ -108,10 +119,18 @@ export default function App() {
   const showSheet = selectionState === "ready" && character !== null;
   const showNoToken = selectionState === "none";
   const showNoSheet = selectionState === "no-sheet";
+  const showUnsupportedVersion = selectionState === "unsupported-version";
+  const showInvalidSheet = selectionState === "invalid-sheet";
   const firstItem = selectedItems[0];
 
   return (
     <div className="relative flex flex-col h-full bg-stone-950 text-stone-200 overflow-hidden font-sans pb-7">
+      {/* ── Sync status — always mounted, renders nothing when idle.
+          Not scoped to showSheet: a roll log write can fail with no
+          character sheet open at all. ── */}
+      <SyncStatusBanner status={syncStatus} />
+      <DeleteUndoToast pendingUndo={pendingUndo} onUndo={undo} />
+
       {/* ── Header — only when a sheet is open ───────────────────── */}
       {showSheet && character && (
         <CharacterHeader
@@ -129,6 +148,8 @@ export default function App() {
               <button
                 key={tab.id}
                 onClick={() => setActiveTab(tab.id)}
+                aria-label={tab.label}
+                aria-current={activeTab === tab.id ? "page" : undefined}
                 className={`flex-1 flex flex-col items-center py-1.5 rounded-t-lg border-b-2 text-[10px] font-semibold tracking-wide transition-all duration-150 ${
                   activeTab === tab.id
                     ? "border-amber-600 bg-stone-800/80 text-amber-300"
@@ -174,6 +195,27 @@ export default function App() {
         </div>
       )}
 
+      {/* ── Unsupported schema version — a newer client wrote this sheet
+          than this build understands; no downward migration exists ──── */}
+      {showUnsupportedVersion && (
+        <div className="flex flex-col items-center justify-center gap-4 py-10 px-6 text-center">
+          <span className="text-5xl opacity-40">⬆️</span>
+          <p className="text-sm text-stone-500 max-w-50 leading-relaxed">
+            This character sheet was saved by a newer version of this extension. Reload the page to get the latest version.
+          </p>
+        </div>
+      )}
+
+      {/* ── Invalid sheet data — corrupted metadata, or a migration failed ── */}
+      {showInvalidSheet && (
+        <div className="flex flex-col items-center justify-center gap-4 py-10 px-6 text-center">
+          <span className="text-5xl opacity-40">⚠️</span>
+          <p className="text-sm text-stone-500 max-w-50 leading-relaxed">
+            This character sheet's data could not be read. It may be corrupted. Check the browser console for details.
+          </p>
+        </div>
+      )}
+
       {/* ── Roll error banner — local-only feedback for a failed roll.
           Never touches OBR; a failed roll never reaches the shared log. ── */}
       {rollError && (
@@ -215,6 +257,7 @@ export default function App() {
                 onUpdate={updateCharacter}
                 onRoll={onRoll}
                 onRollInitiative={onRollInitiative}
+                onDeleteEntry={deleteWithUndo}
               />
             )}
             {activeTab === "spells" && (
@@ -224,6 +267,7 @@ export default function App() {
                 isGM={isGM}
                 onUpdate={updateCharacter}
                 onRoll={onRoll}
+                onDeleteEntry={deleteWithUndo}
               />
             )}
             {activeTab === "inventory" && (
@@ -233,6 +277,7 @@ export default function App() {
                 isGM={isGM}
                 onUpdate={updateCharacter}
                 onRoll={onRoll}
+                onDeleteEntry={deleteWithUndo}
               />
             )}
           </>
@@ -243,11 +288,10 @@ export default function App() {
         <div className="px-3 pt-2 pb-3 flex flex-col gap-3">
           <DicePanel
             isGM={isGM}
-            playerName={playerName}
             onRoll={onFreeRoll}
             defaultCollapsed={true}
           />
-          {(showNoToken || showNoSheet) && (
+          {(showNoToken || showNoSheet || showUnsupportedVersion || showInvalidSheet) && (
             <RollLog
               rolls={recentRolls}
               isGM={isGM}
