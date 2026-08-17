@@ -31,6 +31,7 @@ import { FormulaField, FormulaDiscardNotice } from "../ui/common/FormulaField";
 import { DraggableBar } from "../ui/common/DraggableBar";
 import { useDraggableValue } from "../../hooks/useDraggableValue";
 import { useFormulaField } from "../../hooks/useFormulaField";
+import { useSearchFilter } from "../../hooks/useSearchFilter";
 import type { UndoableArrayKey } from "../../hooks/useDeleteUndo";
 
 // ── Constants ─────────────────────────────────────────────────────
@@ -86,6 +87,17 @@ const SCHOOLS: SpellSchool[] = [
 /** All spell tiers from 0 (cantrip) to 9, in ascending order. */
 const TIERS = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9];
 
+/**
+ * Text fields {@link useSearchFilter} searches for both the spell picker
+ * ({@link BASE_SPELLS}) and the character's own known spells. Declared at
+ * module scope so it has a stable identity across renders (see
+ * {@link useSearchFilter}'s `getFields` doc).
+ */
+const SPELL_SEARCH_FIELDS = (spell: { name: string; description?: string }) => [
+  spell.name,
+  spell.description,
+];
+
 // ── Types ─────────────────────────────────────────────────────────
 /**
  * @property character - The character being displayed/edited.
@@ -133,7 +145,6 @@ function AddSpellModal({
   onCancel: () => void;
 }) {
   const [mode, setMode] = useState<AddMode>("list");
-  const [search, setSearch] = useState("");
   const [filterSchool, setFilterSchool] = useState<SpellSchool | "all">("all");
   const [filterTier, setFilterTier] = useState<number | "all">("all");
 
@@ -159,19 +170,19 @@ function AddSpellModal({
   void existingIds;
 
   /** Official spell list filtered by the current search text, school, and tier selections. */
+  const { search, setSearch, filtered: searchedBase } = useSearchFilter(
+    BASE_SPELLS,
+    SPELL_SEARCH_FIELDS,
+  );
   const filteredBase = useMemo(
     () =>
-      BASE_SPELLS.filter((s) => {
-        const matchSearch =
-          s.name.toLowerCase().includes(search.toLowerCase()) ||
-          (s.description?.toLowerCase().includes(search.toLowerCase()) ??
-            false);
+      searchedBase.filter((s) => {
         const matchSchool =
           filterSchool === "all" || s.spellSchool === filterSchool;
         const matchTier = filterTier === "all" || s.spellTier === filterTier;
-        return matchSearch && matchSchool && matchTier;
+        return matchSchool && matchTier;
       }),
-    [search, filterSchool, filterTier],
+    [searchedBase, filterSchool, filterTier],
   );
 
   /**
@@ -468,7 +479,6 @@ export function SpellsTab({
   } | null>(null);
   const [addingSpell, setAddingSpell] = useState(false);
   const [filterTier, setFilterTier] = useState<number | "all">("all");
-  const [search, setSearch] = useState("");
   const [expandedId, setExpandedId] = useState<string | null>(null);
   const [editingId, setEditingId] = useState<string | null>(null);
 
@@ -489,20 +499,19 @@ export function SpellsTab({
   /** Distinct tiers present among the character's known spells, sorted ascending — used to build the tier filter pills (hidden if there's only one tier). */
   const tiers = [...new Set(spells.map((s) => s.spellTier ?? 0))].sort();
 
-  /** Known spells filtered by the active tier and search text. */
+  /** Known spells filtered by the current search text. */
+  const { search, setSearch, filtered: searchedSpells } = useSearchFilter(
+    spells,
+    SPELL_SEARCH_FIELDS,
+  );
+
+  /** Search-filtered spells further narrowed by the active tier. */
   const visible = useMemo(
     () =>
-      spells.filter((s) => {
-        const matchTier =
-          filterTier === "all" || (s.spellTier ?? 0) === filterTier;
-        const matchSearch =
-          search === "" ||
-          s.name.toLowerCase().includes(search.toLowerCase()) ||
-          (s.description?.toLowerCase().includes(search.toLowerCase()) ??
-            false);
-        return matchTier && matchSearch;
-      }),
-    [spells, filterTier, search],
+      searchedSpells.filter(
+        (s) => filterTier === "all" || (s.spellTier ?? 0) === filterTier,
+      ),
+    [searchedSpells, filterTier],
   );
 
   /** Patches a single spell within `character.actions` by id. */
