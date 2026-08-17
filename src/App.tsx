@@ -10,6 +10,7 @@
 
 import { useState } from "react";
 import { useOBR } from "./hooks/useOBR";
+import { useDeleteUndo } from "./hooks/useDeleteUndo";
 import { SummaryTab } from "./components/tabs/SummaryTab";
 import { CombatTab } from "./components/tabs/CombatTab";
 import { SpellsTab } from "./components/tabs/SpellsTab";
@@ -18,6 +19,7 @@ import { RollLog } from "./components/ui/RollLog";
 import { DicePanel } from "./components/ui/DicePanel";
 import { CharacterHeader } from "./components/ui/CharacterHeader";
 import { SyncStatusBanner } from "./components/ui/SyncStatusBanner";
+import { DeleteUndoToast } from "./components/ui/DeleteUndoToast";
 import type { DiceRollRequest, RollMode } from "./types/character";
 
 /** Identifiers for the four character sheet tabs. */
@@ -57,6 +59,14 @@ export default function App() {
   const { canEdit, isGM } = permissions;
 
   const [activeTab, setActiveTab] = useState<TabId>("summary");
+
+  // Mounted here, above the conditionally-rendered tabs, so a pending undo
+  // survives switching tabs — see useDeleteUndo's file header for why a
+  // tab-local useState would lose it.
+  const { pendingUndo, deleteWithUndo, undo } = useDeleteUndo(
+    character,
+    updateCharacter,
+  );
 
   // Local-only feedback for a roll that failed a safety-limit/parse check
   // (DiceRollResult.error set). Never written to OBR — a failed roll is
@@ -120,6 +130,7 @@ export default function App() {
           Not scoped to showSheet: a roll log write can fail with no
           character sheet open at all. ── */}
       <SyncStatusBanner status={syncStatus} />
+      <DeleteUndoToast pendingUndo={pendingUndo} onUndo={undo} />
 
       {/* ── Header — only when a sheet is open ───────────────────── */}
       {showSheet && character && (
@@ -247,6 +258,7 @@ export default function App() {
                 onUpdate={updateCharacter}
                 onRoll={onRoll}
                 onRollInitiative={onRollInitiative}
+                onDeleteEntry={deleteWithUndo}
               />
             )}
             {activeTab === "spells" && (
@@ -256,6 +268,7 @@ export default function App() {
                 isGM={isGM}
                 onUpdate={updateCharacter}
                 onRoll={onRoll}
+                onDeleteEntry={deleteWithUndo}
               />
             )}
             {activeTab === "inventory" && (
@@ -265,6 +278,7 @@ export default function App() {
                 isGM={isGM}
                 onUpdate={updateCharacter}
                 onRoll={onRoll}
+                onDeleteEntry={deleteWithUndo}
               />
             )}
           </>

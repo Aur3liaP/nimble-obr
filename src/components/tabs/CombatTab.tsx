@@ -31,6 +31,7 @@ import { ItemRowBase } from "../ui/common/ItemRowBase";
 import { FormulaField, FormulaDiscardNotice } from "../ui/common/FormulaField";
 import { useDraggableValue } from "../../hooks/useDraggableValue";
 import { useFormulaField } from "../../hooks/useFormulaField";
+import type { UndoableArrayKey } from "../../hooks/useDeleteUndo";
 
 // ── Types ─────────────────────────────────────────────────────────
 /**
@@ -40,6 +41,10 @@ import { useFormulaField } from "../../hooks/useFormulaField";
  * @property onUpdate - Persists a partial character update.
  * @property onRoll - Triggers a dice roll request after modal confirmation.
  * @property onRollInitiative - Rolls initiative via the shared `useOBR` logic; resolves to the roll result (or void/null) so this tab can derive the resulting action count.
+ * @property onDeleteEntry - Deletes an action (stored in `character.actions`,
+ * `arrayKey: "actions"`) with undo support — see `useDeleteUndo`. Replaces
+ * a plain `onUpdate({ actions: character.actions.filter(...) })` so the
+ * removed action can be restored via the App-level undo toast.
  */
 interface Props {
   character: NimbleCharacter;
@@ -50,6 +55,7 @@ interface Props {
   onRollInitiative: (
     mode?: RollMode,
   ) => Promise<{ total: number } | null> | void;
+  onDeleteEntry: (arrayKey: UndoableArrayKey, id: string) => Promise<void>;
 }
 
 /** Minimal pending-roll shape used by this tab's dice modal (label + formula only — no save advantage needed here). */
@@ -137,6 +143,7 @@ export function CombatTab({
   onUpdate,
   onRoll,
   onRollInitiative,
+  onDeleteEntry,
 }: Props) {
   const [rollPending, setRollPending] = useState<RollPending | null>(null);
   const [addingAction, setAddingAction] = useState(false);
@@ -598,7 +605,7 @@ export function CombatTab({
                 setEditingActionId((cur) => (cur === a.id ? null : a.id))
               }
               onDelete={() => {
-                updateActions(character.actions.filter((x) => x.id !== a.id));
+                void onDeleteEntry("actions", a.id);
                 setEditingActionId(null);
               }}
               onUpdate={(patch) =>

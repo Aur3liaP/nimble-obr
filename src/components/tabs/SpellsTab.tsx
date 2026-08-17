@@ -31,6 +31,7 @@ import { FormulaField, FormulaDiscardNotice } from "../ui/common/FormulaField";
 import { DraggableBar } from "../ui/common/DraggableBar";
 import { useDraggableValue } from "../../hooks/useDraggableValue";
 import { useFormulaField } from "../../hooks/useFormulaField";
+import type { UndoableArrayKey } from "../../hooks/useDeleteUndo";
 
 // ── Constants ─────────────────────────────────────────────────────
 /** Display labels for spell tiers (0 = Cantrips, 1–9 = Tier I–IX). */
@@ -92,6 +93,10 @@ const TIERS = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9];
  * @property isGM - Whether the current player is the GM (enables hidden-roll option in the modal).
  * @property onUpdate - Persists a partial character update.
  * @property onRoll - Triggers a dice roll request after modal confirmation.
+ * @property onDeleteEntry - Deletes a spell (stored in `character.actions`,
+ * `arrayKey: "actions"`) with undo support — see `useDeleteUndo`. Replaces
+ * a plain `onUpdate({ actions: character.actions.filter(...) })` so the
+ * removed spell can be restored via the App-level undo toast.
  */
 interface Props {
   character: NimbleCharacter;
@@ -99,6 +104,7 @@ interface Props {
   isGM: boolean;
   onUpdate: (u: Partial<NimbleCharacter>) => void;
   onRoll: (req: DiceRollRequest) => void;
+  onDeleteEntry: (arrayKey: UndoableArrayKey, id: string) => Promise<void>;
 }
 
 /** Which sub-view the "Add Spell" modal is showing: browsing the official list, or filling a custom-spell form. */
@@ -454,6 +460,7 @@ export function SpellsTab({
   isGM,
   onUpdate,
   onRoll,
+  onDeleteEntry,
 }: Props) {
   const [rollPending, setRollPending] = useState<{
     label: string;
@@ -505,10 +512,6 @@ export function SpellsTab({
         a.id === id ? { ...a, ...patch } : a,
       ),
     });
-
-  /** Removes a spell from `character.actions` by id. */
-  const deleteSpell = (id: string) =>
-    onUpdate({ actions: character.actions.filter((a) => a.id !== id) });
 
   /** Toggles a spell row's expanded (description) state; closes edit mode first if it was open on this row. */
   const handleRowClick = (id: string) => {
@@ -662,7 +665,7 @@ export function SpellsTab({
                   })
                 }
                 onDelete={() => {
-                  deleteSpell(spell.id);
+                  void onDeleteEntry("actions", spell.id);
                   setEditingId(null);
                   setExpandedId(null);
                 }}

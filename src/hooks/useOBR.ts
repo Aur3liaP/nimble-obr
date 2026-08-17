@@ -189,7 +189,7 @@ export interface UseOBRReturn {
   isGM: boolean;
   permissions: CharacterPermissions;
   syncStatus: SyncStatus;
-  updateCharacter: (updates: Partial<NimbleCharacter>) => Promise<void>;
+  updateCharacter: (updates: Partial<NimbleCharacter>) => Promise<boolean>;
   handleRoll: (req: DiceRollRequest) => Promise<DiceRollResult | null>;
   handleFreeRoll: (req: DiceRollRequest) => Promise<DiceRollResult | null>;
   rollInitiative: (mode?: RollMode) => Promise<DiceRollResult | null>;
@@ -687,6 +687,20 @@ export function useOBR(): UseOBRReturn {
    * @param options.retryOfErrorId - Internal: the error id this call is
    * retrying. Guards against a stale retry clearing a newer, unrelated
    * error that has since replaced the one actually being retried.
+   * @returns `true` if `execute()` ran to completion without throwing,
+   * `false` if it threw (in which case {@link SyncStatus} has already been
+   * set to `"error"` before this resolves). Callers that only care about
+   * `syncStatus` (every existing call site except `updateCharacter`) can
+   * ignore this. Note it only tells you `execute()` didn't throw, not that
+   * it necessarily performed a write: `updateCharacter`'s own `execute`
+   * silently returns early, without throwing, if `canEditRef.current` has
+   * gone false since the call was made — resolving this `true` for a
+   * no-op. That inner guard exists for the retry case (rights revoked
+   * between the original attempt and a later Retry click) and is not
+   * reachable on a fresh, non-retry call the way `useDeleteUndo`'s
+   * `deleteWithUndo` makes one, so it doesn't undermine that hook's use of
+   * this return value to decide whether a delete is worth offering an
+   * undo for.
    */
   const performWrite = async (options: {
     execute: () => Promise<void>;
@@ -694,7 +708,7 @@ export function useOBR(): UseOBRReturn {
     isOptimistic?: boolean;
     isRetry?: boolean;
     retryOfErrorId?: number;
-  }): Promise<void> => {
+  }): Promise<boolean> => {
     const {
       execute,
       verifyTokenId,
@@ -734,6 +748,7 @@ export function useOBR(): UseOBRReturn {
         setSyncStatus((prev) => (prev.state === "error" ? prev : { state: "idle" }));
       }
       if (verifyTokenId) scheduleExistenceCheck(verifyTokenId);
+      return true;
     } catch (err) {
       settle();
       currentErrorIdRef.current += 1;
@@ -747,6 +762,7 @@ export function useOBR(): UseOBRReturn {
         },
         dismiss: () => setSyncStatus({ state: "idle" }),
       });
+      return false;
     }
   };
 
@@ -831,22 +847,32 @@ export function useOBR(): UseOBRReturn {
    * HTML `max` attribute doesn't stop a typed value from being committed.
    *
    * @param updates - Partial character fields to merge into the current state.
+   * @returns `true` if the write went through, `false` if it was blocked
+   * (no character loaded, no edit rights) or failed — see
+   * {@link performWrite}'s `@returns` for exactly what this does and
+   * doesn't guarantee. `useDeleteUndo.deleteWithUndo` relies on this to
+   * decide whether a delete is worth offering an undo for; most other
+   * callers (every plain field edit) ignore it, which is fine since the
+   * return type is compatible with the `void`-returning `onUpdate` prop
+   * every tab component declares.
    */
-  const updateCharacter = async (updates: Partial<NimbleCharacter>) => {
+  const updateCharacter = async (
+    updates: Partial<NimbleCharacter>,
+  ): Promise<boolean> => {
     const current = characterRef.current;
-    if (!current) return;
+    if (!current) return false;
     if (!canEditRef.current) {
       console.warn(
         "[Nimble] updateCharacter blocked: current player has no edit rights on this sheet.",
       );
-      return;
+      return false;
     }
     const clampedUpdates =
       updates.level !== undefined
         ? { ...updates, level: Math.min(Math.max(updates.level, 1), MAX_LEVEL) }
         : updates;
 
-    await performWrite({
+    return performWrite({
       verifyTokenId: current.tokenId,
       // setCharacter below runs before the write is confirmed — see
       // describeWriteError's isOptimistic doc for why the error message

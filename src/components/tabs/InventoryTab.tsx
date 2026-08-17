@@ -24,6 +24,7 @@ import { ModalShell } from "../ui/common/ModalShell";
 import { FormulaField, FormulaDiscardNotice } from "../ui/common/FormulaField";
 import { ItemRowBase } from "../ui/common/ItemRowBase";
 import { useFormulaField } from "../../hooks/useFormulaField";
+import type { UndoableArrayKey } from "../../hooks/useDeleteUndo";
 
 // ── Types & helpers ───────────────────────────────────────────────
 /**
@@ -32,6 +33,10 @@ import { useFormulaField } from "../../hooks/useFormulaField";
  * @property isGM - Whether the current player is the GM (enables hidden-roll option in the modal).
  * @property onUpdate - Persists a partial character update.
  * @property onRoll - Triggers a dice roll request after modal confirmation.
+ * @property onDeleteEntry - Deletes an item (stored in `character.inventory`,
+ * `arrayKey: "inventory"`) with undo support — see `useDeleteUndo`. Replaces
+ * a plain `onUpdate({ inventory: character.inventory.filter(...) })` so the
+ * removed item can be restored via the App-level undo toast.
  */
 interface Props {
   character: NimbleCharacter;
@@ -39,6 +44,7 @@ interface Props {
   isGM: boolean;
   onUpdate: (u: Partial<NimbleCharacter>) => void;
   onRoll: (req: DiceRollRequest) => void;
+  onDeleteEntry: (arrayKey: UndoableArrayKey, id: string) => Promise<void>;
 }
 
 /** Coarse category used only for filtering the "Add Item" list view (not persisted on the item itself). */
@@ -409,6 +415,7 @@ export function InventoryTab({
   isGM,
   onUpdate,
   onRoll,
+  onDeleteEntry,
 }: Props) {
   const [rollPending, setRollPending] = useState<{
     label: string;
@@ -438,10 +445,6 @@ export function InventoryTab({
         i.id === id ? { ...i, ...patch } : i,
       ),
     });
-
-  /** Removes an inventory item by id. */
-  const remove = (id: string) =>
-    onUpdate({ inventory: character.inventory.filter((i) => i.id !== id) });
 
   /** Inventory items filtered by the current search text (name or description match). */
   const filteredItems = useMemo(() => {
@@ -591,7 +594,7 @@ export function InventoryTab({
                   update(item.id, { quantity: Math.max(0, q) })
                 }
                 onDelete={() => {
-                  remove(item.id);
+                  void onDeleteEntry("inventory", item.id);
                   setEditingId(null);
                   setExpandedId(null);
                 }}

@@ -70,6 +70,89 @@ body {
   outline-offset: 1.5px;
 }
 
+/* ── DeleteUndoToast countdown bar ───────────────────────────
+   Purely decorative (aria-hidden, no ARIA role) shrink animation showing
+   how much of the undo window is left. `animation-duration` is set
+   per-instance via inline style in DeleteUndoToast.tsx, from the same
+   UNDO_TIMEOUT_MS constant useDeleteUndo's timer uses, so the two can't
+   drift apart. Hidden outright under reduced motion rather than shown as a
+   static full bar, which would misleadingly suggest plenty of time is
+   left; the toast and its Undo button keep working for the full duration
+   either way. */
+.undo-bar {
+  width: 100%;
+  animation-name: undo-bar-shrink;
+  animation-timing-function: linear;
+  animation-fill-mode: forwards;
+}
+@keyframes undo-bar-shrink {
+  from {
+    width: 100%;
+  }
+  to {
+    width: 0%;
+  }
+}
+
+/* ── Toast/banner enter/exit fade ────────────────────────────
+   Shared by DeleteUndoToast and SyncStatusBanner: both mount/unmount a
+   block abruptly otherwise (a plain `if (...) return null;`). Kept as one
+   pair of classes rather than duplicated per component, and driven by
+   each component's own small "keep the last content mounted through its
+   exit animation, then drop it in onAnimationEnd" state — see
+   DeleteUndoToast.tsx's comment for why that's a render-time state
+   adjustment, not a useEffect.
+
+   `forwards` matters here, unlike a purely cosmetic animation: without it,
+   the default fill-mode ("none") means the animated properties revert to
+   their unanimated values (opacity: 1, transform: none) the instant the
+   animation ends, before the `onAnimationEnd` handler's `setState` has
+   actually removed the element from the DOM. On `.fade-toast-exit` that's
+   a visible flash back to fully opaque right before the element vanishes —
+   exactly the "still abrupt" symptom this fixes. */
+.fade-toast-enter {
+  animation: fade-toast-in 160ms ease-out forwards;
+}
+.fade-toast-exit {
+  animation: fade-toast-out 160ms ease-in forwards;
+}
+@keyframes fade-toast-in {
+  from {
+    opacity: 0;
+    transform: translateY(-4px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+@keyframes fade-toast-out {
+  from {
+    opacity: 1;
+    transform: translateY(0);
+  }
+  to {
+    opacity: 0;
+    transform: translateY(-4px);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .undo-bar {
+    display: none;
+  }
+  /* Not `animation: none`: a component's exit logic waits for
+     `onAnimationEnd` to actually drop its content (see DeleteUndoToast.tsx
+     and SyncStatusBanner.tsx) — disabling the animation outright means
+     that event never fires and the exiting content gets stuck on screen
+     forever. A near-zero duration keeps a real (still fires `animationend`)
+     but imperceptible animation instead, the standard fix for this. */
+  .fade-toast-enter,
+  .fade-toast-exit {
+    animation-duration: 0.01ms;
+  }
+}
+
 /* Remove number input spinners (they clutter the stat boxes) */
 input[type="number"]::-webkit-inner-spin-button,
 input[type="number"]::-webkit-outer-spin-button {
