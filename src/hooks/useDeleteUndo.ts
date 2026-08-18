@@ -59,10 +59,16 @@ export type UndoableArrayKey = "actions" | "inventory";
  * array at delete time (never a filtered/displayed subset — see
  * `removeEntryById`'s doc in `entryUndo.ts`), used to restore roughly the
  * same list position.
- * @property tokenId - The character this deletion happened on. Guards
- * against restoring into a *different* character's sheet if the player
- * switches token selection during the undo window — switching tabs on the
- * SAME character does not touch this, see the effect below.
+ * @property tokenId - The real OBR item id of the token this deletion
+ * happened on (the live selection's id, never `character.tokenId` from
+ * the sheet payload — see `selectedTokenIdRef`'s doc in `useOBR.ts` for
+ * why the payload id can't be trusted for this: a token copy-pasted in
+ * the same scene carries an identical payload `tokenId` until its first
+ * edit, which would make this guard fail to tell the original and the
+ * copy apart). Guards against restoring into a *different* character's
+ * sheet if the player switches token selection during the undo window —
+ * switching tabs on the SAME character does not touch this, see the
+ * effect below.
  */
 export type PendingUndo =
   | {
@@ -119,6 +125,12 @@ export interface UseDeleteUndoReturn {
  * @param character - The currently loaded character, or `null`. Passed
  * straight through from `useOBR` — this hook holds no character state of
  * its own, only the undo bookkeeping layered on top.
+ * @param selectedTokenId - The real OBR item id of the currently selected
+ * token (`useOBR`'s `selectedItems[0]?.id`), or `undefined`. Used ONLY as
+ * an identity key for the same-character guard described on
+ * {@link PendingUndo.tokenId} — never `character.tokenId`, which is part
+ * of the sheet payload and can lag behind the actual selection (see that
+ * property's doc).
  * @param updateCharacter - `useOBR`'s write function. Resolves `true` only
  * once the SDK write actually went through without throwing (see its doc
  * in `useOBR.ts`) — `deleteWithUndo` relies on that to decide whether a
@@ -126,6 +138,7 @@ export interface UseDeleteUndoReturn {
  */
 export function useDeleteUndo(
   character: NimbleCharacter | null,
+  selectedTokenId: string | undefined,
   updateCharacter: (updates: Partial<NimbleCharacter>) => Promise<boolean>,
 ): UseDeleteUndoReturn {
   const [pendingUndo, setPendingUndo] = useState<PendingUndo | null>(null);
@@ -154,10 +167,10 @@ export function useDeleteUndo(
   // character's token while the toast is showing — reinserting into
   // whichever sheet happens to be open when Undo is clicked would put the
   // entry on the wrong character. Switching TABS on the same character
-  // never changes `character.tokenId`, so the toast survives that, as
+  // never changes `selectedTokenId`, so the toast survives that, as
   // required.
   //
-  // Deliberately not a `useEffect` keyed on `character?.tokenId`: React
+  // Deliberately not a `useEffect` keyed on `selectedTokenId`: React
   // 19's `react-hooks/set-state-in-effect` rule flags a setState call in
   // an effect body, and `react-hooks/refs` separately forbids touching a
   // ref during render. This is instead the React-docs-endorsed "adjust
@@ -171,10 +184,10 @@ export function useDeleteUndo(
   // is still a real `clearTimeout`, eventually, well before it could
   // matter: either the next `armPendingUndo`/`undo` call clears it (both
   // are event handlers, not render), or unmount does.
-  const [lastTokenId, setLastTokenId] = useState(character?.tokenId);
-  if (character?.tokenId !== lastTokenId) {
-    setLastTokenId(character?.tokenId);
-    if (pendingUndo && pendingUndo.tokenId !== character?.tokenId) {
+  const [lastTokenId, setLastTokenId] = useState(selectedTokenId);
+  if (selectedTokenId !== lastTokenId) {
+    setLastTokenId(selectedTokenId);
+    if (pendingUndo && pendingUndo.tokenId !== selectedTokenId) {
       setPendingUndo(null);
     }
   }
@@ -191,7 +204,7 @@ export function useDeleteUndo(
   };
 
   const deleteWithUndo = async (arrayKey: UndoableArrayKey, id: string) => {
-    if (!character) return;
+    if (!character || !selectedTokenId) return;
     if (arrayKey === "actions") {
       const removal = removeEntryById(character.actions, id);
       if (!removal) return;
@@ -201,7 +214,7 @@ export function useDeleteUndo(
         arrayKey: "actions",
         entry: removal.removed.entry,
         index: removal.removed.index,
-        tokenId: character.tokenId,
+        tokenId: selectedTokenId,
       });
     } else {
       const removal = removeEntryById(character.inventory, id);
@@ -212,14 +225,14 @@ export function useDeleteUndo(
         arrayKey: "inventory",
         entry: removal.removed.entry,
         index: removal.removed.index,
-        tokenId: character.tokenId,
+        tokenId: selectedTokenId,
       });
     }
   };
 
   const undo = () => {
     if (!pendingUndo || !character) return;
-    if (character.tokenId !== pendingUndo.tokenId) return;
+    if (selectedTokenId !== pendingUndo.tokenId) return;
     armIdRef.current += 1;
     if (timerRef.current !== null) {
       clearTimeout(timerRef.current);

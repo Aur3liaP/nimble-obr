@@ -389,6 +389,33 @@ export function useOBR(): UseOBRReturn {
   // (handleRoll, updateCharacter) that close over refs rather than state,
   // so the guard always sees the latest value even mid-render.
   const canEditRef = useRef(false);
+  /**
+   * The OBR item id of the currently selected single character token —
+   * refreshed synchronously inside {@link handleSelectionChange} on every
+   * selection change, and the ONLY id every write in this hook may target.
+   *
+   * @remarks `character.tokenId` (the id stored inside the sheet's own
+   * metadata payload) must never be used to target an OBR operation.
+   * `NimbleCharacter.tokenId` is part of the metadata payload itself, and
+   * OBR copies that payload verbatim when a token is copy-pasted while
+   * assigning the *copy* a brand-new item id — so the payload's `tokenId`
+   * silently drifts out of sync with the item it actually lives on. Two
+   * confirmed failure modes result: editing a copy pasted into the SAME
+   * scene writes to the original token (both copies' payloads name the
+   * original's id, so both target it), and editing a copy pasted into a
+   * DIFFERENT scene fails with "this token no longer exists" (the
+   * payload's id belongs to a token that doesn't exist in the new scene at
+   * all). Reading the write target from this ref instead — the real,
+   * live-selected item id — fixes both: a copy is retargeted at itself the
+   * moment it's edited (see the `tokenId: targetId` fixups at each write
+   * site below, which also repair the stored payload going forward).
+   *
+   * Set to `null` whenever there isn't exactly one character-layer token
+   * selected (no selection, multiple selection, or a non-character item),
+   * so a write attempted from a stale closure in one of those states fails
+   * closed instead of guessing at a target.
+   */
+  const selectedTokenIdRef = useRef<string | null>(null);
 
   useEffect(() => {
     characterRef.current = character;
@@ -472,6 +499,7 @@ export function useOBR(): UseOBRReturn {
   const handleSelectionChange = useCallback(
     async (selectedIds: string[]) => {
       if (!selectedIds || selectedIds.length === 0) {
+        selectedTokenIdRef.current = null;
         setSelectedItems([]);
         setSelectionState("none");
         setCharacter(null);
@@ -482,9 +510,16 @@ export function useOBR(): UseOBRReturn {
       setSelectedItems(tokens);
 
       if (tokens.length === 0) {
+        selectedTokenIdRef.current = null;
         setSelectionState("none");
         setCharacter(null);
       } else if (tokens.length > 1) {
+        // No single write target while multiple tokens are selected — see
+        // selectedTokenIdRef's doc. `App.tsx` never renders edit controls
+        // in this state (selectionState "multiple" is display-only), and
+        // clearing the ref here backs that up: a write attempted from a
+        // stale closure would find no target rather than guessing one.
+        selectedTokenIdRef.current = null;
         setSelectionState("multiple");
         // Display (and free-roll stat source) only — never triggers a
         // migration write-back. A bulk selection isn't a deliberate "open
@@ -494,6 +529,7 @@ export function useOBR(): UseOBRReturn {
         const loaded = loadCharacterFromItem(tokens[0]);
         setCharacter(loaded && loaded.status === "ok" ? loaded.character : null);
       } else {
+        selectedTokenIdRef.current = tokens[0].id;
         const loaded = loadCharacterFromItem(tokens[0]);
         if (!loaded) {
           setSelectionState("no-sheet");
@@ -558,7 +594,12 @@ export function useOBR(): UseOBRReturn {
         OBR.scene.items.onChange(async (items) => {
           const currentChar = characterRef.current;
           if (!currentChar) return;
-          const updatedItem = items.find((i) => i.id === currentChar.tokenId);
+          // Match against the real selected item id, not `currentChar.tokenId`
+          // — see selectedTokenIdRef's doc for why the payload id can't be
+          // trusted here either.
+          const targetId = selectedTokenIdRef.current;
+          if (!targetId) return;
+          const updatedItem = items.find((i) => i.id === targetId);
           if (!updatedItem) return;
           const fresh = loadCharacterFromItem(updatedItem);
           if (!fresh) return; // sheet removed mid-session — leave state as-is
@@ -581,6 +622,26 @@ export function useOBR(): UseOBRReturn {
         OBR.scene.onMetadataChange((meta) => {
           const log = meta[ROLL_LOG_KEY] as DiceRollResult[] | undefined;
           if (log) setRecentRolls(log.slice(-MAX_ROLL_HISTORY));
+        }),
+      );
+
+      // `App.tsx` is a single JSX tree that never unmounts (see CLAUDE.md),
+      // so switching scenes alone does not clear whatever character was
+      // loaded from the previous scene — without this, the panel keeps
+      // showing the old scene's sheet (wrong data presented as current,
+      // not an empty state) until the player happens to change selection.
+      // `ready` goes false during the switch and back to true once the new
+      // scene has loaded; only the false transition needs handling here,
+      // since the new scene's own selection change (if any) re-populates
+      // everything through the normal `player.onChange`/`handleSelectionChange`
+      // path.
+      unsubscribers.push(
+        OBR.scene.onReadyChange((ready) => {
+          if (ready) return;
+          selectedTokenIdRef.current = null;
+          setSelectedItems([]);
+          setSelectionState("none");
+          setCharacter(null);
         }),
       );
     });
@@ -712,10 +773,12 @@ export function useOBR(): UseOBRReturn {
    * @param options.execute - Performs the actual SDK call(s). Must re-read
    * any character state it needs from `characterRef.current` at call time
    * rather than closing over a value captured earlier: this same function
-   * runs again, unchanged, on retry.
-   * @param options.verifyTokenId - When set, schedules a debounced
-   * post-write existence check for this token id (see
-   * {@link scheduleExistenceCheck}). Omitted for writes not tied to a
+   * runs again, unchanged, on retry. If it targets a single item, it must
+   * likewise read the target id from `selectedTokenIdRef.current` at call
+   * time (never from `character.tokenId` — see that ref's doc) and return
+   * the id it actually wrote to, so {@link scheduleExistenceCheck} verifies
+   * the exact item just written rather than a value computed separately
+   * that could drift from it. Return nothing for writes not tied to a
    * single item (the roll log, which lives in scene metadata).
    * @param options.isOptimistic - Passed straight through to
    * {@link describeWriteError}; see its doc. Defaults to `false`; only
@@ -746,15 +809,13 @@ export function useOBR(): UseOBRReturn {
    * undo for.
    */
   const performWrite = async (options: {
-    execute: () => Promise<void>;
-    verifyTokenId?: string;
+    execute: () => Promise<string | undefined | void>;
     isOptimistic?: boolean;
     isRetry?: boolean;
     retryOfErrorId?: number;
   }): Promise<boolean> => {
     const {
       execute,
-      verifyTokenId,
       isOptimistic = false,
       isRetry = false,
       retryOfErrorId,
@@ -779,7 +840,7 @@ export function useOBR(): UseOBRReturn {
     };
 
     try {
-      await execute();
+      const writtenTokenId = await execute();
       settle();
       if (isRetry) {
         setSyncStatus((prev) =>
@@ -790,7 +851,7 @@ export function useOBR(): UseOBRReturn {
       } else {
         setSyncStatus((prev) => (prev.state === "error" ? prev : { state: "idle" }));
       }
-      if (verifyTokenId) scheduleExistenceCheck(verifyTokenId);
+      if (writtenTokenId) scheduleExistenceCheck(writtenTokenId);
       return true;
     } catch (err) {
       settle();
@@ -851,19 +912,29 @@ export function useOBR(): UseOBRReturn {
    */
   useEffect(() => {
     if (!character) return;
-    if (pendingMigrationTokenIdRef.current !== character.tokenId) return;
+    // Compared against the live selection (selectedTokenIdRef), never
+    // `character.tokenId` — see that ref's doc. `pendingMigrationTokenIdRef`
+    // itself already holds a real item id (set from `tokens[0].id`/
+    // `updatedItem.id` in handleSelectionChange/the resync listener, never
+    // from the payload), so once it matches the current selection it IS
+    // the correct write target.
+    const tokenId = pendingMigrationTokenIdRef.current;
+    if (!tokenId || tokenId !== selectedTokenIdRef.current) return;
     pendingMigrationTokenIdRef.current = null;
     if (!canEdit) return;
-    const tokenId = character.tokenId;
     void performWriteRef.current({
-      verifyTokenId: tokenId,
       execute: async () => {
         assertOnline();
+        // Repairs the payload's own `tokenId` to the real target as part
+        // of this write, same as every other write site below — see
+        // selectedTokenIdRef's doc.
+        const migrated = { ...character, tokenId };
         await OBR.scene.items.updateItems([tokenId], (items) => {
           for (const item of items) {
-            item.metadata[METADATA_KEY] = character;
+            item.metadata[METADATA_KEY] = migrated;
           }
         });
+        return tokenId;
       },
     });
   }, [character, canEdit]);
@@ -916,7 +987,6 @@ export function useOBR(): UseOBRReturn {
         : updates;
 
     return performWrite({
-      verifyTokenId: current.tokenId,
       // setCharacter below runs before the write is confirmed — see
       // describeWriteError's isOptimistic doc for why the error message
       // needs to know that.
@@ -924,21 +994,32 @@ export function useOBR(): UseOBRReturn {
       execute: async () => {
         // Re-read at call time, not the `current` captured above: this
         // same closure runs again, unchanged, on retry, potentially after
-        // other fields changed remotely — see performWrite's JSDoc.
+        // other fields changed remotely — see performWrite's JSDoc. The
+        // write target is read fresh here too, from selectedTokenIdRef,
+        // never from `latest.tokenId` — see that ref's doc for why the
+        // payload id can't be trusted as a write target.
         const latest = characterRef.current;
         if (!latest || !canEditRef.current) return;
-        const updated = { ...latest, ...clampedUpdates, updatedAt: Date.now() };
+        const targetId = selectedTokenIdRef.current;
+        if (!targetId) return;
+        const updated = {
+          ...latest,
+          ...clampedUpdates,
+          tokenId: targetId,
+          updatedAt: Date.now(),
+        };
         // setCharacter first, offline check second: the field must still
         // show what was typed even if we already know the write will fail
         // (see assertOnline's doc) — checking before setCharacter would
         // revert the keystroke instead.
         setCharacter(updated);
         assertOnline();
-        await OBR.scene.items.updateItems([updated.tokenId], (items) => {
+        await OBR.scene.items.updateItems([targetId], (items) => {
           for (const item of items) {
             item.metadata[METADATA_KEY] = updated;
           }
         });
+        return targetId;
       },
     });
   };
@@ -1082,9 +1163,12 @@ export function useOBR(): UseOBRReturn {
    * @param item - The OBR scene item (token) to attach a sheet to.
    */
   const createSheetForToken = async (item: Item) => {
+    // Safe to target `item.id` directly here, unlike every other write
+    // site in this hook: `item` is the actual selected token passed in by
+    // the caller (`App.tsx`'s `firstItem`, itself sourced from the live
+    // selection), not an id read back out of a stored payload.
     const newChar = createDefaultCharacter(item.id, playerIdRef.current);
     await performWrite({
-      verifyTokenId: item.id,
       execute: async () => {
         assertOnline();
         await OBR.scene.items.updateItems([item.id], (items) => {
@@ -1094,6 +1178,7 @@ export function useOBR(): UseOBRReturn {
         });
         setCharacter(newChar);
         setSelectionState("ready");
+        return item.id;
       },
     });
   };
@@ -1121,22 +1206,27 @@ export function useOBR(): UseOBRReturn {
     const initial = characterRef.current;
     if (!initial) return;
     await performWrite({
-      verifyTokenId: initial.tokenId,
       execute: async () => {
         const latest = characterRef.current;
         if (!latest) return;
+        // Write target read fresh from the live selection, not
+        // `latest.tokenId` — see selectedTokenIdRef's doc.
+        const targetId = selectedTokenIdRef.current;
+        if (!targetId) return;
         const claimed = {
           ...latest,
           ownerId: playerIdRef.current,
+          tokenId: targetId,
           updatedAt: Date.now(),
         };
         assertOnline();
-        await OBR.scene.items.updateItems([latest.tokenId], (items) => {
+        await OBR.scene.items.updateItems([targetId], (items) => {
           for (const item of items) {
             item.metadata[METADATA_KEY] = claimed;
           }
         });
         setCharacter(claimed);
+        return targetId;
       },
     });
   };
