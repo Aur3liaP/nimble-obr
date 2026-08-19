@@ -483,6 +483,130 @@ library (Zod or equivalent) and derive `NimbleCharacter` from the schema
 descriptions of the same shape is exactly how `FLAW` (see Formula parser
 below) went undetected.
 
+- **Schema v2: `Armor` renamed to `Defense`, `CharacterAction.damage` removed,
+  `InventoryItem.armorValue` removed, `manualResolution` backfilled — all
+  FOLDED into the existing v1 -> v2 migration step, not a new v2 -> v3.**
+  Deliberate, one-time exception to "leave every earlier migration function
+  alone" (see this file's own procedure above): safe ONLY because v1 -> v2
+  had never shipped at the time — no build in circulation had ever written
+  `schemaVersion: 2`, so no real persisted record's correctness depends on
+  that step's old, narrower (initiativeAdvantage-only) behavior. A local
+  test scene that already held an old v2 shape from before this change will
+  NOT be re-migrated (its `schemaVersion` is already current) and needs a
+  manual reset. This does not generalize — the next migration after this
+  one goes back to appending a new step, never editing an existing one.
+  - **`Armor` -> `Defense`, `NimbleCharacter.armor` -> `.defense`.** Nimble
+    Core Rules 2nd printing renames the hero stat "Armor" to "Defense" —
+    "Armor" now means exclusively worn equipment
+    (`InventoryItem.isArmor`/`isArmor: true` entries in `equipment.ts`,
+    `character.defense.equippedItemId`). The interface carries
+    `defenseBonus`, which comes from traits that are not armor at all
+    (Dragonborn +1 Defense, Turtlefolk +4 Defense, Fearless -1 Defense,
+    Ratfolk +2 Defense) — `character.armor.defenseBonus` was semantically
+    wrong even before the printing renamed the stat, independent of the
+    rename itself. **Only the hero stat was renamed** — every other sense
+    of "armor" in this codebase is untouched: monster armor keywords
+    ("ignoring armor" on Tooth & Claw, Monster Medium/Heavy Armor),
+    `InventoryItem.isArmor`/`isArmor: true` (worn equipment), and
+    equipment proficiency text. Two hero-stat mentions in `spells.ts`
+    prose also needed the rename, since they describe the character's own
+    stat while a spell is active, not a monster or worn item: Dragonform's
+    "Level Armor" -> "Level Defense", Shield of Justice's "Upcast: +5
+    Armor" -> "+5 Defense". **`equipment.ts`'s "Armor: X+DEX" description
+    label was gotten WRONG in this same batch, then corrected in the very
+    next one** — first pass reasoned "the item itself is still armor, so
+    its description is unaffected," but the label isn't naming the item,
+    it's naming the NUMERIC VALUE that follows the colon (the Defense the
+    item grants — the book's own equivalent table has a DEFENSE column for
+    exactly these numbers), same category of mistake as the
+    `formatModifier`/defense-breakdown and ItemRowBase/formulaError traps
+    already logged elsewhere in this file: something that LOOKS like "the
+    worn-item sense of armor" on first read is actually "the stat, just
+    inside a longer sentence." Fixed to "Standard clothes. Defense:
+    2+DEX." etc., across all 20 armor/shield descriptions (Cloth, Leather,
+    Mail, Plate, Shields) — done via a line-scoped script matching only
+    `description: "..."` lines containing the literal `"Armor: "` label,
+    specifically to avoid also matching `isArmor: true` (whose field name
+    contains that exact substring too — a blind global find-and-replace
+    across the file would have silently renamed the `isArmor` field
+    itself). The item's own name/category and its "Old plate armor."-style
+    prose (no colon, naming the gear, not a value) still correctly say
+    "armor" and were left alone. **Not retroactive**: a character's
+    inventory items are frozen copies of these description strings
+    (matching how `manualResolution` needed its own backfill above) — an
+    already-added armor item still shows the old "Armor: X+DEX" wording
+    until/unless a future migration explicitly refreshes descriptions on
+    non-custom items, which has been discussed but is not yet implemented
+    (deliberately out of scope, see the batch that reported this gap).
+    UI labels ("Defense", "Armor (from inventory)" in
+    `CombatTab`) were already correct going in and needed no change — the
+    armor `<select>` genuinely lists worn armor the character owns, a
+    different sense of the word from the renamed stat, sitting right next
+    to it structurally (see the ItemRowBase/formulaError bullet above for
+    the same "looks similar, opposite case" trap in a different spot).
+    Migrated by `migrateArmorToDefense` in `characterMigrations.ts`: if
+    `armor` is present, its fields are moved to `defense` (missing
+    `defenseBonus` backfilled to 0, same as `createDefaultCharacter`'s
+    default); if `armor` is absent entirely (record predates the field),
+    whatever `defense` the v0 -> v1 step already backfilled is left alone
+    rather than clobbered with an empty object.
+  - **`InventoryItem.armorValue` deleted, not renamed.** Verified unused
+    before removing (per this batch's own instruction to check, not
+    assume): defense is computed from `formula` in `computeDefense.ts`;
+    `armorValue` was only ever written (in `equipment.ts`'s data and
+    `InventoryTab.handleAddFromList`'s copy from a template), never read
+    anywhere. Confirmed dead, not a live field needing a rename.
+  - **`CharacterAction.damage` removed entirely** — `formula` was already
+    the single source of truth for what's rollable (part 1c); `damage` was
+    display-only book notation kept in sync by hand across ~80 spells,
+    strictly less useful than `resolveFormulaDisplay`'s resolved value.
+    Removed from the type, from `spells.ts` (66 entries), and from every
+    remaining read/write site: the custom-add forms in `SpellsTab`/
+    `CombatTab` (their local form state field was renamed from `damage` to
+    `formula` in the same pass, since it was always really editing the
+    formula, just mis-named after the fallback removal in part 1c), and
+    the inline-edit `onUpdate` calls that used to mirror `formula: v,
+    damage: v`. The "Damage" / "Damage / Formula" UI labels on those forms
+    are unchanged — book-notation wording aimed at the player, unrelated
+    to the data field that got removed underneath it.
+    - **Migration care: a naive `formula: formula || damage` merge is
+      wrong.** `damage` used placeholder values meaning "no damage", not
+      "no formula": `"0"` (True Strike, Ice Disk, 19 entries total),
+      `"Special"` (pre-part-1b Dragonform/Living Inferno/Sacrifice/Shield
+      of Justice, blanked to `""` since), and plain `""`. Naively merging
+      one of these into `formula` would make a non-rollable spell rollable
+      and show a bogus 0 or throw on "Special" — a direct regression, not
+      a fix. `migrateActionDamageField` treats `{"", "0", "Special"}`
+      (`PLACEHOLDER_DAMAGE`) as "no formula": `formula` wins whenever it's
+      already non-empty; a placeholder `damage` with empty `formula`
+      leaves `formula` empty; only a genuinely non-placeholder `damage`
+      with an empty `formula` gets promoted to `formula` — and that branch
+      logs a warning, since part 1c's "game data guard" test (removed
+      alongside `damage` itself; see `formulaParser.test.ts`) already
+      confirmed no entry in `spells.ts` ships in that shape. This also
+      matters for characters, not just game data: `actions` are frozen
+      copies of whatever a spell looked like when added, so a character
+      who added a spell before this removal still has both fields sitting
+      in their persisted metadata regardless of what current `spells.ts`
+      contains — `characterMigrations.test.ts` exercises all six raw
+      shapes (formula only, damage only, both, damage `"0"`, damage
+      `"Special"`, both empty) plus the logged fallback case.
+  - **`InventoryItem.manualResolution` backfilled on existing characters.**
+    Confirmed by manual OBR testing: an item added to a character's sheet
+    before the `manualResolution` read-path fix (see the "manualResolution
+    is honored" bullet above) carries `manualResolution: undefined` in its
+    frozen metadata forever, showing a working-looking roll button that
+    throws — newly-added items were already correct, only pre-existing
+    ones on already-claimed sheets were affected (Weapon of Animosity,
+    Weapon of Wounding, Vindication, currently). `migrateInventoryManualResolution`
+    re-applies the flag by matching `name` against `BASIC_EQUIPMENTS`,
+    for `isCustom !== true` items only — custom items are never touched,
+    even if a player happened to name one identically to an official
+    entry. Driven off `BASIC_EQUIPMENTS` itself (`.find` by name), not a
+    hardcoded item list, so a future equipment entry that sets the flag is
+    covered automatically — same reasoning as the reflective test that
+    already covers the read path.
+
 ### Formula parser (`src/utils/formulaParser.ts`)
 
 Hand-rolled recursive-descent parser. **Never use `eval()` or `Function()`**
