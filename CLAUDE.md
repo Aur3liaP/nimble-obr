@@ -41,14 +41,296 @@ Owlbear Rodeo (OBR) extension: a real-time-synced character sheet panel for the 
 - `useOBR` is the single integration point with the SDK and central state hook. It exposes both a `permissions` object and deprecated top-level `canEdit`/`isGM` fields kept only for incremental migration. Read from `permissions.canEdit`/`permissions.isGM` in new code, not the deprecated fields.
 - IDs are always generated with `crypto.randomUUID()`.
 - Mutually exclusive row states use the `expandedId` / `editingId` pattern.
-- **`LicenseNotice` (`src/components/ui/LicenseNotice.tsx`) is a legal
-  requirement**, not a design choice — the Nimble 3rd Party Creator License
-  v2.0 requires a free VTT/app to display its attribution notice
-  prominently. Rendered by `App.tsx` as the panel's last, `shrink-0` child,
-  outside the scrollable `<main>` entirely (see the layout comment there for
-  how the floating `RollLog` pill's positioning is scoped to avoid
-  overlapping it). Must never end up inside a scrolling list, and must never
-  gain Nimble artwork/logo.
+- **`CombatTab`'s HP block does not let you edit `hp.max` — this is
+  original, longstanding design, not a regression.** Investigated in part
+  1e via `git log -p --follow` on the whole file history: `hp.max` has
+  rendered as a plain, non-editable `<span>` in `CombatTab` since the tab's
+  very first HP implementation, predating every batch in this series by a
+  wide margin. `hp.current` and `hp.temp` are editable there (matching the
+  file's own framing, "HP/wounds quick view"); full editing, including
+  `hp.max`, lives in `SummaryTab`. Don't "restore" this without a real
+  design decision to add it — it was never removed. Re-confirmed in part
+  1f (this note had been queried a second time) — nothing changed, the
+  finding stands; if it comes up a third time, that's a request for a new
+  feature, not a bug report.
+- **Every tab that shows a formula shows the resolved display string
+  (`resolveFormulaDisplay`), never the raw formula.** `InventoryTab`'s
+  `ItemRow` didn't (fixed in part 1c) — it showed `item.formula` raw (e.g.
+  "6 + Math.min(DEX, 2)" instead of "6+3"), unlike `CombatTab`'s
+  `ActionRow` and `SpellsTab`'s `SpellRow`. `CombatTab.InventoryFavoriteRow`
+  (the Favorites-section shortcut row for a starred inventory item) had the
+  exact same gap — fixed in part 1d, same treatment: `ItemRowBase` (shared
+  by both rows) takes an optional `formulaError` prop, styled the same
+  red-text-plus-⚠-tooltip way `ActionRow`/`SpellRow` handle a broken
+  formula — a formula that fails to resolve must render as an error, never
+  as if it were a valid value (same concern as `computeDefense`'s `error`
+  return in `CombatTab.tsx`, and the same concern that drove the defense
+  block's own breakdown display below). `manualResolution: true` items are
+  the deliberate exception in both rows: raw text, no `resolveFormulaDisplay`
+  call at all, no error styling — that text was never a formula the parser
+  could evaluate, so reporting it as "invalid" would be exactly as wrong as
+  rolling it (see the "InventoryItem.manualResolution" bullet elsewhere in
+  this file). The "Add Item" picker (browsing `BASIC_EQUIPMENTS` book
+  content) deliberately still shows the raw formula — it mirrors the
+  book's own notation, which helps recognition while browsing something the
+  character doesn't own yet, matching what `AddSpellModal` already does;
+  don't "fix" that one to match the item rows. The Defense section's armor
+  `<select>` is NOT the same case despite living next to it structurally —
+  it lists armor the character already owns, exactly like an inventory
+  row, so it resolves through `resolveFormulaDisplay` too (a native
+  `<option>` can't carry `formulaError`'s red/⚠ styling, but
+  `resolveFormulaDisplay` already falls back to the raw formula string on
+  error, so it degrades sensibly without that styling). Getting this
+  distinction backwards once already happened in part 1d: "browsing
+  book content" and "browsing what you own" look similar (both are a list
+  of formula-bearing items) but are opposite cases for this rule — check
+  which one a new list actually is, not just whether it resembles a picker.
+  When auditing this pattern, check every place a tab renders an item or
+  action formula, not just the obvious list — the defense block's
+  equipped-armor line had the identical "shows a half-substituted formula
+  string" problem hiding in a completely different shape (see the
+  `formatModifier`/defense-breakdown bullet below), caught only by an
+  explicit audit, not by grepping for `resolveFormulaDisplay` itself.
+- **Signed-modifier display goes through `formatModifier`
+  (`src/utils/formatModifier.ts`), never a hand-rolled sign ternary.**
+  `n >= 0 ? "+"+n : String(n)`-shaped code was independently reimplemented
+  — and independently got the negative case wrong as `"+ -2"` — at least
+  twice: the initiative "Base" display (part 1b) and the defense-bonus line
+  (part 1d). `formatModifier(n)` always includes a sign, including `"+0"`
+  for zero (zero is still a real modifier); a caller that wants to omit a
+  zero modifier entirely decides that itself (`modifier !== 0 &&
+  formatModifier(modifier)`), the function's only job is the sign. Wired
+  into every site that displays or constructs a signed modifier: `StatBox`
+  (the stat-box bonus, and the `1d20${...}` save-roll formula),
+  `SummaryTab` (hit-die roll formula, the hit-die-formula preview text, the
+  read-only skill-value display, the `1d20${...}` skill-check formula),
+  `DicePanel` (the free-roll modifier suffix/label and the modifier
+  stepper's display), `RollLog` (the roll-breakdown modifier), `CombatTab`
+  (the initiative "Base" display, the `1d20${...}` initiative-modal formula
+  preview, and the defense-bonus breakdown), and `useOBR.rollInitiative`
+  (the actual initiative formula rolled — not user-visible, since
+  `DiceRollResult.formula` is never displayed post-roll, but kept
+  consistent with the preview rather than left as a second, differently-
+  styled construction of the same value). `formulaParser.resolveFormulaDisplay`
+  itself now also calls it internally for its own modifier suffix, instead
+  of a third near-duplicate of the same ternary — one of these was already
+  correct before this batch, but "already correct" and "not reimplemented a
+  third time" are different properties, and only the second one prevents
+  the next call site from getting it wrong again.
+- **`computeDefense` (`src/utils/computeDefense.ts`, extracted out of
+  `CombatTab.tsx` in part 1f specifically so its `breakdown` return value
+  is unit-testable — same reasoning/pattern as `initiative.ts`) shows a
+  resolved arithmetic breakdown, not a half-substituted formula string.**
+  It used to read `"Formula: 3+DEX + -2 bonus"` — DEX unsubstituted, the
+  bonus glued on with the double-sign bug below, and the word "bonus"
+  embedded in what looked like a formula. `computeDefense` returns
+  `breakdown`: the armor formula (or the raw DEX value, unarmored) run
+  through `substituteVariables` (exported from `formulaParser.ts`) so
+  variables resolve but the arithmetic stays unevaluated ("3+DEX" at DEX 2
+  → "3+2", not collapsed to "5" the way `resolveFormulaDisplay`'s no-dice
+  branch would), then the flat bonus via `formatModifier` (omitted
+  entirely when it's 0), THEN the whole assembled string — armor term +
+  bonus term + total — is passed through
+  `normalizeSubstitutedSignsForDisplay` (see the dedicated bullet below) as
+  the very last step, giving e.g. `"3-2-2 = -1"` for armor "3+DEX" at DEX
+  -2 and a -2 bonus. `breakdown` is `undefined` whenever `error` is set —
+  same "not a trustworthy number, show it distinctly" contract
+  `computeDefense` already had; the caller shows the error message (now
+  visibly, not just in a tooltip) instead of any breakdown text.
+- **Two mechanisms handle a formula's "glued sign" shape in this codebase
+  — `Parser.parseUnary` and `normalizeSubstitutedSignsForDisplay` — and
+  neither is redundant with the other; they solve different problems at
+  different pipeline stages.** `parseUnary` (part 1c) makes `"1d8+-1"`
+  EVALUATE to the right number — mandatory, load-bearing, every roll and
+  every resolved value in this app depends on it, do not touch it for a
+  display concern. `normalizeSubstitutedSignsForDisplay`
+  (`formulaParser.ts`, part 1f) makes a string that's shown WITHOUT
+  evaluation READ correctly — purely cosmetic, nothing downstream depends
+  on its output being further parsed. `substituteVariables` itself stays
+  purely semantic and does NOT normalize signs — part 1e briefly put this
+  same collapsing logic INSIDE `substituteVariables`, which (a) mixed a
+  presentation concern into a semantic pipeline stage that
+  `evalFormula`/`rollFormula`/`resolveFormulaDisplay` depend on, and more
+  importantly (b) wasn't even a complete fix: `computeDefense`'s breakdown
+  concatenates `substituteVariables`'s output (the armor term) with a
+  SEPARATELY formatted bonus term, appended AFTER normalization would have
+  already run — the bonus's own sign, and the join between the two terms,
+  were never covered, so the bug (still reproducible in OBR) outlived
+  part 1e's own passing tests, which only exercised `substituteVariables`
+  in isolation and never asserted on `computeDefense`'s actual assembled
+  output. Part 1f moved normalization back out and applies it explicitly,
+  once, to the FULLY ASSEMBLED breakdown string in `computeDefense` — the
+  only point that sees every join that can produce a glued sign. If a
+  future call site shows a substituted-but-unevaluated formula string, it
+  must call `normalizeSubstitutedSignsForDisplay` itself; `substituteVariables`
+  will not do it implicitly.
+- **`normalizeSubstitutedSignsForDisplay` must tolerate whitespace around
+  the signs, not just a zero-whitespace glued pair — part 1f's fix passed
+  its own tests and was STILL reproducible in OBR.** Root cause: part 1f's
+  regex (`/\+-/`, `/--/`) only matched a sign glued with no whitespace
+  (`"3+-2"`), and its test used an idealized `"3+DEX"` armor formula (no
+  space) as input. Every REAL armor formula in `equipment.ts` is written
+  with spaces (`"3 + DEX"`, `"6 + Math.min(DEX, 2)"`, …), so
+  `substituteVariables` actually produces `"3 + -2"` — a space between the
+  literal `+` and the substituted `-2` — which the old regex never matched.
+  OBR showed `"3 + -2-2 = -1"` (the bonus join, with no space, DID collapse
+  correctly; the armor term's own `"+ -"`, spaced, did not). Fixed (part
+  1g) by making both regexes swallow arbitrary surrounding whitespace and
+  re-emit a tight join: `s.replace(/\s*\+\s*-\s*/g, "-").replace(/\s*-\s*-\s*/g, "+")`.
+  `computeDefense.test.ts` now asserts against a real `BASIC_EQUIPMENTS`
+  entry (`"Garb Minor Enchantment"`, formula `"3 + DEX"`), not a hand-typed
+  idealization — that mismatch between test input and real data shape is
+  exactly what let the part 1f regression ship in the first place. When
+  testing a regex-over-a-string display fix like this one, always verify
+  against the actual string the app produces (read the source data), not a
+  hand-typed stand-in for it.
+- **The Nimble 3rd Party Creator License v2.0 notices are a legal
+  requirement**, not a design choice, and live in `RollLog.tsx` (see its
+  `@file` header) — NOT a standalone panel-footer component, and, as of
+  part 1e, INLINE MODE ONLY (not the floating pill). They used to be a
+  permanent `LicenseNotice` footer (removed: it ate vertical space on an
+  already-cramped laptop screen); the license accepts "a banner, sidebar,
+  welcome message" as prominent placement, so the full VTT notice is
+  pinned at the top of the inline roll log and the short attribution line
+  (component `LicenseAttribution`, renamed from the unhelpfully generic
+  `Attribution` in part 1f) at its foot — present from the empty state
+  onward, neither dismissible, neither able to be interleaved with entries;
+  the notices are the first/last items in the flex column, structurally
+  outside the entries list's own scroll container (added part 1g, see
+  below) so they never scroll away with it. Both notices were briefly ALSO
+  in the floating popup (part 1c/1d) — removed in part 1e: no room for a
+  full paragraph plus attribution without the popup becoming awkward, and
+  the inline rendering is already reachable via the no-token "welcome"
+  state, which recurs on every deselection rather than being a one-time
+  dismissal — see `App.tsx`'s `showNoToken` condition on the inline
+  `RollLog`. Do not reintroduce a panel-level footer for this.
+- **The inline roll log's attribution line reaching the panel's true
+  bottom needed a fix in the PARENT CHAIN, not another rule on the
+  attribution itself — the third and fourth attempts (part 1c's `mt-auto`,
+  part 1d's added `min-h-56` floor, part 1e's `flex-1` on the entries area
+  alone) all still read as "floating" in real OBR testing, because none of
+  them addressed the actual gap.** Root cause, found in part 1f by walking
+  the DOM chain from the panel root down: `App.tsx`'s `<main>` receives a
+  correctly constrained height from being a `flex-1` item of the panel
+  root's `flex flex-col h-full` — but `<main>` itself had no `flex`/
+  `flex-col` class of its own, so it was never a flex CONTAINER for its
+  OWN children. Its children (including the DicePanel/RollLog wrapper
+  `<div>`) just stacked in normal block flow at natural content height,
+  and `<main>`'s leftover space became blank area below all of them,
+  undistributable to any one child — no amount of `flex-1`/`mt-auto`
+  *inside* `RollLog`'s own subtree could reach space that was never handed
+  down to it in the first place. (Concrete evidence this was a real gap,
+  not just a hypothesis: the no-token header `<div>` already carried a
+  `shrink-0` class — meaningless without a flex parent — presumably added
+  on the assumption `<main>` already was one.) Fixed at that level: `<main>`
+  is now `flex flex-col`; the DicePanel/RollLog wrapper `<div>` and
+  `RollLog`'s own inline root both carry `flex-1 min-h-0` (the `min-h-0`
+  defeats the flex-item default `min-height: auto`, which would otherwise
+  partially block the `flex-1` from taking effect); `RollLog`'s internal
+  entries-area `flex-1` (unchanged from part 1e) still does the final,
+  innermost push. `min-h-56` is gone — the floor was a leaf-level band-aid
+  for a parent-chain problem, no longer needed once real available space
+  flows down correctly. This is INLINE-mode-only; the floating popup is
+  `position: absolute` and self-contained (`max-h-80`), unaffected by any
+  of this chain.
+- **SUPERSEDED (part 1h) — see the part 1h bullet below for the current
+  design. Kept for the mechanism explanation (still accurate) and as a
+  record of what didn't work, per this file's own convention of not
+  deleting diagnosed history.** Part 1g's OWN fix (tab content gets its own
+  independent `overflow-y-auto` scroll region) turned out to violate a
+  requirement nobody had written down until part 1h's "Panel layout
+  contract": `DicePanel` must scroll WITH the sheet, not sit pinned below a
+  separately-scrolling tab content box. Do not re-derive this "split scroll
+  region" approach again — it was already tried and already reverted.
+- **REGRESSION (part 1g), introduced by the very fix directly above: giving
+  `<main>`'s two children EQUAL competing `flex-1` treatment collapsed the
+  DicePanel/RollLog wrapper to 0px height whenever a sheet tab was open.**
+  Confirmed as a purely CSS layout collapse, NOT the JSX-early-return
+  unmount failure mode documented under "Structural constraints" below —
+  this tree was already a single, unconditional return with `DicePanel`
+  always mounted; that failure mode does not apply here. Mechanism: tab
+  content has `flex: 0 1 auto` (default, content-based basis); the
+  DicePanel/RollLog wrapper below it had `flex-1` (`flex: 1 1 0%`, zero
+  basis). Whenever tab content's natural height exceeded `<main>`'s
+  available space (routine — spell/inventory lists routinely do), flexbox's
+  negative-space shrink pass divides the deficit by each item's SCALED
+  shrink factor (`shrink × basis`); the wrapper's scaled factor is
+  `1 × 0 = 0`, so it absorbed none of the deficit, got none of the leftover
+  growth either (there was none), and rendered at its bare 0% basis: 0px.
+  Fixed by no longer letting the two children compete for the same space at
+  all: the tab content itself is now the scroll region
+  (`flex-1 min-h-0 overflow-y-auto`, wrapping the `activeTab === ...`
+  blocks), so an arbitrarily tall tab scrolls internally instead of
+  starving its sibling; the DicePanel/RollLog wrapper is `shrink-0`
+  (natural content height, always rendered in full) whenever a sheet tab is
+  present. In the no-token/no-sheet/unsupported/invalid states the wrapper
+  is `<main>`'s ONLY child (no competing sibling) and still needs
+  `flex-1 min-h-0` to reach `<main>`'s real bottom and pin the license
+  attribution there — so `App.tsx` picks the wrapper's class conditionally
+  on `showSheet`. **Do not go back to giving both of `<main>`'s children
+  `flex-1`** — that is this exact regression. Any future change to this
+  region must re-walk all four tabs plus every no-sheet-open state, not
+  just the one being edited: this is the SECOND layout regression the
+  `<main>` flex change alone has produced, so treat that flex context as a
+  blast radius, not a self-contained local edit.
+- **No-token welcome state: a roll landed below the fold (part 1g).** The
+  inline `RollLog`'s entries list (newest-first) had `flex-1` but no
+  `min-h-0`/`overflow-y-auto`, so it could only ever GROW to fill leftover
+  space, never SHRINK below its own content height. In the no-token state,
+  the free-roll panel plus the license notice already fill a typical laptop
+  panel height with zero entries; adding one entry pushed the whole
+  panel's content taller than the viewport, and `<main>`'s own
+  `overflow-y-auto` made the PAGE scroll to reveal it — a roll read as
+  though nothing had happened until the user scrolled. Fixed by bounding
+  the entries list itself (`min-h-0 overflow-y-auto`) so it scrolls
+  INTERNALLY instead of pushing its container taller. Because the list is
+  newest-first, the just-added roll is always the first item and so is
+  visible immediately, with no scrolling, regardless of how many older
+  entries end up pushed below it inside this now self-contained region.
+- **Part 1h: RESTORED `<main>` to a single, plain scroll region — no flex
+  container, no split scroll regions — when a sheet tab is open, per the
+  "Panel layout contract" below.** This is the third batch in a row to
+  touch this exact area (1e implicitly, 1f, 1g), and the first written
+  AFTER the contract existed, specifically so it could be checked against
+  every state at once instead of just the one most recently reported
+  broken — see the contract section for why that discipline exists now.
+  `<main>`'s classes are conditional on `showSheet`:
+  - **Sheet tab open:** `<main>` is plain `overflow-y-auto` (no `flex
+    flex-col`). Tab content and the `DicePanel`/RollLog wrapper are two
+    ordinary block-level children — no flex classes on either — so they
+    simply stack, and `<main>`'s own scrollbar moves both together.
+    `DicePanel` sits at the bottom of the tab content and scrolls away
+    with it, per the contract, instead of being pinned below an
+    independently-scrolling tab-content box (part 1g's mistake) or
+    collapsing to 0px (part 1f's).
+  - **No-sheet states (no-token/no-sheet/unsupported/invalid):** `<main>`
+    IS `flex flex-col` here, and the wrapper is `flex-1 min-h-0` — this is
+    genuinely still needed, and this is the direct answer to "if the
+    license fix depended on `<main>` being flex, say so": it does, but
+    ONLY in this branch, where the wrapper is `<main>`'s SOLE child. The
+    part 1g collapse bug required TWO children with mismatched flex-basis
+    fighting over shrink space; a lone child can't do that to itself, so
+    stretching it here is safe. `RollLog`'s own inline root and entries
+    area (parts 1f/1g) are unchanged and still do the last two steps of
+    the same chain — see `RollLog.tsx`. Inline `RollLog` is never rendered
+    in the sheet-open branch (see its call site a few lines below), so its
+    dependency on this flex chain never needs the sheet-open branch to
+    provide it.
+  - **Auto-close (new in part 1h, not a restoration):** `DicePanel` now
+    calls `setCollapsed(true)` at the end of its own `handleRoll`, in
+    `DicePanel.tsx` — every roll, in every state it can be opened from,
+    closes it. This is what makes "opening `DicePanel` must not hide the
+    log" trivially true in the common case (the panel is only ever open
+    for the brief moment before a roll), and is the mechanism the "state
+    transitions" clause of the contract leans on.
+  - This restore intentionally does NOT touch: the whitespace-tolerant
+    `normalizeSubstitutedSignsForDisplay` fix (part 1g, unrelated to
+    layout), the inline license notices living in `RollLog.tsx` instead of
+    a separate `LicenseNotice` footer (part 1e, kept — see its own
+    bullet), or `RollLog`'s entries-list internal scroll bound (part 1g,
+    kept — still the right fix, still needed once the license text lives
+    inline instead of in a separate persistent footer with its own
+    reserved space).
 
 ### Panel layout contract
 
@@ -113,16 +395,21 @@ attribute doesn't stop a typed value from being committed.
   Ancestry (Dwarf +1, Planarbeing -2), background (Back Out of Retirement
   -1, Devoted Protector +3), and the optional Gritty Dying variant (down to
   2) all modify it in ways that can't be derived from other fields, so it's
-  a free numeric field the player/GM sets directly (editable in
-  `SummaryTab`, under `canEdit`). `setWounds` still clamps *wounds* to
-  `maxWounds + 1` (the fatal wound slot) — that behavior is unrelated and
-  unchanged.
+  a free numeric field the player/GM sets directly. Folded into the
+  existing `{wounds}/{maxWounds} wounds` counter in `SummaryTab`, under
+  `canEdit` — not a separate labeled row. Rendered as a compact BOXED
+  `<input>` (border, background, fixed `w-7`), the same treatment as the
+  Hit Dice fields right below it, NOT `InlineNumberField` (tried first, in
+  part 1c/1d): that component's underline style (`w-full`, no visible box)
+  reads as a free text field in this tiny `text-[10px]` context, not a
+  small stepper/box. `setWounds` still clamps *wounds* to `maxWounds + 1`
+  (the fatal wound slot) — that behavior is unrelated and unchanged.
 
 ### Structural constraints (do not refactor away)
 
 These exist because of bugs already diagnosed and fixed. Changing them reintroduces the bug.
 
-- **`App.tsx` is a single JSX tree, not multiple early-return branches.** `DicePanel` must never unmount, or in-progress dice state is lost whenever `selectionState` changes. Consolidating the tree is the fix; "improving readability" with early returns undoes it.
+- **`App.tsx` is a single JSX tree, not multiple early-return branches.** `DicePanel` must never unmount, or in-progress dice state is lost whenever `selectionState` changes. Consolidating the tree is the fix; "improving readability" with early returns undoes it. Two distinct failure modes have hit `DicePanel` visibility and must not be conflated: this bullet (JSX branching → real unmount, state loss) is one; the part 1g `<main>`-flex-collapse regression (see the "REGRESSION (part 1g)" bullet earlier in this Architecture section — DicePanel stayed mounted the whole time, its wrapper just rendered at 0px height) is a different, purely-CSS one. Before "fixing" a DicePanel-invisible report, determine which of the two it is (DOM inspector: is the node present at 0px, or absent entirely?) — the fix for one does nothing for the other.
 - **The roll log has a single source of truth.** Pushing a visible roll writes to `OBR.scene.setMetadata` only; local `recentRolls` state is updated **only** by the `onMetadataChange` listener, never directly by the push function. The double update remounts conditional UI in `App.tsx`. Hidden (GM-only) rolls are the deliberate exception: they skip scene metadata and go straight to local state.
 - **Drag interactions keep local state during the drag and commit once on release.** Writing to OBR on every `mousemove` floods the network. Resync protection when external changes arrive mid-drag is required, not optional.
 - **Formula input fields keep local state and only commit when valid.** Every other text `FormField` in an edit-row panel (Name, Range, Description...) writes to `onUpdate`/OBR on every keystroke by design — that's fine, any string is a valid value. Formula fields are the deliberate exception: `useFormulaField` (mirroring `useDraggableValue`) buffers a local draft and only commits once it's syntactically valid or empty, so an in-progress, unparseable formula is never broadcast to the table. Unlike a drag (~2s), a formula edit can run long enough that an external change to the same field can arrive mid-edit; `useFormulaField`'s resync is skip-and-warn (`conflictWarning`), not skip-and-silent, specifically so that case doesn't quietly overwrite someone else's change on commit. See the write-time-syntax-only bullet under Formula parser below for why the commit gate checks syntax, not resolved values.
@@ -273,13 +560,109 @@ Reverting one reintroduces the bug.
   formula, nothing more. Don't tighten them to "match the game".
 - **`Parser.parse` requires full input consumption.** Without it, a recognised
   prefix followed by garbage returns a plausible number.
-- **`parseUnary` handles unary `+` explicitly.** Flat bonuses (`+8`) and
-  stripped formula tails (`+3+2`) previously worked only by accident, via the
-  unknown-token fallback that returned 0.
-- **`manualResolution: true` marks flavour-text formulas** (e.g. equipment
-  reading `WeaponDamage + ...`, resolved by the GM by hand). The exhaustive
-  data test filters on this field, so exclusions live in the data, never as a
-  hardcoded list in the test.
+- **`parseUnary` handles unary `+` explicitly, and BOTH its `+`/`-` branches
+  recurse into `parseUnary` itself, not `parsePrimary`.** Flat bonuses
+  (`+8`) and stripped formula tails (`+3+2`) previously worked only by
+  accident, via the unknown-token fallback that returned 0 — that's the `+`
+  branch existing at all. The recursion (rather than jumping straight to
+  `parsePrimary`) is a separate, later fix: a negative stat substituted
+  right after the formula's own operator produces a CHAINED sign — `"1d8+STR"`
+  with `STR=-1` substitutes to `"1d8+-1"`, and once the dice part is split
+  off, the remainder handed to `safeEval` starts with a leading `"+-1"`.
+  Reported via initiative going negative (`1d20+${dex+bonus}` → e.g.
+  `"1d20+-2"`), but NOT initiative-specific — any formula whose trailing
+  modifier ends up glued to a negative substituted value hits this,
+  including the stock stat arrays (+2/+2/+0/-1, +3/+1/-1/-1). Do not "fix"
+  this by special-casing initiative or forbidding negative stats; negative
+  modifiers are legal and common. Pinned by `formulaParser.test.ts`'s
+  "negative stat modifiers (chained-sign parser bug)" describe block, which
+  covers the formula shapes this project's own data uses (`1d8+STR`,
+  `1d6+DEX`, `2d4+KEY`, plain `-2`, ...) through both `rollFormula` and
+  `resolveFormulaDisplay` — a bare leading `"-2"` and a single unary minus
+  followed by a plain number (`"1d8-STR"` with a *positive* STR) already
+  worked before this fix; only a CHAINED second sign broke. `KEYd20` with a
+  negative key stat is a different, correct, pre-existing rejection (a
+  negative dice COUNT, not a chained-sign modifier) — see the dice-lower-
+  bound bullet just above; it must keep failing loudly, not be "fixed" to
+  roll a negative number of dice.
+- **`InventoryItem.manualResolution: true` marks flavour-text formulas**
+  (e.g. equipment reading `WeaponDamage + 1d4`, referencing whatever weapon
+  it's enchanting — a concept the formula language has no variable for —
+  resolved by the GM by hand; currently set on 3 entries: Weapon of
+  Animosity, Weapon of Wounding, Vindication). That text is neither valid
+  nor broken; it's simply not for the engine. The exhaustive data test
+  filters on this field, so exclusions live in the data, never as a
+  hardcoded list in the test. `CharacterAction.manualResolution`
+  (spells/actions) does NOT exist — it was removed in part 1c, having
+  never been set on any spell; do not add it back. `formula: ""` already
+  fully covers "not engine-rollable" for actions (see the next bullet), so
+  there's no remaining gap it would fill. **`InventoryItem` is the only
+  holder of this flag** (confirmed by grep, not assumption) — if a second
+  holder is ever added, it needs the same wiring described below, not a
+  copy-pasted assumption that setting the field alone does anything.
+  - **The flag went unwired for a while — this was the fifth instance of
+    the same failure mode in this codebase (d66, KEYd20, LVL, FLAW, then
+    this one): a field documented in prose that nothing actually reads.**
+    `manualResolution`'s own JSDoc claimed "not a formula meant to be
+    evaluated or rolled by the engine," but nothing checked it: all three
+    equipment entries rendered a working-looking roll button that threw a
+    formula error on click. Fixed via a single choke point,
+    `isEngineRollableItem(item)` in `formulaParser.ts` (`!!item.formula &&
+    !item.manualResolution`) — every call site that decides "does this
+    `InventoryItem` get a roll button / go through `resolveFormulaDisplay`"
+    must route through it instead of checking `item.formula` truthiness
+    directly: `InventoryTab.ItemRow`'s roll trigger and formula display
+    (raw text when `manualResolution`, never `resolveFormulaDisplay` — that
+    text is not a formula the parser can evaluate, so reporting it as
+    "invalid" would be as wrong as rolling it), and both `CombatTab`'s
+    inventory-favorites filter and its `favorites.length` gate (a
+    `manualResolution` item must not surface as a "favorite" shortcut
+    either). `InventoryTab.handleAddFromList` also wasn't copying
+    `manualResolution` from the `BASIC_EQUIPMENTS` template onto the new
+    `InventoryItem` at all — fixed alongside the read side, since the read
+    fix is inert without it (an item added via the picker would still have
+    carried `manualResolution: undefined` forever). Guarded by a reflective
+    test (`formulaParser.test.ts`, "InventoryItem.manualResolution is
+    honored by the roll path") that drives off `BASIC_EQUIPMENTS` itself,
+    not a hardcoded item-name list — mirrors the "FormulaContext contract"
+    test's reasoning (see its own comment) for exactly the same reason: a
+    future entry that sets the flag is covered automatically, and removing
+    the check from any call site turns the test red.
+- **`CharacterAction.formula` is the single source of truth for what's
+  rollable — there is no `formula || damage` fallback anywhere in the app.**
+  `damage` is display-only flavor text (e.g. "2d6+STR", "Special"), never
+  parsed. An empty `formula` means genuinely not rollable: no roll button
+  (`onRoll` passed as `undefined`, or the button's own visibility gated on
+  `spell.formula`/`item.formula`), not a button that fails when clicked.
+  This was NOT always true: part 1b's fix for the "Special" class of bug
+  (Living Inferno/Dragonform/Sacrifice/Shield of Justice, all shipped with
+  `formula: ""` and `damage: "Special"`) blanked the affected `damage`
+  fields but left the `action.formula || action.damage` fallback mechanism
+  itself in place; part 1c removed the fallback everywhere it appeared
+  (CombatTab's `ActionRow`/roll triggers, SpellsTab's `SpellRow`/roll
+  triggers/`handleAddFromList`, `FormulaHelp.tsx`'s `realSpellFormula`) —
+  don't reintroduce it at a new call site. `InventoryItem` has no `damage`
+  field, so equipment never had this fallback to begin with.
+- **Game-data guard: an entry with real formula text sitting in `damage`
+  but an empty `formula` is silently non-rollable, and nothing else catches
+  it.** `formulaParser.test.ts`'s "game data guard" describe block asserts
+  every `BASE_SPELLS` entry whose `damage` is non-empty and not a
+  placeholder (`"0"`, `"Special"`) has a matching `formula` — this is what
+  the old `formula || damage` fallback used to rescue at runtime, and what
+  quietly breaks the moment that fallback is gone. `InventoryItem` has no
+  `damage` field, so this only applies to spells/actions. As of part 1c
+  this test finds nothing (confirmed via a mutation test: temporarily give
+  a spell a real `damage` formula with `formula: ""`, confirm it goes red,
+  revert) — keep it that way; a newly-added spell that trips it needs its
+  formula moved from `damage` into `formula`, not the test loosened.
+- **The game-data validation test (`formulaParser.test.ts`, "game data
+  validation") checks `formula` alone, for both spells and equipment** —
+  mirroring the app's real (fallback-free, as of part 1c) behavior. The
+  test runs both the original `validateFormula`+missing-dice check AND a
+  dedicated `validateFormulaSyntax` pass on the same entry list — the
+  latter needs no character context and is a pure "does this even parse"
+  gate, which is exactly the class of bug "Special" was (not a bounds
+  problem, not a level-dependent problem, not a formula at all).
 - **Three paths must reject identically:** `validateFormula` (write-time,
   against a real context), `evalFormulaWithContext` (display value),
   `resolveFormulaDisplay` (display string). A cross-consistency test enforces
@@ -351,6 +734,6 @@ Reverting one reintroduces the bug.
 ## Conventions
 
 - Commit messages use a `type: description` prefix. Use `feat`, `fix`, `refactor`, `chore`, `docs`. Avoid `update:`, which appears in older history but is not part of Conventional Commits.
-- Code and documentation are in English. Conversation with the maintainer is in French.
-- **In user-facing prose (README, `docs/store.md`, UI copy): do not use em dashes or en dashes.** Use commas, colons, or parentheses. Em dashes read as AI-generated.
+- Code and documentation are in English. Conversation with the maintainer is in French. The one deliberate exception: `README.fr.md` is a full French translation of `README.md`, kept in sync by hand — `README.md` itself must stay English (it's what the Owlbear Rodeo store reviewers read on the extension's PR). Each file links to the other near the top. `README.md` uses `## License`; `README.fr.md` keeps the French spelling, `## Licence`. Don't merge them back into one bilingual file, and don't let `README.fr.md` silently drift out of sync with a `README.md` change without updating both.
+- **In user-facing prose (README, `docs/store.md`, UI copy): do not use em dashes or en dashes.** Use commas, colons, or parentheses. Em dashes read as AI-generated. Applies to `README.fr.md` too.
 - `docs/store.md` is the OBR extension store listing (front matter + markdown for the marketplace), not internal docs. Its `tags` must stay within the store's allowed vocabulary, and `manifest`/`image`/`icon` URLs must stay in sync with the deployed URL (`nimble-obr.vercel.app`).
