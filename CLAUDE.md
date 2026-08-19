@@ -41,6 +41,37 @@ Owlbear Rodeo (OBR) extension: a real-time-synced character sheet panel for the 
 - `useOBR` is the single integration point with the SDK and central state hook. It exposes both a `permissions` object and deprecated top-level `canEdit`/`isGM` fields kept only for incremental migration. Read from `permissions.canEdit`/`permissions.isGM` in new code, not the deprecated fields.
 - IDs are always generated with `crypto.randomUUID()`.
 - Mutually exclusive row states use the `expandedId` / `editingId` pattern.
+- **`LicenseNotice` (`src/components/ui/LicenseNotice.tsx`) is a legal
+  requirement**, not a design choice — the Nimble 3rd Party Creator License
+  v2.0 requires a free VTT/app to display its attribution notice
+  prominently. Rendered by `App.tsx` as the panel's last, `shrink-0` child,
+  outside the scrollable `<main>` entirely (see the layout comment there for
+  how the floating `RollLog` pill's positioning is scoped to avoid
+  overlapping it). Must never end up inside a scrolling list, and must never
+  gain Nimble artwork/logo.
+
+### Value ranges
+
+Enforced both at the input layer (rejects/clamps in the component) and,
+defense in depth, at the single write choke point (`updateCharacter` in
+`useOBR.ts`) — same reasoning as `MAX_LEVEL`'s clamp: an HTML `min`/`max`
+attribute doesn't stop a typed value from being committed.
+
+| Field | Range | Source |
+|---|---|---|
+| `stats.{str,dex,int,wil}` | `[MIN_STAT, MAX_STAT]` = `[-5, +5]` | Rulebook p.6 |
+| `skills.*` | `[MIN_SKILL, MAX_SKILL]` = `[-5, +12]` | Rulebook p.7, p.21 — the +12 ceiling is absolute, not "stat + points"; the floor mirrors the stat floor since invested points are never negative |
+| `level` | `[1, MAX_LEVEL]` | dice-safety-limit driven, see `MAX_LEVEL`'s JSDoc |
+| `maxWounds` | **not clamped** | deliberately a free field — see below |
+
+- **`maxWounds` is intentionally NOT clamped to any fixed number (e.g. 6).**
+  Ancestry (Dwarf +1, Planarbeing -2), background (Back Out of Retirement
+  -1, Devoted Protector +3), and the optional Gritty Dying variant (down to
+  2) all modify it in ways that can't be derived from other fields, so it's
+  a free numeric field the player/GM sets directly (editable in
+  `SummaryTab`, under `canEdit`). `setWounds` still clamps *wounds* to
+  `maxWounds + 1` (the fatal wound slot) — that behavior is unrelated and
+  unchanged.
 
 ### Structural constraints (do not refactor away)
 
@@ -64,6 +95,30 @@ These exist because of bugs already diagnosed and fixed. Changing them reintrodu
 - `updateCharacter` re-checks `canEdit` before every write and no-ops with `console.warn` if the caller lacks rights. This is **not a real security boundary** (OBR has no server-side ACL on metadata); it only guards against accidental stale-UI writes.
 - Rolling dice is intentionally **not** gated by `canEdit`. A read-only viewer can roll using another character's stats. Only persisting sheet changes is guarded. This is a design decision, not an oversight.
 - Claiming or taking over a sheet is also intentionally **not** gated. Any player can currently take over another player's claimed sheet (deliberate design for a trusted table). If GM-only claiming is ever wanted, add the guard at the call site (`App.tsx`/`CharacterHeader.tsx`), not in `useOBR`.
+
+### Initiative (`CombatTab.tsx`, `src/utils/initiative.ts`)
+
+- Initiative rolls through the shared `DiceRollModal`, same as every other
+  roll (stat saves, skill checks, actions) — it does NOT roll immediately on
+  click. `character.initiativeAdvantage` (a `SaveAdvantage`, defaulting to
+  `"none"`) pre-selects the modal's default mode, overridden only if the
+  modal is left on "standard" — same pattern as `SaveMods`' per-stat
+  advantage in `SummaryTab.confirmRoll`, applied in
+  `CombatTab.confirmInitiativeRoll`.
+- `initiativeToActions(total, naturalRoll)` (`src/utils/initiative.ts`, pure
+  and unit-tested — extracted out of `CombatTab.tsx` specifically so it's
+  testable) implements the Nimble Core Rules 2nd printing (p.15) action
+  grant: 1 digit → 1 action, 2 digits → 2 actions, **20+ OR a natural 20 →
+  3 actions**. `naturalRoll` must be the KEPT d20 after advantage/
+  disadvantage resolution (`RollFormulaResult.kept[0]`), not the raw first
+  die rolled — with advantage, 2d20 are rolled and the higher one kept, and
+  that kept die is what "natural 20" means. A natural 20 grants 3 actions
+  even if a large negative DEX/`initiativeBonus` brings the total under 20.
+- `character.combat.initiativeResult` still stores only the total (not
+  `naturalRoll`) — the 5s-display banner in `CombatTab` reads
+  `combat.actionsRemaining` (already set correctly by the roll) rather than
+  recomputing `initiativeToActions` from the stored total alone, since that
+  alone can't reconstruct whether it was a natural 20.
 
 ### Schema versioning (`src/utils/characterMigrations.ts`)
 
@@ -102,9 +157,11 @@ Hand-rolled recursive-descent parser. **Never use `eval()` or `Function()`**
 here, by design, to avoid arbitrary code execution from a player- or GM-typed
 formula.
 
-Syntax: dice (`1d8`, or implicit-count `d66`), stats (`STR/DEX/INT/WIL`),
-`KEY`/`FLAW`, skills, `LEVEL`/`LVL`, arithmetic, `floor()`/`ceil()`/`min()`/
-`max()`, and dynamic dice (`incrementdice(1, level)d12`, `1dstepdice(...)`).
+Syntax: dice (`1d8`, or implicit-count `d20`), positional dice (`d44`/`d66`/
+`d88`, advantage variant `d66a`; Nimble Core Rules 2nd printing — see below),
+stats (`STR/DEX/INT/WIL`), `KEY`/`FLAW`, skills, `LEVEL`/`LVL`, arithmetic,
+`floor()`/`ceil()`/`min()`/`max()`, and dynamic dice (`incrementdice(1,
+level)d12`, `1dstepdice(...)`).
 
 #### Decisions (do not "fix" these)
 
@@ -113,8 +170,11 @@ Reverting one reintroduces the bug.
 
 - **The rulebook's notation is the spec, not the parser's.** Three separate
   bugs came from data being "wrong" when the parser was too strict: `d66`
-  (implicit count), `KEYd20` (variable glued to a die), `LVL` (book shorthand).
-  When game data doesn't parse, fix the parser, don't rewrite `spells.ts`.
+  (originally fixed as implicit-count `1d66`; the 2nd printing rulebook
+  edition changed what `d66` itself *means* — see the positional-dice bullet
+  below, this is a rules change, not a re-litigation of the same bug),
+  `KEYd20` (variable glued to a die), `LVL` (book shorthand). When game data
+  doesn't parse, fix the parser, don't rewrite `spells.ts`.
 - **`LVL` is a deliberate alias for `LEVEL`.** The book uses it, so a GM
   writing a custom spell will too. Not redundant, do not remove.
 - **Validation lives at the choke point.** `resolveDynamicDice` validates every
@@ -201,8 +261,31 @@ Reverting one reintroduces the bug.
   arity and branching differ per helper. They are documented via worked
   examples in the help panel instead.
 - `LVL` is a deliberate alias for `LEVEL` (rulebook notation), not a typo.
-- Implicit dice count (`d66`, `d44`, `d88`) is rulebook notation for a single
-  die with N faces, normalized to `1dN`. Not a two-digit table roll.
+- **Positional dice (`d44`/`d66`/`d88`, 2nd printing) are NOT implicit-count
+  single dice.** A bare `d66` rolls 2d6 (the single repeated digit is the
+  individual die's face count, e.g. `d66` → two d6, NOT one 66-sided die)
+  and reads them positionally as tens/ones — `[4, 5]` → 45. The advantage
+  variant (`d66a`) rolls 3, drops the lowest (leftmost on a tie —
+  `indexOfLowestValue`), and reads the remaining 2 **in their original roll
+  order, never sorted** — `[4, 2, 5]` drops the 2 and reads `[4, 5]` as 45,
+  not resorted to 54; `[3, 3, 6]` drops the FIRST 3. Sorting the kept dice
+  (even just for display) reintroduces exactly the bug this notation exists
+  to avoid — pinned by a dedicated mutation-style test
+  (`formulaParser.test.ts`'s "mutation guard" case, and the ordering/
+  tie-break tests, all of which go red if a `.sort()` is reintroduced on
+  `rollPositionalDice`'s kept array). Per the glossary, positional dice (and
+  flat, dice-less formulas) never miss or crit — surfaced explicitly via
+  `RollFormulaResult.canCritOrFumble`/`DiceRollResult.canCritOrFumble`
+  (`false` for both; `true` only for a genuine `NdX` roll), not left to be
+  inferred from `isCritical`/`isFumble` both being `false` (which is also
+  true, coincidentally, whenever `kept` is empty for unrelated reasons).
+  `normalizeImplicitDiceCount` deliberately excludes 44/66/88 from its
+  general bare-`dN` → `1dN` rewrite so `parseDamageFormula`/`diceToAverage`/
+  `resolveFormulaDisplay` can still recognize the bare positional form
+  downstream. `positionalDiceAverage`'s advantage-variant average is exact
+  (enumerates all `sides^3` ≤ 512 outcomes), not approximated — there's no
+  simple closed form since which of the 3 rolled positions survives depends
+  on the values rolled, not just their ranks.
 - The dice lower bound only ever fires for `count === 0`. A negative count is
   caught upstream by the full-consumption check, on purpose, because a leading
   `-` is ambiguous with subtraction (`10-1d6`).

@@ -38,3 +38,7 @@ This extension provides a seamless way for players and GMs to manage character s
 
 - **Support**: [GitHub Issues](https://github.com/Aur3liaP/nimble-obr/issues)
 - **Framework**: React + TypeScript + Tailwind CSS
+
+## License
+
+Nimble OBR is an independent product published under the Nimble 3rd Party Creator License. Nimble TTRPG (c) Nimble Co.

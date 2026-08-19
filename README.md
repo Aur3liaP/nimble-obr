@@ -203,7 +203,8 @@ Le parser de formules (`src/utils/formulaParser.ts`) supporte :
 | Syntaxe | Exemple | Résultat |
 |---------|---------|----------|
 | Dés | `1d8`, `2d6` | tirage aléatoire |
-| Dé à comptage implicite | `d66`, `d44` | notation du livre pour un dé unique, normalisée en `1dN` |
+| Dé à comptage implicite | `d20`, `d12`… | notation du livre sans compte explicite, normalisée en `1dN` |
+| Dés positionnels | `d44`, `d66`, `d88`, variante avantage `d66a` | 2e édition : deux dés (trois pour `a`, en gardant les 2 meilleurs sans les retrier) lus positionnellement (dizaine/unité), ex. 4 puis 5 → 45. Ne ratent ni ne critiquent jamais. |
 | Stats | `STR`, `DEX`, `INT`, `WIL` | valeur du personnage |
 | Stat clé / défaut | `KEY`, `FLAW` | valeur de la stat marquée clé/défaut |
 | Compétences | `MIGHT`, `STEALTH`, `ARCANA`… | valeur de la compétence |
@@ -257,6 +258,12 @@ Supprimer un sort, un objet ou une action est immédiat et diffusé à la table,
 - [ ] Thème clair "parchemin" optionnel
 - [ ] Import/export JSON de la fiche
 - [ ] Raccourcis clavier pour les lancers fréquents
+
+---
+
+## Licence
+
+Nimble OBR is an independent product published under the Nimble 3rd Party Creator License. Nimble TTRPG (c) Nimble Co.
 
 ---
 
