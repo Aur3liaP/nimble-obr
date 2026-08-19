@@ -154,17 +154,17 @@ function AddSpellModal({
     manaCost: 0,
     school: "" as SpellSchool | "",
     range: "",
-    damage: "",
+    formula: "",
     description: "",
   });
   const setF = (k: string, v: string | number) =>
     setForm((p) => ({ ...p, [k]: v }));
 
-  // Custom-form damage never reaches OBR through this hook (nothing here
+  // Custom-form formula never reaches OBR through this hook (nothing here
   // is persisted until "Add" is clicked) — onCommit just updates local
   // form state, so the field can't hold an invalid, uncommitted draft
   // when "Add" is checked below.
-  const formulaField = useFormulaField(form.damage, (v) => setF("damage", v));
+  const formulaField = useFormulaField(form.formula, (v) => setF("formula", v));
 
   // Suppress unused warning — kept for future duplicate detection
   void existingIds;
@@ -196,7 +196,6 @@ function AddSpellModal({
       name: template.name,
       type: "spell",
       range: template.range,
-      damage: template.damage,
       formula: template.formula,
       description: template.description,
       isFavorite: false,
@@ -266,8 +265,7 @@ function AddSpellModal({
             name: form.name,
             type: "spell",
             range: form.range,
-            damage: form.damage,
-            formula: form.damage,
+            formula: form.formula,
             description: form.description,
             isFavorite: false,
             isCustom: true,
@@ -791,7 +789,7 @@ function SpellRow({
   // warning from closeEdit() survives the edit panel unmounting and can
   // still render in the collapsed view below.
   const formulaField = useFormulaField(spell.formula, (v) =>
-    onUpdate({ formula: v, damage: v }),
+    onUpdate({ formula: v }),
   );
 
   return (

@@ -1567,12 +1567,12 @@ describe("game data validation (point 4)", () => {
   // formula fails this test on its own, nothing to remember to update by
   // hand.
   //
-  // Checks `formula` alone, for both spells and equipment — as of part 1c,
-  // `formula` is the single source of truth for what's rollable
-  // (`CharacterAction.damage` is display-only flavor text, never read as a
-  // formula; see the "action.formula || action.damage fallback" bullet in
-  // CLAUDE.md). `CharacterAction` no longer has `manualResolution` (never
-  // set on any spell — removed in part 1c); `InventoryItem.manualResolution`
+  // Checks `formula` alone, for both spells and equipment — `formula` is
+  // the single source of truth for what's rollable (`CharacterAction` no
+  // longer has a `damage` field at all as of the schema v2 migration; see
+  // the "action.formula || action.damage fallback" and "damage removal"
+  // bullets in CLAUDE.md). `CharacterAction` also has no `manualResolution`
+  // (never set on any spell — removed in part 1c); `InventoryItem.manualResolution`
   // is still real (3 equipment entries use it) and still excluded here.
   //
   // A level-20 character is used throughout: level feeds incrementdice/
@@ -1669,33 +1669,14 @@ describe("game data validation (point 4)", () => {
   });
 });
 
-describe("game data guard: damage text must not be silently orphaned (point 4)", () => {
-  // Historically (part 1b), CombatTab/SpellsTab read `action.formula ||
-  // action.damage` at roll time, so an entry with `formula: ""` and a real
-  // dice formula sitting in `damage` instead was still rollable — that
-  // fallback is exactly what let "Living Inferno"/"Dragonform"/"Sacrifice"/
-  // "Shield of Justice" ship with `damage: "Special"` and go undetected.
-  // Part 1c removed the fallback: `formula` is now the single source of
-  // truth for what's rollable, and an empty `formula` means no roll button
-  // at all, by design (see CLAUDE.md).
-  //
-  // That makes the OPPOSITE data shape a real risk: an entry whose
-  // `formula` is empty but whose `damage` looks like a real formula (not
-  // one of the placeholder values below) was rollable via the old fallback
-  // and is now SILENTLY non-rollable — nothing throws, nothing fails a
-  // parse check, the roll button just quietly stops existing. No other
-  // test catches this: it's a data-authoring problem, not a code problem.
-  // `InventoryItem` has no `damage` field, so this only applies to spells.
-  const PLACEHOLDER_DAMAGE = new Set(["0", "Special"]);
-
-  it("every spell whose damage is real (non-empty, not a placeholder) has a matching formula", () => {
-    const offenders = BASE_SPELLS.filter(
-      (s) => s.damage && !PLACEHOLDER_DAMAGE.has(s.damage) && !s.formula,
-    ).map((s) => `${s.name} :: damage="${s.damage}"`);
-
-    expect(offenders).toEqual([]);
-  });
-});
+// Part 1c's "game data guard" (BASE_SPELLS.damage must not orphan a real
+// formula) lived here — removed alongside CharacterAction.damage itself in
+// the schema v2 migration: the field no longer exists on either the type
+// or the data, so the shape this test guarded against can't occur anymore.
+// The equivalent concern for an EXISTING character's frozen action data
+// (which may still have both fields in persisted metadata) is now covered
+// by `characterMigrations.test.ts`'s "CharacterAction.damage removal"
+// describe block instead — see `migrateActionDamageField` there.
 
 describe("InventoryItem.manualResolution is honored by the roll path (isEngineRollableItem)", () => {
   // manualResolution is the fifth instance of the same failure mode in this

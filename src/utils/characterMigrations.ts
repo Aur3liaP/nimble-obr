@@ -32,6 +32,7 @@ import {
   CURRENT_SCHEMA_VERSION,
   type NimbleCharacter,
 } from "../types/character";
+import { BASIC_EQUIPMENTS } from "../data/equipment";
 
 /**
  * Transforms a character record one schema version forward: from the
@@ -57,7 +58,7 @@ function isPlainObject(value: unknown): value is Record<string, unknown> {
  * `null` survives this merge instead of being mistaken for "missing" and
  * overwritten by the default — and only a key genuinely absent from
  * `record` is filled in from `template`. Descends into matching
- * plain-object sub-trees on both sides (`hp`, `stats`, `skills`, `armor`,
+ * plain-object sub-trees on both sides (`hp`, `stats`, `skills`, `defense`,
  * `combat`, ...) so a sub-object missing just one field doesn't lose the
  * rest of its real data to the default. Arrays and primitives are never
  * merged piecewise: if the key is present at all, `record`'s value for it
@@ -93,6 +94,121 @@ function fillMissingFields(
     // or not, rather than falling through to template's value.
   }
   return result;
+}
+
+/**
+ * `damage` values that mean "no formula", carried over verbatim from an old
+ * `CharacterAction.damage` field now removed from the schema (see
+ * `MIGRATIONS[1]` below): `""` (never set), `"0"` (no damage, e.g. True
+ * Strike, Ice Disk), `"Special"` (damage too situational to express as a
+ * formula, e.g. Dragonform before part 1b blanked it). None of these are
+ * real formula text — merging one into `formula` would make a
+ * non-rollable spell rollable and show a bogus 0, a direct regression.
+ */
+const PLACEHOLDER_DAMAGE = new Set(["", "0", "Special"]);
+
+/**
+ * Drops the old `damage` field from one `actions` array element, preferring
+ * the existing `formula` when present. Part of `MIGRATIONS[1]` — see its
+ * comment for the full rationale.
+ *
+ * A real character's `actions` are frozen copies of whatever spell/action
+ * data existed when they were added, not live references to
+ * `src/data/spells.ts` — so a character who added a spell before `damage`
+ * was removed from the schema still has both fields sitting in their
+ * persisted metadata, independent of what the current game data looks
+ * like. `damage` is only ever used here as a fallback, and only when
+ * `formula` is empty AND `damage` is not one of {@link PLACEHOLDER_DAMAGE}
+ * — the "game data guard" test in `formulaParser.test.ts` (removed
+ * alongside `damage` itself) already confirmed no entry in `spells.ts`
+ * ships in that shape, so this branch should never fire for official
+ * content; it exists only to not silently drop a real formula from a
+ * hand-edited or otherwise unusual character record, logging loudly if it
+ * ever does.
+ *
+ * @param action - One raw `actions` array element, of unknown shape.
+ */
+function migrateActionDamageField(action: unknown): unknown {
+  if (!isPlainObject(action)) return action; // not our problem — validateCharacterShape reports it
+  const { damage, ...rest } = action;
+  const existingFormula = typeof action.formula === "string" ? action.formula : "";
+  if (existingFormula) return { ...rest, formula: existingFormula };
+
+  const damageText = typeof damage === "string" ? damage : "";
+  if (damageText && !PLACEHOLDER_DAMAGE.has(damageText)) {
+    console.warn(
+      `[migrateCharacter] action "${String(action.name ?? "?")}" has an empty formula but a ` +
+        `non-placeholder damage ("${damageText}") — using damage as formula. This should not ` +
+        `happen for official content (see the removed "game data guard" test); if you see this ` +
+        `for real, the character's data is unusual and worth investigating.`,
+    );
+    return { ...rest, formula: damageText };
+  }
+  return { ...rest, formula: existingFormula }; // "" — genuinely not rollable
+}
+
+/**
+ * Re-applies `manualResolution` to one `inventory` array element by
+ * matching its `name` against {@link BASIC_EQUIPMENTS}, for non-custom
+ * items only. Part of `MIGRATIONS[1]` — see its comment for why this
+ * backfill is needed at all.
+ *
+ * Driven off `BASIC_EQUIPMENTS` itself, not a hardcoded name list — same
+ * reasoning as the reflective test in `formulaParser.test.ts` that
+ * verifies the flag is honored: a future equipment entry that sets
+ * `manualResolution` is covered automatically, nothing here needs updating
+ * when the data changes.
+ *
+ * @param item - One raw `inventory` array element, of unknown shape.
+ */
+function migrateInventoryManualResolution(item: unknown): unknown {
+  if (!isPlainObject(item)) return item;
+  if (item.isCustom === true) return item; // never touch custom items
+  const name = typeof item.name === "string" ? item.name : undefined;
+  const template = name !== undefined
+    ? BASIC_EQUIPMENTS.find((e) => e.name === name)
+    : undefined;
+  if (!template) return item; // no matching official entry — leave manualResolution as-is
+
+  const rest: Record<string, unknown> = { ...item };
+  delete rest.manualResolution;
+  return template.manualResolution === true
+    ? { ...rest, manualResolution: true }
+    : rest; // omit the key entirely, matching BASIC_EQUIPMENTS' own convention (unset, never false)
+}
+
+/**
+ * Renames the `armor` top-level field to `defense` (Nimble Core Rules 2nd
+ * printing renames the hero stat "Armor" to "Defense" — "Armor" now refers
+ * exclusively to worn equipment, unaffected by this rename). Part of
+ * `MIGRATIONS[1]` — see its comment for why this is folded into the same
+ * step as `initiativeAdvantage` rather than its own version bump.
+ *
+ * If `armor` is absent from the record entirely (a genuinely ancient
+ * record that never had the field at all — nothing shipped `defense` at
+ * any earlier version, so a record with `defense` already present but no
+ * `armor` isn't a real-world case), whatever `MIGRATIONS[0]` already
+ * backfilled onto `defense` (from the current, already-renamed
+ * `createDefaultCharacter()` template) is left untouched rather than
+ * overwritten with an empty object.
+ *
+ * @param character - The record being migrated, still keyed by `armor` if
+ * it has one at all.
+ */
+function migrateArmorToDefense(
+  character: Record<string, unknown>,
+): Record<string, unknown> {
+  const { armor, ...rest } = character;
+  if (armor === undefined) return character;
+
+  const armorObj: Record<string, unknown> = isPlainObject(armor) ? armor : {};
+  return {
+    ...rest,
+    defense: {
+      equippedItemId: armorObj.equippedItemId,
+      defenseBonus: typeof armorObj.defenseBonus === "number" ? armorObj.defenseBonus : 0,
+    },
+  };
 }
 
 /**
@@ -132,17 +248,61 @@ const MIGRATIONS: Migration[] = [
       createDefaultCharacter("", "") as unknown as Record<string, unknown>,
     ),
 
-  // v1 -> v2: adds `initiativeAdvantage`, the default roll mode pre-selected
-  // in the initiative DiceRollModal (Nimble Core Rules 2nd printing, p.15).
-  // A record from before this field existed has no opinion on it — default
-  // to "none" (no advantage/disadvantage), matching createDefaultCharacter.
-  // A small, explicit, single-field transform, per this file's header —
-  // NOT a call to fillMissingFields, which is legitimate only for v0 -> v1.
-  (character) => ({
-    ...character,
-    initiativeAdvantage:
-      "initiativeAdvantage" in character ? character.initiativeAdvantage : "none",
-  }),
+  // v1 -> v2: FOUR changes folded into this single step, not one each —
+  // see the note at the end of this comment for why.
+  //
+  // 1. Adds `initiativeAdvantage`, the default roll mode pre-selected in
+  //    the initiative DiceRollModal (Nimble Core Rules 2nd printing, p.15).
+  //    A record from before this field existed has no opinion on it —
+  //    default to "none" (no advantage/disadvantage), matching
+  //    createDefaultCharacter. This was the original, sole content of this
+  //    migration step.
+  // 2. Renames `armor` -> `defense` (see migrateArmorToDefense above): the
+  //    2nd printing renames the hero stat "Armor" to "Defense".
+  // 3. Drops the old `damage` field from every `actions` entry (see
+  //    migrateActionDamageField above): `formula` is now the single source
+  //    of truth for what's rollable, and `damage` was display-only flavor
+  //    text kept in sync by hand across ~80 spells.
+  // 4. Re-applies `manualResolution` to every non-custom `inventory` entry
+  //    by matching its name against BASIC_EQUIPMENTS (see
+  //    migrateInventoryManualResolution above): items added to a
+  //    character's sheet before that flag existed carry
+  //    `manualResolution: undefined` in their frozen metadata even though
+  //    the current game data has it set, which otherwise leaves them
+  //    stuck showing a working-looking roll button that throws.
+  //
+  // Folded into ONE existing step, deliberately breaking this file's own
+  // "leave every earlier migration function alone, append a new one
+  // instead" rule (see the file header): this is safe ONLY because v1 -> v2
+  // has never shipped — no build in circulation has ever written
+  // schemaVersion 2, so there is no real persisted record anywhere whose
+  // correctness depends on this step's old, narrower behavior. Folding
+  // avoids bumping CURRENT_SCHEMA_VERSION to 3 for a version transition
+  // that would look, from outside this codebase, like it never existed.
+  // A local test scene may already hold an old v2 shape (armor unrenamed,
+  // damage/manualResolution untouched) from before this change — since it's
+  // already stamped schemaVersion 2, it will NOT be re-migrated (migration
+  // only runs for schemaVersion < CURRENT_SCHEMA_VERSION); reset it by hand.
+  // This exception does not generalize: the NEXT migration after this one
+  // must go back to appending a new step, never editing this one or any
+  // other again once it's shipped.
+  (character) => {
+    const withDefense = migrateArmorToDefense(character);
+    const actions = Array.isArray(withDefense.actions)
+      ? withDefense.actions.map(migrateActionDamageField)
+      : withDefense.actions;
+    const inventory = Array.isArray(withDefense.inventory)
+      ? withDefense.inventory.map(migrateInventoryManualResolution)
+      : withDefense.inventory;
+
+    return {
+      ...withDefense,
+      actions,
+      inventory,
+      initiativeAdvantage:
+        "initiativeAdvantage" in withDefense ? withDefense.initiativeAdvantage : "none",
+    };
+  },
 ];
 
 /**
@@ -223,8 +383,8 @@ function findShapeMismatch(value: unknown, template: unknown, path: string): str
  * separate schema could.
  *
  * @remarks Known gaps, accepted rather than solved here:
- * - Fields genuinely optional on `NimbleCharacter` (`Armor.equippedItemId`,
- *   `Armor.defenseBonus`) are only checked when `createDefaultCharacter`
+ * - Fields genuinely optional on `NimbleCharacter` (`Defense.equippedItemId`,
+ *   `Defense.defenseBonus`) are only checked when `createDefaultCharacter`
  *   happens to give them a concrete value; nothing forces the template to
  *   have an opinion about a field that's allowed to be absent, so this
  *   check cannot promise coverage of every field the interface declares.

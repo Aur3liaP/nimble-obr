@@ -50,7 +50,7 @@ function formatDefenseBreakdown(
  * Derives the character's current defense value, plus a human-readable
  * arithmetic breakdown of how it was reached.
  *
- * If an inventory item is equipped as armor (`character.armor.equippedItemId`
+ * If an inventory item is equipped as armor (`character.defense.equippedItemId`
  * pointing at an item with `isArmor: true`), its formula is evaluated and
  * the flat `defenseBonus` is added on top. Otherwise, defense falls back to
  * DEX + the flat bonus (unarmored).
@@ -74,9 +74,9 @@ export function computeDefense(character: NimbleCharacter): {
   error?: string;
   breakdown?: string;
 } {
-  const bonus = character.armor.defenseBonus ?? 0;
+  const bonus = character.defense.defenseBonus ?? 0;
   const armorItem = character.inventory.find(
-    (i) => i.id === character.armor.equippedItemId && i.isArmor,
+    (i) => i.id === character.defense.equippedItemId && i.isArmor,
   );
 
   if (armorItem?.formula) {

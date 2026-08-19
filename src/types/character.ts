@@ -60,13 +60,22 @@ export interface Skills {
 }
 
 /**
- * Defense/armor configuration for a character.
+ * Defense configuration for a character.
+ *
+ * Nimble Core Rules 2nd printing renames the hero stat "Armor" to
+ * "Defense" — "Armor" now refers exclusively to worn equipment
+ * ({@link InventoryItem.isArmor}). This interface (renamed from `Armor` in
+ * the schema v2 migration, see `characterMigrations.ts`) carries
+ * `defenseBonus`, which comes from traits that are not armor at all
+ * (Dragonborn +1 Defense, Turtlefolk +4 Defense, Fearless -1 Defense,
+ * Ratfolk +2 Defense) — `character.armor.defenseBonus` was semantically
+ * wrong even before the printing renamed the stat.
  *
  * Defense is derived from whichever inventory item (with `isArmor: true`)
- * is referenced by `equippedItemId`, plus a flat `defenseBonus` (class
- * features, racial traits, etc.) — see `computeDefense` in CombatTab.
+ * is referenced by `equippedItemId`, plus the flat `defenseBonus` above —
+ * see `computeDefense` in `src/utils/computeDefense.ts`.
  */
-export interface Armor {
+export interface Defense {
   /** ID of the equipped armor InventoryItem */
   equippedItemId?: string;
   /** Flat bonus from class ability, racial trait, etc. */
@@ -108,15 +117,19 @@ export interface CharacterAction {
   type: ActionType;
   range: string;
   /**
-   * Display-only flavor text (e.g. "2d6+STR", "Special"), shown as-is in
-   * places like the book-notation preview in `AddSpellModal`'s spell list.
-   * Never parsed or read as a formula — `formula` is the single source of
-   * truth for what's rollable. An entry with a real damage formula that
-   * belongs here must have it copied into `formula` too, or it's silently
-   * unrollable (see the "game data guard" test in `formulaParser.test.ts`).
+   * The actual rollable formula, and the single source of truth for what's
+   * rollable. Empty means not rollable — no roll button, by design (e.g.
+   * Dragonform).
+   *
+   * There used to also be a `damage` field: display-only flavor text (e.g.
+   * "2d6+STR", "Special") carrying the book's own notation, kept in sync
+   * with `formula` by hand across ~80 spells. Removed in the schema v2
+   * migration (`characterMigrations.ts`) once `resolveFormulaDisplay`'s
+   * resolved value made it strictly less useful than `formula` itself —
+   * see that migration for how existing characters' frozen action copies
+   * (which may still have both fields in their persisted metadata) are
+   * handled on load.
    */
-  damage: string;
-  /** The actual rollable formula. Empty means not rollable — no roll button, by design (e.g. Dragonform). */
   formula: string;
   description: string;
   isFavorite: boolean;
@@ -140,7 +153,6 @@ export interface InventoryItem {
   isCustom?: boolean;
   /** If true, this item can be selected as worn armor in the defense calculation */
   isArmor?: boolean;
-  armorValue?: number;
   actionCost?: number;
   /**
    * If true, `formula` is flavor-text shorthand for the GM to interpret
@@ -183,7 +195,7 @@ export interface NimbleCharacter {
   saveMods: SaveMods;
   skills: Skills;
 
-  armor: Armor;
+  defense: Defense;
   initiativeBonus: number;
   /**
    * Default roll mode pre-selected in the initiative {@link DiceRollModal}
@@ -376,7 +388,7 @@ export function createDefaultCharacter(
       perception: 0,
       stealth: 0,
     },
-    armor: {
+    defense: {
       equippedItemId: undefined,
       defenseBonus: 0,
     },

@@ -4,7 +4,7 @@
  * {@link BASIC_EQUIPMENTS} or create a custom item).
  *
  * Armor items added here (`isArmor: true`) become selectable in the
- * Combat tab's defense calculator via `character.armor.equippedItemId`.
+ * Combat tab's defense calculator via `character.defense.equippedItemId`.
  */
 
 import { useState, useMemo } from "react";
@@ -196,7 +196,6 @@ function AddItemModal({
       isFavorite: false,
       isCustom: false,
       isArmor: template.isArmor ?? false,
-      armorValue: template.armorValue,
       formula: template.formula,
       manualResolution: template.manualResolution,
       actionCost: template.actionCost,

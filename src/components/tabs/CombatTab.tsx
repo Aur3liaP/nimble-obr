@@ -160,7 +160,7 @@ export function CombatTab({
   } = computeDefense(character);
   const armorItems = character.inventory.filter((i) => i.isArmor);
   const equippedArmorItem = armorItems.find(
-    (i) => i.id === character.armor.equippedItemId,
+    (i) => i.id === character.defense.equippedItemId,
   );
   const combatActions = character.actions.filter((a) => a.type !== "spell");
   const favorites = [
@@ -448,11 +448,11 @@ export function CombatTab({
             </span>
             {canEdit ? (
               <select
-                value={character.armor.equippedItemId ?? ""}
+                value={character.defense.equippedItemId ?? ""}
                 onChange={(e) =>
                   onUpdate({
-                    armor: {
-                      ...character.armor,
+                    defense: {
+                      ...character.defense,
                       equippedItemId: e.target.value || undefined,
                     },
                   })
@@ -490,11 +490,11 @@ export function CombatTab({
               <span className="text-[10px] text-stone-500">Extra bonus:</span>
               <input
                 type="number"
-                value={character.armor.defenseBonus ?? 0}
+                value={character.defense.defenseBonus ?? 0}
                 onChange={(e) =>
                   onUpdate({
-                    armor: {
-                      ...character.armor,
+                    defense: {
+                      ...character.defense,
                       defenseBonus: parseInt(e.target.value) || 0,
                     },
                   })
@@ -791,7 +791,7 @@ function ActionRow({
   // onUpdate at all, so onCommit is a no-op there — editPanel itself is
   // never rendered for those rows either.
   const formulaField = useFormulaField(action.formula, (v) =>
-    onUpdate?.({ formula: v, damage: v }),
+    onUpdate?.({ formula: v }),
   );
 
   const handleHeaderClick = () => {
@@ -948,14 +948,14 @@ function AddActionModal({
     name: "",
     type: "melee" as CharacterAction["type"],
     range: "",
-    damage: "",
+    formula: "",
     description: "",
   });
   const set = (k: string, v: string) => setForm((p) => ({ ...p, [k]: v }));
 
   // Local form state, nothing here is persisted until "Add" is clicked —
   // onCommit just updates local form state.
-  const formulaField = useFormulaField(form.damage, (v) => set("damage", v));
+  const formulaField = useFormulaField(form.formula, (v) => set("formula", v));
 
   return (
     <div
@@ -1024,7 +1024,6 @@ function AddActionModal({
               onAdd({
                 id: `a-${crypto.randomUUID()}`,
                 ...form,
-                formula: form.damage,
                 isFavorite: false,
                 isCustom: true,
               });

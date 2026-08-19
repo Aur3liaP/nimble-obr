@@ -48,7 +48,7 @@ describe("computeDefense — breakdown string with a negative stat and a negativ
     const char = makeCharacter({
       stats: { str: 0, dex: -2, int: 0, wil: 0 },
       inventory: [{ ...GARB_MINOR_ENCHANTMENT, id: "armor-1", isEquipped: true }],
-      armor: { equippedItemId: "armor-1", defenseBonus: -2 },
+      defense: { equippedItemId: "armor-1", defenseBonus: -2 },
     });
 
     const result = computeDefense(char);
@@ -61,7 +61,7 @@ describe("computeDefense — breakdown string with a negative stat and a negativ
   it("renders a clean breakdown for the unarmored case with negative DEX and a negative bonus", () => {
     const char = makeCharacter({
       stats: { str: 0, dex: -2, int: 0, wil: 0 },
-      armor: { equippedItemId: undefined, defenseBonus: -2 },
+      defense: { equippedItemId: undefined, defenseBonus: -2 },
     });
 
     const result = computeDefense(char);
@@ -74,7 +74,7 @@ describe("computeDefense — breakdown string with a negative stat and a negativ
     const char = makeCharacter({
       stats: { str: 0, dex: 2, int: 0, wil: 0 },
       inventory: [{ ...GARB_MINOR_ENCHANTMENT, id: "armor-1", isEquipped: true }],
-      armor: { equippedItemId: "armor-1", defenseBonus: 2 },
+      defense: { equippedItemId: "armor-1", defenseBonus: 2 },
     });
 
     const result = computeDefense(char);
@@ -85,7 +85,7 @@ describe("computeDefense — breakdown string with a negative stat and a negativ
   it("omits the bonus term entirely when it's zero, rather than showing '+0'", () => {
     const char = makeCharacter({
       stats: { str: 0, dex: 2, int: 0, wil: 0 },
-      armor: { equippedItemId: undefined, defenseBonus: 0 },
+      defense: { equippedItemId: undefined, defenseBonus: 0 },
     });
 
     const result = computeDefense(char);
@@ -107,7 +107,7 @@ describe("computeDefense — breakdown string with a negative stat and a negativ
           formula: "3+NOTAREALVARIABLE",
         },
       ],
-      armor: { equippedItemId: "armor-1", defenseBonus: -2 },
+      defense: { equippedItemId: "armor-1", defenseBonus: -2 },
     });
 
     const result = computeDefense(char);

@@ -7,7 +7,7 @@
  * it shouldn't have.
  */
 
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { createDefaultCharacter, CURRENT_SCHEMA_VERSION } from "../types/character";
 import {
   applyMigrations,
@@ -70,9 +70,9 @@ describe("migrateCharacter — versionless and v0 records", () => {
 
   it("backfills several missing top-level fields and a missing field inside a sub-object", () => {
     const base = createDefaultCharacter("token-1", "owner-1") as unknown as Record<string, unknown>;
-    const brokenArmor = omit(base.armor as unknown as Record<string, unknown>, ["defenseBonus"]);
+    const brokenDefense = omit(base.defense as unknown as Record<string, unknown>, ["defenseBonus"]);
     const v0 = omit(
-      { ...base, armor: brokenArmor },
+      { ...base, defense: brokenDefense },
       ["schemaVersion", "inventoryNotes", "battleNotes", "combat"],
     );
 
@@ -86,7 +86,7 @@ describe("migrateCharacter — versionless and v0 records", () => {
     expect(result.character.combat).toEqual({ actionsRemaining: 3, initiativeResult: null });
     // Missing field inside a present sub-object backfilled too, without
     // dropping the rest of that sub-object.
-    expect(result.character.armor).toEqual({ equippedItemId: undefined, defenseBonus: 0 });
+    expect(result.character.defense).toEqual({ equippedItemId: undefined, defenseBonus: 0 });
   });
 
   it("does not replace an existing falsy value (0 or empty string) with the default", () => {
@@ -131,6 +131,209 @@ describe("migrateCharacter — v1 -> v2 (initiativeAdvantage)", () => {
     expect(result.status).toBe("ok");
     if (result.status !== "ok") return;
     expect(result.character.initiativeAdvantage).toBe("advantage");
+  });
+});
+
+describe("migrateCharacter — v1 -> v2 (armor -> defense rename)", () => {
+  // Nimble Core Rules 2nd printing renames the hero stat "Armor" to
+  // "Defense". These fixtures simulate genuine old-on-disk data: a v1
+  // record keyed by `armor` (the old field name), never `defense`.
+
+  it("renames a fully-populated armor field to defense", () => {
+    const base = createDefaultCharacter("token-1", "owner-1") as unknown as Record<string, unknown>;
+    const v1 = {
+      ...omit(base, ["defense"]),
+      schemaVersion: 1,
+      armor: { equippedItemId: "item-1", defenseBonus: 3 },
+    };
+    const result = migrateCharacter(v1);
+    expect(result.status).toBe("ok");
+    if (result.status !== "ok") return;
+    expect(result.character.defense).toEqual({ equippedItemId: "item-1", defenseBonus: 3 });
+    expect(result.character).not.toHaveProperty("armor");
+  });
+
+  it("backfills a missing defenseBonus to 0 while renaming, preserving equippedItemId", () => {
+    const base = createDefaultCharacter("token-1", "owner-1") as unknown as Record<string, unknown>;
+    const v1 = {
+      ...omit(base, ["defense"]),
+      schemaVersion: 1,
+      armor: { equippedItemId: "item-1" }, // defenseBonus missing entirely — genuinely old/incomplete data
+    };
+    const result = migrateCharacter(v1);
+    expect(result.status).toBe("ok");
+    if (result.status !== "ok") return;
+    expect(result.character.defense).toEqual({ equippedItemId: "item-1", defenseBonus: 0 });
+  });
+
+  it("still produces a valid default defense for a record with neither armor nor defense at all", () => {
+    // A genuinely ancient record predating the armor/defense field
+    // entirely. v0 -> v1's fillMissingFields backfills a default `defense`
+    // (from the current, already-renamed createDefaultCharacter template);
+    // v1 -> v2's rename step must leave that alone rather than clobber it
+    // with an empty object because it saw no `armor` key to rename.
+    const base = createDefaultCharacter("token-1", "owner-1") as unknown as Record<string, unknown>;
+    const v0 = omit(base, ["defense", "schemaVersion", "combat"]);
+    const result = migrateCharacter(v0);
+    expect(result.status).toBe("ok");
+    if (result.status !== "ok") return;
+    expect(result.character.defense).toEqual({ equippedItemId: undefined, defenseBonus: 0 });
+  });
+});
+
+describe("migrateCharacter — v1 -> v2 (CharacterAction.damage removal)", () => {
+  // `damage` was display-only flavor text, kept in sync with `formula` by
+  // hand across ~80 spells; removed from the schema once formula's
+  // resolved display made it strictly less useful. A real character's
+  // `actions` are frozen copies, so a character who added a spell before
+  // this removal still has both fields in their persisted metadata —
+  // these fixtures simulate every shape that data can take.
+
+  function migrateOneAction(action: Record<string, unknown>): Record<string, unknown> {
+    const base = createDefaultCharacter("token-1", "owner-1") as unknown as Record<string, unknown>;
+    const v1 = { ...base, schemaVersion: 1, actions: [action] };
+    const result = migrateCharacter(v1);
+    expect(result.status).toBe("ok");
+    if (result.status !== "ok") throw new Error("expected migration to succeed");
+    return (result.character.actions as unknown as Record<string, unknown>[])[0];
+  }
+
+  it("formula only: keeps formula, drops damage (never had one)", () => {
+    const migrated = migrateOneAction({ id: "a1", name: "Test", type: "melee", formula: "1d8+STR" });
+    expect(migrated.formula).toBe("1d8+STR");
+    expect(migrated).not.toHaveProperty("damage");
+  });
+
+  it("damage only (no formula key at all): promotes damage to formula", () => {
+    const migrated = migrateOneAction({ id: "a1", name: "Test", type: "melee", damage: "2d6+STR" });
+    expect(migrated.formula).toBe("2d6+STR");
+    expect(migrated).not.toHaveProperty("damage");
+  });
+
+  it("both set: formula wins, damage is dropped without being consulted", () => {
+    const migrated = migrateOneAction({
+      id: "a1",
+      name: "Test",
+      type: "melee",
+      formula: "1d8+STR",
+      damage: "1d8+STR (book notation, possibly stale)",
+    });
+    expect(migrated.formula).toBe("1d8+STR");
+    expect(migrated).not.toHaveProperty("damage");
+  });
+
+  it("damage '0' with empty formula: treated as a placeholder, formula stays empty (e.g. True Strike, Ice Disk)", () => {
+    const migrated = migrateOneAction({ id: "a1", name: "True Strike", type: "spell", formula: "", damage: "0" });
+    expect(migrated.formula).toBe("");
+    expect(migrated).not.toHaveProperty("damage");
+  });
+
+  it("damage 'Special' with empty formula: treated as a placeholder, formula stays empty (e.g. pre-part-1b Dragonform)", () => {
+    const migrated = migrateOneAction({
+      id: "a1",
+      name: "Dragonform",
+      type: "spell",
+      formula: "",
+      damage: "Special",
+    });
+    expect(migrated.formula).toBe("");
+    expect(migrated).not.toHaveProperty("damage");
+  });
+
+  it("both empty: formula stays empty, genuinely not rollable", () => {
+    const migrated = migrateOneAction({ id: "a1", name: "Test", type: "spell", formula: "", damage: "" });
+    expect(migrated.formula).toBe("");
+    expect(migrated).not.toHaveProperty("damage");
+  });
+
+  it("the should-never-happen shape (non-placeholder damage, empty formula) prefers damage and logs a warning", () => {
+    // Mirrors the removed "game data guard" test from formulaParser.test.ts,
+    // which confirmed no BASE_SPELLS entry ships in this shape — this
+    // covers the same concern at the migration level, for a character's
+    // own (possibly hand-edited or otherwise unusual) frozen data.
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const migrated = migrateOneAction({
+      id: "a1",
+      name: "Weird Entry",
+      type: "spell",
+      formula: "",
+      damage: "3d6",
+    });
+    expect(migrated.formula).toBe("3d6");
+    expect(migrated).not.toHaveProperty("damage");
+    expect(warnSpy).toHaveBeenCalledTimes(1);
+    expect(warnSpy.mock.calls[0][0]).toContain("Weird Entry");
+    warnSpy.mockRestore();
+  });
+});
+
+describe("migrateCharacter — v1 -> v2 (InventoryItem.manualResolution backfill)", () => {
+  // Items added to a character's sheet before manualResolution's read path
+  // was wired up carry manualResolution: undefined in their frozen
+  // metadata, showing a working-looking roll button that throws — even
+  // though the current BASIC_EQUIPMENTS data has the flag set. Driven off
+  // BASIC_EQUIPMENTS itself (see migrateInventoryManualResolution's own
+  // comment), not a hardcoded name list.
+
+  function migrateOneItem(item: Record<string, unknown>): Record<string, unknown> {
+    const base = createDefaultCharacter("token-1", "owner-1") as unknown as Record<string, unknown>;
+    const v1 = { ...base, schemaVersion: 1, inventory: [item] };
+    const result = migrateCharacter(v1);
+    expect(result.status).toBe("ok");
+    if (result.status !== "ok") throw new Error("expected migration to succeed");
+    return (result.character.inventory as unknown as Record<string, unknown>[])[0];
+  }
+
+  it("backfills manualResolution: true on a non-custom item matching a manualResolution BASIC_EQUIPMENTS entry by name", () => {
+    const migrated = migrateOneItem({
+      id: "i1",
+      name: "Weapon of Animosity",
+      description: "",
+      slots: 1,
+      quantity: 1,
+      isEquipped: false,
+      isCustom: false,
+    });
+    expect(migrated.manualResolution).toBe(true);
+  });
+
+  it("does not set manualResolution on a non-custom item matching a normal (non-manualResolution) entry", () => {
+    const migrated = migrateOneItem({
+      id: "i1",
+      name: "Longsword",
+      description: "",
+      slots: 1,
+      quantity: 1,
+      isEquipped: false,
+      isCustom: false,
+    });
+    expect(migrated).not.toHaveProperty("manualResolution");
+  });
+
+  it("never touches a custom item, even if its name happens to match a manualResolution entry", () => {
+    const migrated = migrateOneItem({
+      id: "i1",
+      name: "Weapon of Animosity",
+      description: "",
+      slots: 1,
+      quantity: 1,
+      isEquipped: false,
+      isCustom: true,
+    });
+    expect(migrated).not.toHaveProperty("manualResolution");
+  });
+
+  it("leaves a non-custom item with no matching BASIC_EQUIPMENTS entry untouched", () => {
+    const migrated = migrateOneItem({
+      id: "i1",
+      name: "Homebrew Trinket",
+      description: "",
+      slots: 1,
+      quantity: 1,
+      isEquipped: false,
+      isCustom: false,
+    });
+    expect(migrated).not.toHaveProperty("manualResolution");
   });
 });
 
@@ -289,11 +492,12 @@ describe("validateCharacterShape", () => {
 
   it("does not flag a genuinely optional field left absent", () => {
     const character = createDefaultCharacter("t", "o");
-    const armorWithoutOptionalField = omit(character.armor as unknown as Record<string, unknown>, [
-      "equippedItemId",
-    ]);
+    const defenseWithoutOptionalField = omit(
+      character.defense as unknown as Record<string, unknown>,
+      ["equippedItemId"],
+    );
     expect(
-      validateCharacterShape({ ...character, armor: armorWithoutOptionalField }),
+      validateCharacterShape({ ...character, defense: defenseWithoutOptionalField }),
     ).toBeNull();
   });
 });
