@@ -107,7 +107,16 @@ export interface CharacterAction {
   name: string;
   type: ActionType;
   range: string;
+  /**
+   * Display-only flavor text (e.g. "2d6+STR", "Special"), shown as-is in
+   * places like the book-notation preview in `AddSpellModal`'s spell list.
+   * Never parsed or read as a formula — `formula` is the single source of
+   * truth for what's rollable. An entry with a real damage formula that
+   * belongs here must have it copied into `formula` too, or it's silently
+   * unrollable (see the "game data guard" test in `formulaParser.test.ts`).
+   */
   damage: string;
+  /** The actual rollable formula. Empty means not rollable — no roll button, by design (e.g. Dragonform). */
   formula: string;
   description: string;
   isFavorite: boolean;
@@ -117,15 +126,6 @@ export interface CharacterAction {
   slots?: number;
   isCustom?: boolean;
   actionCost?: number;
-  /**
-   * If true, `formula` is flavor-text shorthand for the GM to interpret
-   * manually rather than a formula meant to be evaluated or rolled by the
-   * engine. Mirrors {@link InventoryItem.manualResolution}; not currently
-   * set on any spell in src/data/spells.ts, but the field exists so a
-   * future flavor-only spell formula has somewhere to be marked instead of
-   * failing the game-data validation test with no way to exclude it.
-   */
-  manualResolution?: boolean;
 }
 
 export interface InventoryItem {

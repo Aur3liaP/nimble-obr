@@ -14,6 +14,7 @@ import type {
   DiceRollRequest,
 } from "../../types/character";
 import { DiceRollModal } from "../ui/DiceRollModal";
+import { resolveFormulaDisplay, isEngineRollableItem } from "../../utils/formulaParser";
 import { BASIC_EQUIPMENTS } from "../../data/equipment";
 import { BentoSection } from "../ui/common/BentoSection";
 import { TextAction } from "../ui/common/RowActions";
@@ -197,6 +198,7 @@ function AddItemModal({
       isArmor: template.isArmor ?? false,
       armorValue: template.armorValue,
       formula: template.formula,
+      manualResolution: template.manualResolution,
       actionCost: template.actionCost,
     });
   };
@@ -576,6 +578,7 @@ export function InventoryTab({
               <ItemRow
                 key={item.id}
                 item={item}
+                character={character}
                 canEdit={canEdit}
                 isGM={isGM}
                 isExpanded={expandedId === item.id}
@@ -583,7 +586,7 @@ export function InventoryTab({
                 onRowClick={() => handleRowClick(item.id)}
                 onEditToggle={() => handleEditToggle(item.id)}
                 onRoll={
-                  item.formula
+                  isEngineRollableItem(item)
                     ? () =>
                         setRollPending({
                           label: item.name,
@@ -673,6 +676,7 @@ export function InventoryTab({
  * the original behavior).
  *
  * @param item - The item to render.
+ * @param character - Used to resolve the formula's display string (variables substituted, dice kept) — same as ActionRow/SpellRow.
  * @param canEdit - Gates quantity stepper, favorite toggle, roll button, edit, and delete.
  * @param isExpanded - Whether the description panel is open.
  * @param isEditing - Whether the inline edit form is open.
@@ -686,6 +690,7 @@ export function InventoryTab({
  */
 function ItemRow({
   item,
+  character,
   canEdit,
   isExpanded,
   isEditing,
@@ -698,6 +703,7 @@ function ItemRow({
   onUpdate,
 }: {
   item: InventoryItem;
+  character: NimbleCharacter;
   canEdit: boolean;
   isGM: boolean;
   isExpanded: boolean;
@@ -722,6 +728,20 @@ function ItemRow({
   const formulaField = useFormulaField(item.formula ?? "", (v) =>
     onUpdate({ formula: v || undefined }),
   );
+
+  // Resolved display string (variables substituted, dice kept), matching
+  // ActionRow/SpellRow — this row used to show item.formula raw (e.g.
+  // "1d4 + DEX", "6 + Math.min(DEX, 2)"), unlike every other tab.
+  //
+  // `manualResolution: true` is the deliberate exception: that text (e.g.
+  // "WeaponDamage + 1d4") is flavor-text shorthand for the GM to interpret
+  // by hand, not a formula this parser can evaluate — it must never reach
+  // resolveFormulaDisplay (which would report it as a broken formula, not
+  // what it actually is) or the roll button (gated separately, see onRoll
+  // above this component).
+  const { display: resolvedFormula, error: formulaError } = item.manualResolution
+    ? { display: item.formula ?? "", error: undefined }
+    : resolveFormulaDisplay(item.formula ?? "", character);
 
   const editPanel = isEditing ? (
     <div className="px-3 pb-3 border-t border-emerald-800/30 pt-2 flex flex-col gap-2">
@@ -782,7 +802,8 @@ function ItemRow({
     <ItemRowBase
       name={item.name}
       icon={item.isArmor ? "🛡" : undefined}
-      formula={item.formula}
+      formula={resolvedFormula}
+      formulaError={formulaError}
       description={item.description}
       isExpanded={isExpanded}
       onRowClick={onRowClick}

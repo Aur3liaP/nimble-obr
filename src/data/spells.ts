@@ -101,7 +101,7 @@ export const BASE_SPELLS: SpellTemplate[] = [
     spellSchool: "fire" as SpellSchool,
     actionCost: 3,
     range: "self",
-    damage: "Special",
+    damage: "",
     formula: "",
     description:
       "Gain Flame Barrier. At end of this turn and next, cast Pyroclasm for free. Upcast: Upcast Flame Barrier and Pyroclasm.",
@@ -114,7 +114,7 @@ export const BASE_SPELLS: SpellTemplate[] = [
     spellSchool: "fire" as SpellSchool,
     actionCost: 5,
     range: "self",
-    damage: "Special",
+    damage: "",
     formula: "",
     description:
       "Transform into Huge dragon (Fly 12, Level Armor, 10xLevel Temp HP). Includes Tooth & Claw and Immolating Breath. Duration: Temp HP (max 10min).",
@@ -558,7 +558,7 @@ export const BASE_SPELLS: SpellTemplate[] = [
     spellSchool: "radiant" as SpellSchool,
     actionCost: 1,
     range: "self",
-    damage: "Special",
+    damage: "",
     formula: "",
     description: "Reaction: Defend for free. Reflect damage blocked. Upcast: +5 Armor",
     manaCost: 3,
@@ -596,7 +596,7 @@ export const BASE_SPELLS: SpellTemplate[] = [
     spellSchool: "radiant" as SpellSchool,
     actionCost: 1,
     range: "4",
-    damage: "Special",
+    damage: "",
     formula: "",
     description:
       "Reduce self to 0 HP. Heal others for your max HP. Can revive. Upcast: +4 Reach.",

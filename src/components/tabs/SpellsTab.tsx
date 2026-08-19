@@ -197,7 +197,7 @@ function AddSpellModal({
       type: "spell",
       range: template.range,
       damage: template.damage,
-      formula: template.formula || template.damage,
+      formula: template.formula,
       description: template.description,
       isFavorite: false,
       isCustom: false,
@@ -661,7 +661,7 @@ export function SpellsTab({
                 onRoll={() =>
                   setRollPending({
                     label: spell.name,
-                    formula: spell.formula || spell.damage,
+                    formula: spell.formula,
                   })
                 }
                 onToggleFavorite={() =>
@@ -786,11 +786,11 @@ function SpellRow({
     : "text-violet-300 border-violet-800/60 bg-violet-950/30";
   const schoolIcon = school ? SCHOOL_ICONS[school] : "✨";
   const { display: resolvedFormula, error: formulaError } =
-    resolveFormulaDisplay(spell.formula || spell.damage, character);
+    resolveFormulaDisplay(spell.formula, character);
   // Called unconditionally (not only while isEditing) so a discard
   // warning from closeEdit() survives the edit panel unmounting and can
   // still render in the collapsed view below.
-  const formulaField = useFormulaField(spell.formula ?? spell.damage ?? "", (v) =>
+  const formulaField = useFormulaField(spell.formula, (v) =>
     onUpdate({ formula: v, damage: v }),
   );
 
@@ -859,7 +859,7 @@ function SpellRow({
             canEdit={canEdit}
             onToggle={onToggleFavorite}
           />
-          {canEdit && (spell.formula || spell.damage) && (
+          {canEdit && spell.formula && (
             <RollButton onClick={onRoll} accent="violet" />
           )}
         </div>

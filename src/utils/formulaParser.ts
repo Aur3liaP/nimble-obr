@@ -32,6 +32,7 @@
  */
 
 import type { NimbleCharacter, Skills, Stats } from "../types/character";
+import { formatModifier } from "./formatModifier";
 
 // ─────────────────────────────────────────────────────────────────
 // Safety limits — prevent pathological input from a player/GM-typed
@@ -255,12 +256,50 @@ export function listFormulaVariables(): FormulaVariableInfo[] {
  * Also normalizes `Math.floor(`/`Math.ceil(`/`Math.min(`/`Math.max(` to the
  * lowercase tokens the parser understands.
  *
+ * Purely semantic: this is a substitution step, one stage of the pipeline
+ * every formula (rolled or merely displayed) passes through — it does NOT
+ * also clean up the resulting string for human display. A substituted
+ * negative value can legitimately produce a glued-together sign (`"3+DEX"`
+ * at DEX -2 → `"3+-2"`); that's expected output here, not a bug in this
+ * function. `Parser.parseUnary` already parses that correctly (the
+ * chained-sign fix from part 1c), so every caller that evaluates this
+ * output via `safeEval` — which is every caller in this file — gets the
+ * right VALUE regardless. A caller that instead DISPLAYS this string
+ * directly, without evaluating it first, is responsible for running it
+ * through {@link normalizeSubstitutedSignsForDisplay} itself — seePart 1e
+ * tried normalizing here, inside this function, which briefly worked but
+ * mixed a presentation concern into a semantic one; part 1f split it back
+ * out. Do not re-inline it — see that function's own doc for why the two
+ * are not redundant.
+ *
+ * Exported for one additional use beyond the internal pipeline: a caller
+ * that wants a substituted-but-NOT-arithmetically-collapsed formula string
+ * for display (e.g. `computeDefense`'s breakdown, showing armor "3+DEX"
+ * at DEX 2 as "3+2" rather than collapsing straight to "5" the way
+ * {@link resolveFormulaDisplay}'s no-dice branch does) — deliberately not
+ * duplicated as a second substitution implementation elsewhere, per the
+ * "VARIABLE_TABLE is the logic, not a description of it" rule this file
+ * already follows for every other consumer.
+ *
+ * @remarks HAS AN EXTERNAL CONSUMER outside this module (`computeDefense`
+ * in `src/utils/computeDefense.ts`, see above) — do not treat this as a
+ * private pipeline-internal helper and "clean it up" back to unexported,
+ * and do not change its output shape (lowercased, arithmetic-preserving,
+ * dice notation untouched, signs NOT normalized for display) without
+ * checking that call site too. Every other function in this file that
+ * external code relies on (`resolveFormulaDisplay`, `evalFormula`,
+ * `validateFormulaSyntax`, `buildContext`, `VARIABLE_TABLE` itself) is
+ * exported for the exact same reason: a hand-duplicated reimplementation
+ * elsewhere is exactly the "documented but not actually the source of
+ * truth" failure mode this file's own header warns about.
+ *
  * @param formula - Raw formula string as typed by the user (e.g. "1d8+STR").
  * @param ctx - Context built by {@link buildContext}.
  * @returns The formula with variables replaced, lowercased, ready for
- * dice/arithmetic parsing.
+ * dice/arithmetic parsing. May contain a glued `"+-"`/`"--"` sign pair —
+ * see the remarks above.
  */
-function substituteVariables(formula: string, ctx: FormulaContext): string {
+export function substituteVariables(formula: string, ctx: FormulaContext): string {
   if (formula.length > MAX_FORMULA_LENGTH) {
     throw new FormulaError(
       `Formula too long (${formula.length} chars, max ${MAX_FORMULA_LENGTH}).`,
@@ -281,6 +320,73 @@ function substituteVariables(formula: string, ctx: FormulaContext): string {
   f = f.toLowerCase(); // parser works in lowercase
 
   return f;
+}
+
+/**
+ * Collapses a sign glued directly onto a negative value into a single
+ * sign, for DISPLAY only: `"+-2"` → `"-2"`, `"--2"` → `"+2"`, and the same
+ * with arbitrary whitespace around either sign (`"+ -2"`, `"+  -2"`,
+ * `"- -2"` → `"-2"`, `"-2"`, `"+2"` respectively — see the part 1g note
+ * below for why whitespace tolerance is required). Not part of
+ * {@link substituteVariables}'s own pipeline — call this explicitly at
+ * whatever display call site shows a substituted-but-unevaluated formula
+ * string (currently `computeDefense`'s breakdown; any future one showing
+ * a substituted string directly needs the same call).
+ *
+ * @remarks TWO mechanisms handle a formula's chained/glued signs in this
+ * codebase, and neither is redundant with the other — they serve
+ * different needs at different pipeline stages:
+ * - `Parser.parseUnary` (part 1c) makes `"1d8+-1"` EVALUATE to the right
+ *   number. Mandatory, load-bearing: every roll and every resolved value
+ *   in this app depends on it. Do not touch it here.
+ * - This function makes a string that's shown WITHOUT evaluation (no
+ *   `safeEval` in between) READ correctly. Purely cosmetic — nothing
+ *   downstream depends on this function's output being further parsed or
+ *   evaluated, it exists only for a human reading the string.
+ *
+ * Part 1e put this same collapsing logic INSIDE `substituteVariables`
+ * itself, reasoning that a single choke point would cover every current
+ * and future consumer "for free." Two problems with that, not one: first,
+ * it mixed a presentation concern into a semantic pipeline stage that
+ * `evalFormula`/`rollFormula`/`resolveFormulaDisplay` depend on and should
+ * be able to trust stays purely semantic. Second — and this is what
+ * actually kept the bug alive — it wasn't even a complete fix:
+ * `computeDefense`'s breakdown builds its final string by concatenating
+ * `substituteVariables`'s (by-then-normalized) armor term with a
+ * SEPARATELY formatted bonus term (`formatModifier`), appended AFTER
+ * normalization already ran. The bonus's own sign, and the join between
+ * the two terms, were never covered — normalizing inside
+ * `substituteVariables` only ever normalized the armor term in isolation.
+ * Part 1f moved normalization out to here, applied explicitly to the
+ * FULLY ASSEMBLED breakdown string (armor term + bonus term + total) in
+ * `computeDefense`, which is what actually fixes it — see that function's
+ * own comment.
+ *
+ * Only these two sequences arise from substitution in practice: a literal
+ * `+`/`-` operator immediately followed by a substituted value that
+ * happens to be negative (contributing its own leading `-`). A substituted
+ * positive value never contributes a leading `+` (`String(3)` is `"3"`,
+ * not `"+3"`), so `"-+"`/`"++"` never arise this way and aren't handled
+ * here.
+ *
+ * Part 1g: part 1f's regex (`/\+-/`, `/--/`) matched only sign characters
+ * glued with zero whitespace between them, and its own test used an
+ * idealized armor formula (`"3+DEX"`, no space) as input. Real armor data
+ * in `equipment.ts` is written with spaces (`"3 + DEX"`), so
+ * `substituteVariables` actually produces `"3 + -2"` — a space between the
+ * literal `+` and the substituted `-2` — which the old regex never
+ * matched, leaving the bug reproducible in OBR despite the part 1f test
+ * suite being green. Fixed by swallowing arbitrary whitespace around both
+ * signs and re-emitting a tight, space-free join; every existing zero-
+ * whitespace case still collapses the same way. Always verify a
+ * regex-over-a-string fix like this against the actual data the app
+ * produces, not a hand-typed idealization of it.
+ *
+ * @param s - A substituted (and, for a fully-assembled display string like
+ * `computeDefense`'s breakdown, further composed) formula string.
+ */
+export function normalizeSubstitutedSignsForDisplay(s: string): string {
+  return s.replace(/\s*\+\s*-\s*/g, "-").replace(/\s*-\s*-\s*/g, "+");
 }
 
 // ─────────────────────────────────────────────────────────────────
@@ -650,7 +756,7 @@ class Parser {
   }
 
   /**
-   * unary = ('-' | '+') primary | primary
+   * unary = ('-' | '+') unary | primary
    *
    * The explicit '+' branch matters now that {@link parsePrimary} throws
    * instead of returning 0 on an unrecognized token: a leading '+' in
@@ -660,17 +766,33 @@ class Parser {
    * 0, which parseExpr's own '+' handling then happened to add onto. That
    * accidental path is gone, so '+' needs real unary handling, symmetric
    * with '-', instead of relying on the unknown-token fallback.
+   *
+   * Both branches recurse into `parseUnary()`, not `parsePrimary()` — a
+   * negative stat substituted into a formula produces a CHAINED sign right
+   * after the formula's own operator: "1d8+STR" with STR=-1 substitutes to
+   * "1d8+-1", and once the dice part is split off, `safeEval` sees the
+   * remainder as a leading "+-1". The old `parsePrimary()`-only version
+   * consumed the outer sign and handed the *rest* straight to
+   * `parsePrimary`, which has no idea what to do with the second sign
+   * character still sitting at the front ("-1") and threw "Unrecognized
+   * token". Recursing into `parseUnary` lets each sign consume itself and
+   * hand off to the next, so any run of leading signs ("+-1", "--1",
+   * "-+1", ...) resolves correctly instead of only tolerating exactly one.
+   * This is not initiative-specific: any formula whose trailing modifier
+   * ends up glued to a negative substituted value hits the same case — the
+   * standard array (+2/+2/+0/-1) and Min-Max (+3/+1/-1/-1) both put a
+   * negative stat in play for most parties.
    */
   private parseUnary(): number {
     this.enterDepth();
     try {
       if (this.peek() === "-") {
         this.consume();
-        return -this.parsePrimary();
+        return -this.parseUnary();
       }
       if (this.peek() === "+") {
         this.consume();
-        return this.parsePrimary();
+        return this.parseUnary();
       }
       return this.parsePrimary();
     } finally {
@@ -1297,6 +1419,37 @@ export function formulaSyntaxError(formula: string): string | undefined {
 }
 
 /**
+ * Whether an inventory item's `formula` is meant to be evaluated or rolled
+ * by this engine at all.
+ *
+ * `false` for an item with no formula (nothing to roll), and `false` for
+ * `manualResolution: true` — the formula there is flavor-text shorthand
+ * for the GM to interpret by hand (e.g. "WeaponDamage + 1d4" on a magic
+ * weapon, referencing whatever weapon it's enchanting, a concept this
+ * parser has no variable for). That text is neither valid nor broken; it's
+ * simply not for the engine, so it must never reach `resolveFormulaDisplay`
+ * or a roll button.
+ *
+ * This is the single choke point a call site checks before offering a roll
+ * button or calling `resolveFormulaDisplay` on an `InventoryItem` — see the
+ * CLAUDE.md note on this being the fifth instance of a field documented in
+ * prose (`manualResolution`'s own JSDoc) that nothing actually read. A new
+ * call site that forgets to check this flag directly and instead only
+ * checks `formula` truthiness would silently regain the bug; route through
+ * here instead.
+ *
+ * @param item - An inventory item or item template — only `formula`/
+ * `manualResolution` are read, so this also accepts `BASIC_EQUIPMENTS`
+ * template entries directly.
+ */
+export function isEngineRollableItem(item: {
+  formula?: string;
+  manualResolution?: boolean;
+}): boolean {
+  return !!item.formula && !item.manualResolution;
+}
+
+/**
  * Resolves a formula to a human-readable display string for the UI,
  * substituting variables but *keeping* dice notation intact (e.g.
  * "1d8 + STR + 2" → "1d8+5"), so players see what they're about to roll.
@@ -1352,8 +1505,7 @@ export function resolveFormulaDisplay(
     }
 
     if (modifier === 0) return { display: dicePart };
-    if (modifier > 0) return { display: `${dicePart}+${modifier}` };
-    return { display: `${dicePart}${modifier}` }; // negative already has the sign
+    return { display: `${dicePart}${formatModifier(modifier)}` };
   } catch (err) {
     if (!(err instanceof FormulaError)) throw err;
     // A formula that violates a safety limit (dice count/sides, length)

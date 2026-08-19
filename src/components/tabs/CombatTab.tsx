@@ -4,8 +4,10 @@
  * full action list.
  *
  * Defense is computed dynamically from whichever inventory item is
- * equipped as armor (see {@link computeDefense}), not from a static value,
- * so changing armor in the Inventory tab is immediately reflected here.
+ * equipped as armor (see `computeDefense` in `src/utils/computeDefense.ts`
+ * — extracted out of this file in part 1f so its breakdown string is unit-
+ * testable), not from a static value, so changing armor in the Inventory
+ * tab is immediately reflected here.
  */
 
 import { useState, useEffect, useRef } from "react";
@@ -17,8 +19,10 @@ import type {
   InventoryItem,
 } from "../../types/character";
 import { DiceRollModal } from "../ui/DiceRollModal";
-import { resolveFormulaDisplay, evalFormula } from "../../utils/formulaParser";
+import { resolveFormulaDisplay, isEngineRollableItem } from "../../utils/formulaParser";
 import { initiativeToActions } from "../../utils/initiative";
+import { formatModifier } from "../../utils/formatModifier";
+import { computeDefense } from "../../utils/computeDefense";
 import { BentoSection } from "../ui/common/BentoSection";
 import { InlineNumberField } from "../ui/common/InlineEditField";
 import { FavoriteButton } from "../ui/common/FavoriteButton";
@@ -87,38 +91,6 @@ const ACTION_ICONS = {
   item: "🎒",
 } as const;
 
-/**
- * Derives the character's current defense value.
- *
- * If an inventory item is equipped as armor (`character.armor.equippedItemId`
- * pointing at an item with `isArmor: true`), its formula is evaluated and
- * the flat `defenseBonus` is added on top. Otherwise, defense falls back to
- * DEX + the flat bonus (unarmored).
- *
- * @param character - The character to compute defense for.
- * @returns `value`: the resolved defense number. `error` is set when the
- * equipped armor's formula is broken — in that case `value` is *not* a
- * trustworthy defense number (just `defenseBonus` with no armor
- * contribution) and the caller must show that distinctly rather than
- * rendering it as if the character really has that little defense.
- */
-function computeDefense(character: NimbleCharacter): {
-  value: number;
-  error?: string;
-} {
-  const armorItem = character.inventory.find(
-    (i) => i.id === character.armor.equippedItemId && i.isArmor,
-  );
-  if (armorItem?.formula) {
-    const { value, error } = evalFormula(armorItem.formula, character);
-    return {
-      value: value + (character.armor.defenseBonus ?? 0),
-      error,
-    };
-  }
-  return { value: character.stats.dex + (character.armor.defenseBonus ?? 0) };
-}
-
 // ── Main component ────────────────────────────────────────────────
 
 /**
@@ -181,8 +153,11 @@ export function CombatTab({
     onUpdate({ hp: { ...character.hp, current: Math.max(0, v) } }),
   );
 
-  const { value: defenseValue, error: defenseError } =
-    computeDefense(character);
+  const {
+    value: defenseValue,
+    error: defenseError,
+    breakdown: defenseBreakdown,
+  } = computeDefense(character);
   const armorItems = character.inventory.filter((i) => i.isArmor);
   const equippedArmorItem = armorItems.find(
     (i) => i.id === character.armor.equippedItemId,
@@ -190,7 +165,9 @@ export function CombatTab({
   const combatActions = character.actions.filter((a) => a.type !== "spell");
   const favorites = [
     ...character.actions.filter((a) => a.isFavorite),
-    ...character.inventory.filter((i) => i.isFavorite && i.formula),
+    ...character.inventory.filter(
+      (i) => i.isFavorite && isEngineRollableItem(i),
+    ),
   ];
 
   /** Sets the action counter directly (no-op for non-editors). */
@@ -366,8 +343,9 @@ export function CombatTab({
                     Base
                   </span>
                   <span className="text-xl font-black text-amber-300">
-                    {character.stats.dex >= 0 ? "+" : ""}
-                    {character.stats.dex + character.initiativeBonus}
+                    {formatModifier(
+                      character.stats.dex + character.initiativeBonus,
+                    )}
                   </span>
                   <span className="text-[10px] text-stone-500">DEX</span>
                 </div>
@@ -482,11 +460,24 @@ export function CombatTab({
                 className="bg-stone-800 border border-stone-700 rounded px-2 py-1.5 text-xs text-stone-200 outline-none focus:border-sky-600"
               >
                 <option value="">— Unarmored (DEX only) —</option>
-                {armorItems.map((item) => (
-                  <option key={item.id} value={item.id}>
-                    {item.name} ({item.formula})
-                  </option>
-                ))}
+                {armorItems.map((item) => {
+                  // Unlike the "Add Item" picker (browsing BASIC_EQUIPMENTS
+                  // book content, where raw notation aids recognition),
+                  // this lists armor the character already owns — the same
+                  // case as an inventory row, not a picker. A native
+                  // <option> can't carry the formulaError styling
+                  // ItemRowBase uses elsewhere, but resolveFormulaDisplay
+                  // already falls back to the raw formula on error, so this
+                  // degrades sensibly without needing that styling.
+                  const armorLabel = item.manualResolution
+                    ? (item.formula ?? "")
+                    : resolveFormulaDisplay(item.formula ?? "", character).display;
+                  return (
+                    <option key={item.id} value={item.id}>
+                      {item.name} ({armorLabel})
+                    </option>
+                  );
+                })}
               </select>
             ) : (
               <span className="text-xs text-stone-300">
@@ -515,10 +506,14 @@ export function CombatTab({
               </span>
             </div>
           )}
-          <p className="text-[10px] text-stone-600 italic">
-            {equippedArmorItem
-              ? `Formula: ${equippedArmorItem.formula} + ${character.armor.defenseBonus ?? 0} bonus`
-              : `DEX (${character.stats.dex}) + ${character.armor.defenseBonus ?? 0} bonus`}
+          <p
+            className={`text-[10px] italic ${
+              defenseError ? "text-rose-400" : "text-stone-600"
+            }`}
+          >
+            {defenseError
+              ? `Armor formula is broken, can't compute defense: ${defenseError}`
+              : defenseBreakdown}
           </p>
         </div>
       </BentoSection>
@@ -537,7 +532,7 @@ export function CombatTab({
                   canEdit={canEdit}
                   isGM={isGM}
                   isEditing={false}
-                  onRoll={() => setRoll(a.name, a.formula || a.damage)}
+                  onRoll={a.formula ? () => setRoll(a.name, a.formula) : undefined}
                   onToggleFavorite={() =>
                     updateActions(
                       character.actions.map((x) =>
@@ -549,11 +544,12 @@ export function CombatTab({
                 />
               ))}
             {character.inventory
-              .filter((i) => i.isFavorite && i.formula)
+              .filter((i) => i.isFavorite && isEngineRollableItem(i))
               .map((item) => (
                 <InventoryFavoriteRow
                   key={item.id}
                   item={item}
+                  character={character}
                   canEdit={canEdit}
                   onRoll={() => setRoll(item.name, item.formula!)}
                   onToggleFavorite={() =>
@@ -599,7 +595,7 @@ export function CombatTab({
               canEdit={canEdit}
               isGM={isGM}
               isEditing={editingActionId === a.id}
-              onRoll={() => setRoll(a.name, a.formula || a.damage)}
+              onRoll={a.formula ? () => setRoll(a.name, a.formula) : undefined}
               onToggleFavorite={() =>
                 updateActions(
                   character.actions.map((x) =>
@@ -657,7 +653,7 @@ export function CombatTab({
       {rollingInitiative && (
         <DiceRollModal
           label="Initiative"
-          formula={`1d20+${character.stats.dex + character.initiativeBonus}`}
+          formula={`1d20${formatModifier(character.stats.dex + character.initiativeBonus)}`}
           isGM={isGM}
           onConfirm={confirmInitiativeRoll}
           onCancel={() => setRollingInitiative(false)}
@@ -695,25 +691,42 @@ export function CombatTab({
  * `InventoryTab.ItemRow` used to each hand-roll this same row shape,
  * which had started to drift slightly between the two. Now both build
  * on the same shared shell.
+ *
+ * @param character - Used to resolve the formula's display string, same as
+ * `InventoryTab.ItemRow`/`ActionRow`/`SpellRow` — this row used to show
+ * `item.formula` raw (e.g. "1d4 + DEX"), unlike every other formula display
+ * in the app.
  */
 function InventoryFavoriteRow({
   item,
+  character,
   canEdit,
   onRoll,
   onToggleFavorite,
 }: {
   item: InventoryItem;
+  character: NimbleCharacter;
   canEdit: boolean;
   onRoll?: () => void;
   onToggleFavorite?: () => void;
 }) {
   const [expanded, setExpanded] = useState(false);
 
+  // manualResolution items never reach this row today — the favorites
+  // filter upstream already excludes them via isEngineRollableItem — but
+  // this stays defensive rather than relying solely on that filter, same
+  // reasoning as InventoryTab.ItemRow: a flag documented as "not read by
+  // the engine" must not go unread again at a second call site.
+  const { display: resolvedFormula, error: formulaError } = item.manualResolution
+    ? { display: item.formula ?? "", error: undefined }
+    : resolveFormulaDisplay(item.formula ?? "", character);
+
   return (
     <ItemRowBase
       name={item.name}
       icon="🎒"
-      formula={item.formula}
+      formula={resolvedFormula}
+      formulaError={formulaError}
       description={item.description}
       isExpanded={expanded}
       onRowClick={() => setExpanded((e) => !e)}
@@ -771,15 +784,14 @@ function ActionRow({
   const typeStyle = ACTION_COLORS[action.type] ?? "";
   const icon = ACTION_ICONS[action.type] ?? "⚡";
   const { display: resolvedFormula, error: formulaError } =
-    resolveFormulaDisplay(action.formula || action.damage, character);
+    resolveFormulaDisplay(action.formula, character);
   // Called unconditionally (not only while isEditing) so a discard warning
   // from closeEdit() survives the edit panel unmounting. Rows rendered
   // without edit rights (e.g. favorited-action summaries) never get an
   // onUpdate at all, so onCommit is a no-op there — editPanel itself is
   // never rendered for those rows either.
-  const formulaField = useFormulaField(
-    action.formula ?? action.damage ?? "",
-    (v) => onUpdate?.({ formula: v, damage: v }),
+  const formulaField = useFormulaField(action.formula, (v) =>
+    onUpdate?.({ formula: v, damage: v }),
   );
 
   const handleHeaderClick = () => {

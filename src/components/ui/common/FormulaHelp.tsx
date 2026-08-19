@@ -48,7 +48,7 @@ function realSpellFormula(name: string): string {
     console.warn(`FormulaHelp: spell "${name}" not found in BASE_SPELLS.`);
     return "";
   }
-  return spell.formula || spell.damage;
+  return spell.formula;
 }
 
 /** Same as {@link realSpellFormula}, looking up an item in {@link BASIC_EQUIPMENTS} instead. */

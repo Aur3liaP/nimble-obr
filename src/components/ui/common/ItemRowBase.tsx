@@ -31,8 +31,15 @@ interface ItemRowBaseProps {
   name: string;
   /** Small emoji/icon shown before the name (e.g. "🎒", "🛡"). */
   icon?: string;
-  /** Resolved or raw formula string shown in amber monospace, if any. */
+  /** Resolved formula string shown in amber monospace, if any. */
   formula?: string;
+  /**
+   * Set when `formula` couldn't be resolved (see `resolveFormulaDisplay`'s
+   * `error`) — renders `formula` in red with a warning icon and a tooltip
+   * instead of amber, the same treatment `ActionRow`/`SpellRow` give a
+   * broken formula. Ignored if `formula` is falsy (nothing to flag).
+   */
+  formulaError?: string;
   /** Description shown in the expanded panel. */
   description?: string;
   /** Whether the description panel is currently expanded. Omit to manage internally (uncontrolled). */
@@ -71,6 +78,7 @@ export function ItemRowBase({
   name,
   icon,
   formula,
+  formulaError,
   description,
   isExpanded = false,
   onRowClick,
@@ -105,7 +113,17 @@ export function ItemRowBase({
               {name}
             </span>
             {formula && (
-              <span className="text-[10px] font-mono text-amber-300/80">
+              <span
+                className={`text-[10px] font-mono ${
+                  formulaError ? "text-rose-400" : "text-amber-300/80"
+                }`}
+                title={
+                  formulaError
+                    ? `Invalid formula, won't roll: ${formulaError}`
+                    : undefined
+                }
+              >
+                {formulaError ? "⚠ " : ""}
                 {formula}
               </span>
             )}

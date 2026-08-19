@@ -36,6 +36,7 @@ import {
   type FormulaContext,
 } from "../utils/formulaParser";
 import { migrateCharacter } from "../utils/characterMigrations";
+import { formatModifier } from "../utils/formatModifier";
 
 /** OBR player role as reported by the SDK. */
 
@@ -1207,7 +1208,7 @@ export function useOBR(): UseOBRReturn {
     if (!current) return null;
     return handleRoll({
       label: "Initiative",
-      formula: `1d20+${current.stats.dex + (current.initiativeBonus || 0)}`,
+      formula: `1d20${formatModifier(current.stats.dex + (current.initiativeBonus || 0))}`,
       mode,
       advantageCount,
       hidden,
