@@ -159,6 +159,24 @@ function migrateActionDamageField(action: unknown): unknown {
  * `manualResolution` is covered automatically, nothing here needs updating
  * when the data changes.
  *
+ * @remarks Latent hazard, not yet a real bug: `name` is the only key this
+ * (and the item picker) matches on. This step only runs once per record,
+ * the moment it crosses from schemaVersion 1 to 2 — but that moment can
+ * happen long after this code shipped (a character claimed and migrated
+ * for the first time much later), against whatever `BASIC_EQUIPMENTS`
+ * looks like AT THAT TIME, not what it looked like when the item was
+ * originally added to the character. If a `BASIC_EQUIPMENTS` entry is
+ * renamed and the OLD name is reused for a mechanically different item —
+ * exactly what the 2nd-printing content batch does: "Spear" (1d10+STR)
+ * renamed to "Great Spear", then a new, unrelated "Spear" (1d6+STR)
+ * added — a character whose inventory has an old-shaped "Spear" (really a
+ * Great Spear) migrates through this step matching the NEW, unrelated
+ * "Spear" template instead. Harmless today only because neither template
+ * in that specific collision sets `manualResolution: true`; this WILL
+ * silently misapply the flag the day a rename or name-reuse collides with
+ * a `manualResolution: true` entry. If that happens, match on something
+ * more stable than `name`, or stop reusing a retired item name at all.
+ *
  * @param item - One raw `inventory` array element, of unknown shape.
  */
 function migrateInventoryManualResolution(item: unknown): unknown {
