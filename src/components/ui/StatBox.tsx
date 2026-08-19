@@ -7,7 +7,7 @@
  */
 
 import { useState } from "react";
-import type { Stats, SaveMods } from "../../types/character";
+import { MIN_STAT, MAX_STAT, type Stats, type SaveMods } from "../../types/character";
 
 /**
  * Props for a single stat box.
@@ -79,7 +79,7 @@ export function StatBox({
 
   const commitEdit = () => {
     const parsed = parseInt(inputVal, 10);
-    if (!isNaN(parsed) && parsed >= -5 && parsed <= 5)
+    if (!isNaN(parsed) && parsed >= MIN_STAT && parsed <= MAX_STAT)
       onChange?.(statKey, parsed);
     setIsEditing(false);
   };
@@ -105,8 +105,8 @@ export function StatBox({
         <input
           autoFocus
           type="number"
-          min={-5}
-          max={5}
+          min={MIN_STAT}
+          max={MAX_STAT}
           value={inputVal}
           onChange={(e) => setInputVal(e.target.value)}
           onBlur={commitEdit}

@@ -10,6 +10,8 @@
 import { useState } from "react";
 import {
   MAX_LEVEL,
+  MIN_SKILL,
+  MAX_SKILL,
   type NimbleCharacter,
   type DiceRollRequest,
   type RollMode,
@@ -338,6 +340,26 @@ export function SummaryTab({
               {character.wounds}/{character.maxWounds} wounds
               {character.hp.current === 0 && " · DYING"}
             </p>
+            {/* Not clamped to 6 — ancestry/background/Gritty Dying all
+                shift the max, so it's a free field the player/GM sets. */}
+            {canEdit && (
+              <div className="flex items-center gap-1.5 mt-1">
+                <span className="text-[10px] text-stone-500 uppercase tracking-wider">
+                  Max Wounds
+                </span>
+                <input
+                  type="number"
+                  value={character.maxWounds}
+                  min={1}
+                  onChange={(e) =>
+                    onUpdate({
+                      maxWounds: Math.max(1, parseInt(e.target.value) || 1),
+                    })
+                  }
+                  className="w-10 text-center text-xs bg-stone-900 border border-stone-700 rounded py-0.5 text-stone-200 outline-none focus:border-amber-600"
+                />
+              </div>
+            )}
 
             {/* Hit Dice */}
             <div className="mt-2">
@@ -467,8 +489,8 @@ export function SummaryTab({
                       <input
                         type="number"
                         value={val}
-                        min={-5}
-                        max={10}
+                        min={MIN_SKILL}
+                        max={MAX_SKILL}
                         onChange={(e) =>
                           onUpdate({
                             skills: {

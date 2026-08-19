@@ -255,6 +255,27 @@ export const CURRENT_SCHEMA_VERSION = 2;
  */
 export const MAX_LEVEL = 20;
 
+/**
+ * Legal range for a stat bonus (STR/DEX/INT/WIL). Nimble Core Rules 2nd
+ * printing, p.6: "The maximum a hero's stat can typically go is +5"; the
+ * floor mirrors it symmetrically. Enforced both at the input layer
+ * ({@link StatBox}) and, defense in depth, at the write choke point
+ * (`updateCharacter` in `useOBR.ts`) — same reasoning as {@link MAX_LEVEL}.
+ */
+export const MIN_STAT = -5;
+export const MAX_STAT = 5;
+
+/**
+ * Legal range for a skill's total bonus. Nimble Core Rules 2nd printing,
+ * p.7 and p.21: the +12 ceiling is absolute (not "stat + invested points"),
+ * and the floor is -5 because a skill is stat bonus + invested points,
+ * invested points are never negative, so the worst case is a -5 stat with
+ * nothing invested. Enforced at the write choke point (`updateCharacter` in
+ * `useOBR.ts`), same reasoning as {@link MAX_LEVEL}.
+ */
+export const MIN_SKILL = -5;
+export const MAX_SKILL = 12;
+
 export type RollMode = "standard" | "advantage" | "disadvantage";
 export type AdvantageCount = number;
 
