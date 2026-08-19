@@ -17,6 +17,7 @@ import type {
 } from "../../types/character";
 import { DiceRollModal } from "../ui/DiceRollModal";
 import { resolveFormulaDisplay } from "../../utils/formulaParser";
+import { copySpellFromCatalog, createCustomSpell } from "../../utils/catalogCopy";
 import { BASE_SPELLS } from "../../data/spells";
 import { BentoSection } from "../ui/common/BentoSection";
 import { FavoriteButton } from "../ui/common/FavoriteButton";
@@ -187,26 +188,11 @@ function AddSpellModal({
 
   /**
    * Converts a {@link BASE_SPELLS} template into a concrete, non-custom
-   * {@link CharacterAction} and hands it to `onAdd`. Mana cost defaults to
-   * the spell's tier when not explicitly set (cantrips are always free).
+   * {@link CharacterAction} (see {@link copySpellFromCatalog}) and hands it
+   * to `onAdd`.
    */
   const handleAddFromList = (template: (typeof BASE_SPELLS)[0]) => {
-    onAdd({
-      id: `sp-${crypto.randomUUID()}`,
-      name: template.name,
-      type: "spell",
-      range: template.range,
-      formula: template.formula,
-      description: template.description,
-      isFavorite: false,
-      isCustom: false,
-      spellTier: template.spellTier,
-      spellSchool: template.spellSchool as SpellSchool | undefined,
-      manaCost:
-        template.manaCost ??
-        (template.spellTier === 0 ? 0 : template.spellTier),
-      actionCost: template.actionCost,
-    });
+    onAdd(copySpellFromCatalog(template));
   };
 
   // Tier pills options
@@ -260,19 +246,7 @@ function AddSpellModal({
             formulaField.markTouched();
             return;
           }
-          onAdd({
-            id: `sp-${crypto.randomUUID()}`,
-            name: form.name,
-            type: "spell",
-            range: form.range,
-            formula: form.formula,
-            description: form.description,
-            isFavorite: false,
-            isCustom: true,
-            spellTier: form.tier,
-            spellSchool: (form.school as SpellSchool) || undefined,
-            manaCost: form.tier === 0 ? 0 : form.manaCost,
-          });
+          onAdd(createCustomSpell(form));
         }}
         className={`flex-1 py-2 rounded-lg text-sm font-bold transition-colors ${
           formulaField.error

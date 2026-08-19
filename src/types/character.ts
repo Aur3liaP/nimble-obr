@@ -139,6 +139,18 @@ export interface CharacterAction {
   slots?: number;
   isCustom?: boolean;
   actionCost?: number;
+  /**
+   * Stable, immutable identifier of the {@link BASE_SPELLS} catalog entry
+   * this action was copied from — set only when copied from the catalog
+   * (never on a custom action, `isCustom: true`), and NEVER the same thing
+   * as `name` (which can and does change across printings). See
+   * `spells.ts`'s file header for the append-only contract. Undefined
+   * means either a custom entry, or a catalog copy predating this field
+   * (backfilled by name where possible in the schema v3 migration —
+   * `undefined` after that backfill genuinely means "cannot be traced back
+   * to the catalog", not a bug to fix by guessing).
+   */
+  sourceKey?: string;
 }
 
 export interface InventoryItem {
@@ -162,6 +174,14 @@ export interface InventoryItem {
    * Content-validation tests exclude these instead of treating them as bugs.
    */
   manualResolution?: boolean;
+  /**
+   * Stable, immutable identifier of the {@link BASIC_EQUIPMENTS} catalog
+   * entry this item was copied from — same contract as
+   * {@link CharacterAction.sourceKey}: set only when copied from the
+   * catalog, never on a custom item, never the same thing as `name`. See
+   * `equipment.ts`'s file header for the append-only contract.
+   */
+  sourceKey?: string;
 }
 
 /**
@@ -250,7 +270,7 @@ export const METADATA_KEY = "com.nimble-obr.nimble/character_sheet";
  * needs transforming to match. See that file's header for the full
  * procedure.
  */
-export const CURRENT_SCHEMA_VERSION = 2;
+export const CURRENT_SCHEMA_VERSION = 3;
 
 /**
  * Highest level a character can be set to.

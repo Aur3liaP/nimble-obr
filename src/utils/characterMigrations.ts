@@ -33,6 +33,7 @@ import {
   type NimbleCharacter,
 } from "../types/character";
 import { BASIC_EQUIPMENTS } from "../data/equipment";
+import { BASE_SPELLS } from "../data/spells";
 
 /**
  * Transforms a character record one schema version forward: from the
@@ -230,6 +231,120 @@ function migrateArmorToDefense(
 }
 
 /**
+ * Known rename-collisions where matching a persisted item purely by `name`
+ * against the CURRENT catalog would resolve to the WRONG entry, because
+ * the old name has been reused for a mechanically different item since the
+ * character's copy was made. Part of `MIGRATIONS[2]` (`sourceKey`
+ * backfill) — see {@link resolveEquipmentTemplate}.
+ *
+ * Each row: the `name` an existing item might still carry, the `formula`
+ * that confirms it's really the OLD, renamed entry (not the new item that
+ * now owns that name — a plain name match can't tell the two apart, but
+ * their formulas differ), and the `sourceKey` to resolve to instead of
+ * whatever currently owns that name.
+ *
+ * Currently one entry: the 2nd-printing equipment content batch renamed
+ * "Spear" (`1d10 + STR`, Reach 2) to "Great Spear" and introduced a new,
+ * unrelated, lighter "Spear" (`1d6 + STR`). An existing character's
+ * "Spear" item with the OLD formula is really a Great Spear.
+ *
+ * Append-only, like `sourceKey` itself: a future rename that reuses a
+ * retired name gets its own row here, never edits or removes this one.
+ */
+const KNOWN_EQUIPMENT_NAME_COLLISIONS: { name: string; formula: string; sourceKey: string }[] = [
+  { name: "Spear", formula: "1d10 + STR", sourceKey: "great-spear" },
+];
+
+/**
+ * Resolves a non-custom inventory item's catalog template for the
+ * `sourceKey`/`manualResolution` backfill in `MIGRATIONS[2]`: the known
+ * rename-collision table first (formula-verified, so a plain name match
+ * that would land on the wrong, name-reusing entry is caught), a plain
+ * name lookup otherwise.
+ *
+ * @returns The matching `BASIC_EQUIPMENTS` template, or `undefined` if
+ * nothing matches — a valid "cannot be traced to the catalog" outcome the
+ * caller must not paper over with a guess.
+ */
+function resolveEquipmentTemplate(
+  name: string,
+  formula: string | undefined,
+): (typeof BASIC_EQUIPMENTS)[number] | undefined {
+  const collision = KNOWN_EQUIPMENT_NAME_COLLISIONS.find(
+    (c) => c.name === name && c.formula === formula,
+  );
+  if (collision) {
+    console.warn(
+      `[migrateCharacter] inventory item "${name}" (formula "${formula}") matched a known ` +
+        `rename collision — resolving to sourceKey "${collision.sourceKey}" instead of ` +
+        `whichever catalog entry is currently named "${name}".`,
+    );
+    return BASIC_EQUIPMENTS.find((e) => e.sourceKey === collision.sourceKey);
+  }
+  return BASIC_EQUIPMENTS.find((e) => e.name === name);
+}
+
+/**
+ * Backfills `sourceKey` (see `equipment.ts`'s file header for what it is
+ * and why) on one non-custom `inventory` array element, using
+ * {@link resolveEquipmentTemplate}. Also re-applies `manualResolution`
+ * using that SAME, collision-safe resolution — superseding, for any
+ * record reaching this step, whatever `migrateInventoryManualResolution`
+ * (`MIGRATIONS[1]`, name-only, frozen and left untouched per this file's
+ * append-only rule) got wrong on a name collision it had no way to detect.
+ * Part of `MIGRATIONS[2]` — see its own comment for the full picture.
+ *
+ * @param item - One raw `inventory` array element, of unknown shape.
+ */
+function backfillInventorySourceKey(item: unknown): unknown {
+  if (!isPlainObject(item)) return item;
+  if (item.isCustom === true) return item; // never touch custom items
+  const name = typeof item.name === "string" ? item.name : undefined;
+  if (name === undefined) return item;
+  const formula = typeof item.formula === "string" ? item.formula : undefined;
+
+  const template = resolveEquipmentTemplate(name, formula);
+  if (!template) return item; // no match at all — sourceKey stays undefined, a valid state
+
+  const rest: Record<string, unknown> = { ...item };
+  delete rest.manualResolution;
+  return {
+    ...rest,
+    sourceKey: template.sourceKey,
+    ...(template.manualResolution === true ? { manualResolution: true } : {}),
+  };
+}
+
+/**
+ * Backfills `sourceKey` on one non-custom `actions` array element, by
+ * matching `name` against {@link BASE_SPELLS}. Part of `MIGRATIONS[2]`.
+ *
+ * No known rename-collision exists among spells today (unlike equipment's
+ * Spear/Great Spear) — a plain name match is enough for now. If a future
+ * printing renames a spell and reuses the old name, this needs the same
+ * collision-table treatment as {@link resolveEquipmentTemplate}.
+ *
+ * A non-custom `actions` entry that ISN'T a spell (melee/ranged/ability/
+ * item — always custom-authored via `CombatTab`'s `AddActionModal`, which
+ * has no catalog to copy from) never matches `BASE_SPELLS` by name and
+ * correctly keeps `sourceKey` undefined here — that's not a bug, it's
+ * "this action was never catalog-sourced to begin with."
+ *
+ * @param action - One raw `actions` array element, of unknown shape.
+ */
+function backfillActionSourceKey(action: unknown): unknown {
+  if (!isPlainObject(action)) return action;
+  if (action.isCustom === true) return action; // never touch custom actions
+  const name = typeof action.name === "string" ? action.name : undefined;
+  if (name === undefined) return action;
+
+  const template = BASE_SPELLS.find((s) => s.name === name);
+  if (!template) return action; // no match — sourceKey stays undefined, a valid state
+
+  return { ...action, sourceKey: template.sourceKey };
+}
+
+/**
  * Ordered migrations, one function per schema version transition.
  * `MIGRATIONS[i]` moves a record from version `i` to version `i + 1`. See
  * the file header for the procedure to append to this list.
@@ -320,6 +435,33 @@ const MIGRATIONS: Migration[] = [
       initiativeAdvantage:
         "initiativeAdvantage" in withDefense ? withDefense.initiativeAdvantage : "none",
     };
+  },
+
+  // v2 -> v3: backfills `sourceKey` (see equipment.ts/spells.ts file
+  // headers for the append-only contract) onto every non-custom
+  // actions/inventory entry, by matching `name` against the current
+  // catalogs — see backfillActionSourceKey/backfillInventorySourceKey
+  // above. THE LAST TIME this codebase matches by name: sourceKey exists
+  // specifically so nothing has to again after this step. Also re-applies
+  // `manualResolution` on inventory items using the same, collision-safe
+  // resolution (see resolveEquipmentTemplate) — MIGRATIONS[1]'s own
+  // manualResolution backfill is name-only and stays exactly as it was
+  // (frozen, per this file's append-only rule); this step is what
+  // actually corrects it going forward for any record that reaches v3.
+  //
+  // A record whose name matches nothing in the relevant catalog keeps
+  // sourceKey undefined — a valid state ("cannot be traced to the
+  // catalog": renamed then hand-edited past recognition, or never
+  // catalog-sourced to begin with), never guessed at.
+  (character) => {
+    const actions = Array.isArray(character.actions)
+      ? character.actions.map(backfillActionSourceKey)
+      : character.actions;
+    const inventory = Array.isArray(character.inventory)
+      ? character.inventory.map(backfillInventorySourceKey)
+      : character.inventory;
+
+    return { ...character, actions, inventory };
   },
 ];
 

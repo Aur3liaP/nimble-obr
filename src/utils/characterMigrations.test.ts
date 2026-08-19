@@ -9,6 +9,8 @@
 
 import { describe, expect, it, vi } from "vitest";
 import { createDefaultCharacter, CURRENT_SCHEMA_VERSION } from "../types/character";
+import { BASIC_EQUIPMENTS } from "../data/equipment";
+import { BASE_SPELLS } from "../data/spells";
 import {
   applyMigrations,
   migrateCharacter,
@@ -334,6 +336,171 @@ describe("migrateCharacter — v1 -> v2 (InventoryItem.manualResolution backfill
       isCustom: false,
     });
     expect(migrated).not.toHaveProperty("manualResolution");
+  });
+});
+
+describe("migrateCharacter — v2 -> v3 (sourceKey backfill)", () => {
+  // Fixtures start at schemaVersion 2 (not 1, unlike the v1 -> v2 blocks
+  // above) specifically to isolate MIGRATIONS[2] — a v1 fixture would also
+  // run MIGRATIONS[1] first, which is a different concern already covered
+  // above.
+
+  function migrateOneItemV2(item: Record<string, unknown>): Record<string, unknown> {
+    const base = createDefaultCharacter("token-1", "owner-1") as unknown as Record<string, unknown>;
+    const v2 = { ...base, schemaVersion: 2, inventory: [item] };
+    const result = migrateCharacter(v2);
+    expect(result.status).toBe("ok");
+    if (result.status !== "ok") throw new Error("expected migration to succeed");
+    return (result.character.inventory as unknown as Record<string, unknown>[])[0];
+  }
+
+  function migrateOneActionV2(action: Record<string, unknown>): Record<string, unknown> {
+    const base = createDefaultCharacter("token-1", "owner-1") as unknown as Record<string, unknown>;
+    const v2 = { ...base, schemaVersion: 2, actions: [action] };
+    const result = migrateCharacter(v2);
+    expect(result.status).toBe("ok");
+    if (result.status !== "ok") throw new Error("expected migration to succeed");
+    return (result.character.actions as unknown as Record<string, unknown>[])[0];
+  }
+
+  it("backfills sourceKey on a non-custom inventory item matching a catalog entry by name", () => {
+    const template = BASIC_EQUIPMENTS.find((e) => e.name === "Longsword");
+    if (!template) throw new Error("fixture setup: Longsword missing from BASIC_EQUIPMENTS");
+    const migrated = migrateOneItemV2({
+      id: "i1",
+      name: "Longsword",
+      description: "",
+      slots: 1,
+      quantity: 1,
+      isEquipped: false,
+      isCustom: false,
+      formula: template.formula,
+    });
+    expect(migrated.sourceKey).toBe(template.sourceKey);
+  });
+
+  it("never touches a custom inventory item, even if its name matches a catalog entry", () => {
+    const migrated = migrateOneItemV2({
+      id: "i1",
+      name: "Longsword",
+      description: "",
+      slots: 1,
+      quantity: 1,
+      isEquipped: false,
+      isCustom: true,
+    });
+    expect(migrated.sourceKey).toBeUndefined();
+  });
+
+  it("leaves sourceKey undefined for an inventory item matching nothing in the catalog", () => {
+    const migrated = migrateOneItemV2({
+      id: "i1",
+      name: "Homebrew Trinket",
+      description: "",
+      slots: 1,
+      quantity: 1,
+      isEquipped: false,
+      isCustom: false,
+    });
+    expect(migrated.sourceKey).toBeUndefined();
+  });
+
+  it("KNOWN COLLISION: an old 'Spear' item (1d10+STR, really a Great Spear) resolves to great-spear, not the new light Spear, and logs", () => {
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const migrated = migrateOneItemV2({
+      id: "i1",
+      name: "Spear",
+      description: "2-handed, Reach 2. Piercing damage.",
+      slots: 1,
+      quantity: 1,
+      isEquipped: false,
+      isCustom: false,
+      formula: "1d10 + STR",
+      actionCost: 1,
+    });
+    expect(migrated.sourceKey).toBe("great-spear");
+    expect(warnSpy).toHaveBeenCalledTimes(1);
+    expect(warnSpy.mock.calls[0][0]).toContain("Spear");
+    warnSpy.mockRestore();
+  });
+
+  it("a genuinely new light Spear item (1d6+STR) resolves to the current 'spear' entry, no collision log", () => {
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const migrated = migrateOneItemV2({
+      id: "i1",
+      name: "Spear",
+      description: "2-handed, Reach 2. Piercing damage.",
+      slots: 1,
+      quantity: 1,
+      isEquipped: false,
+      isCustom: false,
+      formula: "1d6 + STR",
+      actionCost: 1,
+    });
+    expect(migrated.sourceKey).toBe("spear");
+    expect(warnSpy).not.toHaveBeenCalled();
+    warnSpy.mockRestore();
+  });
+
+  it("re-derives manualResolution using the same collision-safe resolution as sourceKey", () => {
+    const template = BASIC_EQUIPMENTS.find((e) => e.name === "Weapon of Animosity");
+    if (!template) throw new Error("fixture setup: Weapon of Animosity missing from BASIC_EQUIPMENTS");
+    const migrated = migrateOneItemV2({
+      id: "i1",
+      name: "Weapon of Animosity",
+      description: "",
+      slots: 1,
+      quantity: 1,
+      isEquipped: false,
+      isCustom: false,
+      formula: template.formula,
+    });
+    expect(migrated.sourceKey).toBe("weapon-of-animosity");
+    expect(migrated.manualResolution).toBe(true);
+  });
+
+  it("backfills sourceKey on a non-custom action (spell) matching BASE_SPELLS by name", () => {
+    const template = BASE_SPELLS.find((s) => s.name === "Ignite");
+    if (!template) throw new Error("fixture setup: Ignite missing from BASE_SPELLS");
+    const migrated = migrateOneActionV2({
+      id: "a1",
+      name: "Ignite",
+      type: "spell",
+      range: "8",
+      formula: template.formula,
+      description: "",
+      isFavorite: false,
+      isCustom: false,
+    });
+    expect(migrated.sourceKey).toBe(template.sourceKey);
+  });
+
+  it("never touches a custom action, even if its name matches a spell", () => {
+    const migrated = migrateOneActionV2({
+      id: "a1",
+      name: "Ignite",
+      type: "spell",
+      range: "8",
+      formula: "",
+      description: "",
+      isFavorite: false,
+      isCustom: true,
+    });
+    expect(migrated.sourceKey).toBeUndefined();
+  });
+
+  it("leaves sourceKey undefined for a non-spell combat action, never catalog-sourced", () => {
+    const migrated = migrateOneActionV2({
+      id: "a1",
+      name: "Cleave",
+      type: "melee",
+      range: "1",
+      formula: "1d8+STR",
+      description: "",
+      isFavorite: false,
+      isCustom: false,
+    });
+    expect(migrated.sourceKey).toBeUndefined();
   });
 });
 

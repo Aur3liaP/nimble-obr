@@ -15,6 +15,7 @@ import type {
 } from "../../types/character";
 import { DiceRollModal } from "../ui/DiceRollModal";
 import { resolveFormulaDisplay, isEngineRollableItem } from "../../utils/formulaParser";
+import { copyItemFromCatalog, createCustomItem } from "../../utils/catalogCopy";
 import { BASIC_EQUIPMENTS } from "../../data/equipment";
 import { BentoSection } from "../ui/common/BentoSection";
 import { TextAction } from "../ui/common/RowActions";
@@ -178,28 +179,11 @@ function AddItemModal({
 
   /**
    * Converts a {@link BASIC_EQUIPMENTS} template into a concrete, non-custom
-   * {@link InventoryItem} and hands it to `onAdd`.
-   *
-   * #12 — uses `crypto.randomUUID()`, same as the "custom" path below, so
-   * IDs are uniformly collision-safe regardless of which mode an item was
-   * added through (the "custom" form previously used `Date.now()`, which
-   * could collide on a fast double-click).
+   * {@link InventoryItem} (see {@link copyItemFromCatalog}) and hands it to
+   * `onAdd`.
    */
   const handleAddFromList = (template: (typeof BASIC_EQUIPMENTS)[0]) => {
-    onAdd({
-      id: `i-${crypto.randomUUID()}`,
-      name: template.name,
-      description: template.description ?? "",
-      slots: template.slots,
-      quantity: 1,
-      isEquipped: false,
-      isFavorite: false,
-      isCustom: false,
-      isArmor: template.isArmor ?? false,
-      formula: template.formula,
-      manualResolution: template.manualResolution,
-      actionCost: template.actionCost,
-    });
+    onAdd(copyItemFromCatalog(template));
   };
 
   const categoryOptions = (
@@ -248,19 +232,7 @@ function AddItemModal({
             formulaField.markTouched();
             return;
           }
-          onAdd({
-            // #12 — was Date.now(), now uniformized on crypto.randomUUID()
-            id: `i-${crypto.randomUUID()}`,
-            name: form.name,
-            description: form.description,
-            slots: form.slots,
-            quantity: 1,
-            isEquipped: false,
-            isFavorite: form.isFavorite,
-            isCustom: true,
-            isArmor: form.isArmor,
-            formula: form.formula || undefined,
-          });
+          onAdd(createCustomItem(form));
         }}
         className={`flex-1 py-2 rounded-lg text-sm font-bold transition-colors ${
           formulaField.error
