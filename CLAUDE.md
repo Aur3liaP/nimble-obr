@@ -607,6 +607,150 @@ below) went undetected.
     covered automatically — same reasoning as the reflective test that
     already covers the read path.
 
+- **Schema v3: `sourceKey` — stable, immutable catalog identity, independent
+  of `name`.** A `CharacterAction`/`InventoryItem` copied from
+  `BASE_SPELLS`/`BASIC_EQUIPMENTS` is a FROZEN copy; the only link back to
+  the template used to be `name`, and `name` is not stable — the 2nd-
+  printing equipment batch renamed "Spear" to "Great Spear" and introduced
+  an unrelated NEW "Spear" (1d6+STR vs the old 1d10+STR), and "Mithril
+  Plate" to "Adamantine Plate". `sourceKey` (append-only per
+  `equipment.ts`/`spells.ts`'s own file headers — never edited or reused
+  once shipped, since existing records reference it) exists so template
+  matching survives a rename. Introduced for a real near-future need: the
+  spells batch's planned "outdated" badge and "reset to book text" action
+  both require reliably tracing a character's copy back to its template
+  across a printing that renames things, which `name` alone cannot do.
+  - **`sourceKey` values are `name`-derived slugs AT THE TIME OF
+    INTRODUCTION, not at introduction of the entry itself.** "Great Spear"
+    (originally shipped as plain "Spear") is keyed `"great-spear"`, not
+    `"spear"` — since `sourceKey` didn't exist before this batch, what
+    matters is that it never changes AFTER this batch, not that it
+    matches the entry's own history.
+  - **`catalogCopy.ts`** (`src/utils/catalogCopy.ts`, new file) extracts
+    the "build a `CharacterAction`/`InventoryItem` from a template or from
+    custom form state" logic out of `SpellsTab`/`InventoryTab`'s "Add"
+    modals — same "extract for testability" pattern as
+    `computeDefense.ts`/`initiative.ts` — specifically so "a catalog copy
+    carries `sourceKey`, a custom entry never does" is a real, run unit
+    test (`catalogCopy.test.ts`) instead of something only verified by
+    reading component code. Four functions: `copySpellFromCatalog`/
+    `copyItemFromCatalog` (the "from list" path — carry `sourceKey` from
+    the template) and `createCustomSpell`/`createCustomItem` (the "custom"
+    path — never reference a template at all, so there is nothing to leak
+    `sourceKey` from). `CombatTab`'s `AddActionModal` (melee/ranged/
+    ability/item-type actions) is NOT here: it has no catalog to copy from
+    in the first place (see its own file header), so it was already,
+    structurally, incapable of leaking a `sourceKey` — confirmed by grep,
+    not assumed, before leaving it untouched.
+  - **Migration (`MIGRATIONS[2]`, v2 -> v3): backfills `sourceKey` on
+    existing non-custom entries by matching `name` against the catalogs —
+    THE LAST TIME this codebase matches by name.** Unlike the v1 -> v2
+    exception, this is a genuine NEW, appended migration step, not folded
+    into an existing one — v1 -> v2 is now treated as shipped/frozen policy
+    (per its own comment: "the next migration after this one goes back to
+    appending a new step"), and this is that next migration.
+    - **Known name-reuse collision, handled explicitly:**
+      `KNOWN_EQUIPMENT_NAME_COLLISIONS` in `characterMigrations.ts` — an
+      existing `InventoryItem` named "Spear" predates the equipment batch
+      and is mechanically a Great Spear (`1d10 + STR`, Reach 2); a plain
+      name match against the CURRENT catalog would resolve it to the new,
+      unrelated light Spear instead. Disambiguated on the item's own
+      `formula` (which the two "Spear"-named things across time do NOT
+      share), not on name alone — matching by formula ACROSS THE WHOLE
+      catalog (not just same-named entries) was considered and rejected:
+      most formulas are not unique (`"1d6 + STR"` alone matches Club/Mace,
+      the new light Spear, AND Improvised Weapon), so a general
+      formula-search fallback would trade one wrong-match risk for
+      another, more frequent one. The collision table is scoped and
+      explicit instead: one row per known (old `name`, confirming
+      `formula`) pair, append-only exactly like `sourceKey` itself. Logs
+      via `console.warn` whenever the fallback actually fires.
+    - **Also re-applies `manualResolution` using the SAME collision-safe
+      resolution**, correcting anything `MIGRATIONS[1]`'s name-only pass
+      (`migrateInventoryManualResolution`, see above) could have gotten
+      wrong on a collision it had no way to detect — that function itself
+      is left completely untouched, per this file's append-only rule; this
+      step's more precise resolution is what actually fixes it for any
+      record that reaches v3. Harmless no-op on today's actual data (the
+      Spear collision doesn't involve `manualResolution` on either side),
+      but load-bearing the day a future collision does.
+    - **A name matching nothing in the catalog keeps `sourceKey`
+      undefined — a valid, deliberate state**, not a bug: it means "this
+      entry cannot be traced back to the catalog" (renamed then hand-
+      edited past recognition, or never catalog-sourced at all), which the
+      spells batch's "outdated" badge needs to be able to distinguish from
+      "confirmed still matches the book." Never guessed at.
+  - **Other name-based catalog lookups found (grepped, not assumed) and
+    deliberately left alone:** `FormulaHelp.tsx`'s `realSpellFormula`/
+    `realItemFormula` also do `BASE_SPELLS.find(s => s.name === name)`/
+    `BASIC_EQUIPMENTS.find(i => i.name === name)` — but these look up a
+    name that's a LITERAL STRING WRITTEN IN THAT FILE'S OWN SOURCE (e.g.
+    `realItemFormula("Rusty Mail")`), always edited in the same commit as
+    whatever renamed the target entry, never a persisted, potentially
+    stale character record. `sourceKey` solves staleness in FROZEN COPIES
+    drifting away from a catalog that keeps changing after the copy was
+    made — a problem that doesn't exist for a hardcoded lookup string that
+    lives right next to the data it queries. Not migrated to `sourceKey`;
+    would add a lookup indirection with no real problem behind it.
+
+- **`src/data/spells.ts` was fully rewritten against the Nimble Core Rules
+  2nd printing, pp. 46-53** (the "second printing content, spells" batch),
+  not just patched — every entry verified against the book, not only the
+  changes called out ahead of time. `docs/reference/CoreRules-v0.8.pdf`
+  has no embedded text layer readable by the sandboxed `Read` tool
+  (`pdftoppm`/image rendering isn't installed); `pdftotext` (already present
+  via the Git Bash / MSYS2 toolchain) extracts a text layer that DOES
+  exist, but reading order across the book's multi-column card layout is
+  unreliable at column boundaries — cross-check `-layout` mode (preserves
+  column position) against plain mode (preserves stream order) before
+  trusting an ambiguous boundary; don't rely on either alone. Each of this
+  PDF's `\f`-delimited "pages" is actually a printed two-page SPREAD, not
+  one page — map extraction-page-index to book page number via the
+  trailing page-number text before assuming which content is on which
+  page.
+  - **`Entice`'s `1dstepdice(...)` die progression — flagged as a
+    tool-vs-book gap in this batch, FIXED in the very next one.** `stepdice`
+    originally had exactly 4 size slots across 3 fixed level breakpoints
+    (5/10/15), one short of the book's 5-tier progression (base d4, then
+    4 named steps to d6/d8/d10/d12) — a level-20 Entice landed on d10, not
+    the book's d12. `stepdice` (`pickStepDiceSize` in `formulaParser.ts`)
+    now supports 4 OR 5 size arguments — 5 sizes adds a 4th breakpoint at
+    20 (matching `MAX_LEVEL`), so the top tier is actually reachable.
+    Entice's formula is now `1dstepdice(level,4,6,8,10,12)`. The 4-size
+    shape is kept working unchanged for backward compatibility (nothing
+    else currently calls `stepdice` at all — confirmed by grep — but
+    nothing stops a future formula from using the smaller shape). Both the
+    regex path (`resolveDynamicDice`, for `1dstepdice(...)`) and the
+    parser's own bare `stepdice(...)` primitive now share this logic
+    through one function instead of two independently hand-copied
+    breakpoint tables — see `pickStepDiceSize`'s own doc for why that
+    sharing matters (this is the exact "hand-copied logic drifts apart"
+    failure mode `VARIABLE_TABLE`/`MATH_FUNCTIONS` already guard against
+    elsewhere in this file).
+  - **`Updraft` lost its roll button.** The book's "Damage: 20 minus a DEX
+    save" isn't a formula the caster rolls at all — it depends on the
+    TARGET's own save result, which this app's character-centric formula
+    engine (rolls are always computed from the roller's own stats) cannot
+    express. `formula` is now `""` (was `"1d6"`, a previous-printing
+    mechanic entirely replaced by this one) — a deliberate, book-driven
+    removal of rollability, not an oversight. Its description states the
+    full mechanic in prose ("Damage: 20 minus the target's DEX save. On
+    10+ damage, they land Prone and Dazed.") since that's now the only
+    place a player can read it — no roll button means no
+    `resolveFormulaDisplay` value to fall back on either.
+  - **`formula: ""` covers two genuinely different cases — worth telling
+    apart when reading this data, even though both render identically (no
+    roll button, per `isEngineRollableItem`/the `formula` truthiness check
+    used throughout the tabs).** (1) Genuinely no damage/rollable value at
+    all — the common case, e.g. Boisterous Winds (a pure buff, nothing to
+    roll, ever) or any Utility cantrip. (2) A real mechanic that this
+    app's formula engine cannot express — currently only Updraft (see
+    above), where "no formula" doesn't mean "nothing happens," it means
+    "this app can't compute it, read the description." Nothing in the data
+    shape distinguishes the two today; if that distinction ever needs to
+    be surfaced in the UI, it needs a real signal (e.g. a flag next to
+    `manualResolution`), not an inference from prose.
+
 ### Formula parser (`src/utils/formulaParser.ts`)
 
 Hand-rolled recursive-descent parser. **Never use `eval()` or `Function()`**
