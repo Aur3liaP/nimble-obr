@@ -20,6 +20,7 @@ import { DicePanel } from "./components/ui/DicePanel";
 import { CharacterHeader } from "./components/ui/CharacterHeader";
 import { SyncStatusBanner } from "./components/ui/SyncStatusBanner";
 import { DeleteUndoToast } from "./components/ui/DeleteUndoToast";
+import { LicenseNotice } from "./components/ui/LicenseNotice";
 import type { DiceRollRequest, RollMode } from "./types/character";
 
 /** Identifiers for the four character sheet tabs. */
@@ -127,7 +128,7 @@ export default function App() {
   const firstItem = selectedItems[0];
 
   return (
-    <div className="relative flex flex-col h-full bg-stone-950 text-stone-200 overflow-hidden font-sans pb-7">
+    <div className="flex flex-col h-full bg-stone-950 text-stone-200 overflow-hidden font-sans">
       {/* ── Sync status — always mounted, renders nothing when idle.
           Not scoped to showSheet: a roll log write can fail with no
           character sheet open at all. ── */}
@@ -238,77 +239,90 @@ export default function App() {
         </div>
       )}
 
-      {/* ── Scrollable content area ───────────────────────────────── */}
-      <main className="flex-1 overflow-y-auto scrollbar-thin">
-        {/* Sheet tabs */}
-        {showSheet && character && (
-          <>
-            {activeTab === "summary" && (
-              <SummaryTab
-                character={character}
-                canEdit={canEdit}
-                onUpdate={updateCharacter}
-                onRoll={onRoll}
-                isGM={isGM}
-              />
-            )}
-            {activeTab === "combat" && (
-              <CombatTab
-                character={character}
-                canEdit={canEdit}
-                isGM={isGM}
-                onUpdate={updateCharacter}
-                onRoll={onRoll}
-                onRollInitiative={onRollInitiative}
-                onDeleteEntry={deleteWithUndo}
-              />
-            )}
-            {activeTab === "spells" && (
-              <SpellsTab
-                character={character}
-                canEdit={canEdit}
-                isGM={isGM}
-                onUpdate={updateCharacter}
-                onRoll={onRoll}
-                onDeleteEntry={deleteWithUndo}
-              />
-            )}
-            {activeTab === "inventory" && (
-              <InventoryTab
-                character={character}
-                canEdit={canEdit}
-                isGM={isGM}
-                onUpdate={updateCharacter}
-                onRoll={onRoll}
-                onDeleteEntry={deleteWithUndo}
-              />
-            )}
-          </>
-        )}
-
-        {/* ── DicePanel + RollLog — always mounted here, never unmounted.
-            Mounted once in <main>, visible in all states. */}
-        <div className="px-3 pt-2 pb-3 flex flex-col gap-3">
-          <DicePanel
-            isGM={isGM}
-            onRoll={onFreeRoll}
-            defaultCollapsed={true}
-          />
-          {(showNoToken || showNoSheet || showUnsupportedVersion || showInvalidSheet) && (
-            <RollLog
-              rolls={recentRolls}
-              isGM={isGM}
-              currentPlayerId={playerId}
-              inline
-            />
+      {/* ── Scrollable content area + floating roll log ─────────────
+          Wrapped together so the floating RollLog pill's `absolute
+          bottom-3` anchors to the bottom of THIS area, not the panel's true
+          bottom edge — which is reserved for LicenseNotice below, outside
+          this wrapper and outside the scrollable `<main>` entirely, so it
+          can never end up inside a scrolling list and always stays
+          visible. ── */}
+      <div className="relative flex-1 min-h-0 overflow-hidden">
+        <main className="h-full overflow-y-auto scrollbar-thin">
+          {/* Sheet tabs */}
+          {showSheet && character && (
+            <>
+              {activeTab === "summary" && (
+                <SummaryTab
+                  character={character}
+                  canEdit={canEdit}
+                  onUpdate={updateCharacter}
+                  onRoll={onRoll}
+                  isGM={isGM}
+                />
+              )}
+              {activeTab === "combat" && (
+                <CombatTab
+                  character={character}
+                  canEdit={canEdit}
+                  isGM={isGM}
+                  onUpdate={updateCharacter}
+                  onRoll={onRoll}
+                  onRollInitiative={onRollInitiative}
+                  onDeleteEntry={deleteWithUndo}
+                />
+              )}
+              {activeTab === "spells" && (
+                <SpellsTab
+                  character={character}
+                  canEdit={canEdit}
+                  isGM={isGM}
+                  onUpdate={updateCharacter}
+                  onRoll={onRoll}
+                  onDeleteEntry={deleteWithUndo}
+                />
+              )}
+              {activeTab === "inventory" && (
+                <InventoryTab
+                  character={character}
+                  canEdit={canEdit}
+                  isGM={isGM}
+                  onUpdate={updateCharacter}
+                  onRoll={onRoll}
+                  onDeleteEntry={deleteWithUndo}
+                />
+              )}
+            </>
           )}
-        </div>
-      </main>
 
-      {/* Floating pill — only when sheet is visible (not to stack with inline log) */}
-      {showSheet && (
-        <RollLog rolls={recentRolls} isGM={isGM} currentPlayerId={playerId} />
-      )}
+          {/* ── DicePanel + RollLog — always mounted here, never unmounted.
+              Mounted once in <main>, visible in all states. */}
+          <div className="px-3 pt-2 pb-3 flex flex-col gap-3">
+            <DicePanel
+              isGM={isGM}
+              onRoll={onFreeRoll}
+              defaultCollapsed={true}
+            />
+            {(showNoToken || showNoSheet || showUnsupportedVersion || showInvalidSheet) && (
+              <RollLog
+                rolls={recentRolls}
+                isGM={isGM}
+                currentPlayerId={playerId}
+                inline
+              />
+            )}
+          </div>
+        </main>
+
+        {/* Floating pill — only when sheet is visible (not to stack with inline log) */}
+        {showSheet && (
+          <RollLog rolls={recentRolls} isGM={isGM} currentPlayerId={playerId} />
+        )}
+      </div>
+
+      {/* ── License notice — Nimble 3rd Party Creator License v2.0 requires
+          this attribution to stay visible at all times, never inside a
+          scrollable area. Always the last, shrink-0 element of the panel. ── */}
+      <LicenseNotice />
     </div>
   );
 }
