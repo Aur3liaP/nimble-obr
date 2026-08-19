@@ -131,6 +131,18 @@ const MIGRATIONS: Migration[] = [
       character,
       createDefaultCharacter("", "") as unknown as Record<string, unknown>,
     ),
+
+  // v1 -> v2: adds `initiativeAdvantage`, the default roll mode pre-selected
+  // in the initiative DiceRollModal (Nimble Core Rules 2nd printing, p.15).
+  // A record from before this field existed has no opinion on it — default
+  // to "none" (no advantage/disadvantage), matching createDefaultCharacter.
+  // A small, explicit, single-field transform, per this file's header —
+  // NOT a call to fillMissingFields, which is legitimate only for v0 -> v1.
+  (character) => ({
+    ...character,
+    initiativeAdvantage:
+      "initiativeAdvantage" in character ? character.initiativeAdvantage : "none",
+  }),
 ];
 
 /**

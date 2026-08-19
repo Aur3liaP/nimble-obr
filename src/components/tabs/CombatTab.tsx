@@ -18,6 +18,7 @@ import type {
 } from "../../types/character";
 import { DiceRollModal } from "../ui/DiceRollModal";
 import { resolveFormulaDisplay, evalFormula } from "../../utils/formulaParser";
+import { initiativeToActions } from "../../utils/initiative";
 import { BentoSection } from "../ui/common/BentoSection";
 import { InlineNumberField } from "../ui/common/InlineEditField";
 import { FavoriteButton } from "../ui/common/FavoriteButton";
@@ -40,7 +41,10 @@ import type { UndoableArrayKey } from "../../hooks/useDeleteUndo";
  * @property isGM - Whether the current player is the GM.
  * @property onUpdate - Persists a partial character update.
  * @property onRoll - Triggers a dice roll request after modal confirmation.
- * @property onRollInitiative - Rolls initiative via the shared `useOBR` logic; resolves to the roll result (or void/null) so this tab can derive the resulting action count.
+ * @property onRollInitiative - Rolls initiative via the shared `useOBR` logic
+ * after {@link DiceRollModal} confirmation; resolves to the total AND the
+ * kept natural d20 (needed for the "natural 20 always grants 3 actions"
+ * rule — see `initiativeToActions`), or `null`/void on failure.
  * @property onDeleteEntry - Deletes an action (stored in `character.actions`,
  * `arrayKey: "actions"`) with undo support — see `useDeleteUndo`. Replaces
  * a plain `onUpdate({ actions: character.actions.filter(...) })` so the
@@ -53,8 +57,10 @@ interface Props {
   onUpdate: (u: Partial<NimbleCharacter>) => void;
   onRoll: (req: DiceRollRequest) => void;
   onRollInitiative: (
-    mode?: RollMode,
-  ) => Promise<{ total: number } | null> | void;
+    mode: RollMode,
+    advantageCount: number,
+    hidden: boolean,
+  ) => Promise<{ total: number; naturalRoll: number } | null> | void;
   onDeleteEntry: (arrayKey: UndoableArrayKey, id: string) => Promise<void>;
 }
 
@@ -113,20 +119,6 @@ function computeDefense(character: NimbleCharacter): {
   return { value: character.stats.dex + (character.armor.defenseBonus ?? 0) };
 }
 
-/**
- * Converts an initiative roll total into the number of actions available
- * on the first combat turn, per the Nimble rules: below 10 → 1 action,
- * 10–19 → 2 actions, 20+ → 3 actions.
- *
- * @param total - The resolved initiative roll total.
- * @returns The number of actions (1–3) granted for the first turn.
- */
-function initiativeToActions(total: number): number {
-  if (total < 10) return 1;
-  if (total < 20) return 2;
-  return 3;
-}
-
 // ── Main component ────────────────────────────────────────────────
 
 /**
@@ -148,6 +140,10 @@ export function CombatTab({
   const [rollPending, setRollPending] = useState<RollPending | null>(null);
   const [addingAction, setAddingAction] = useState(false);
   const [editingActionId, setEditingActionId] = useState<string | null>(null);
+  // Whether the initiative DiceRollModal is open — initiative now goes
+  // through the same standard/advantage/disadvantage confirmation as every
+  // other roll, instead of rolling immediately on click.
+  const [rollingInitiative, setRollingInitiative] = useState(false);
 
   // Latest character, read inside the initiative-result timeout below so
   // that write doesn't clobber an actionsRemaining change made during the
@@ -221,19 +217,31 @@ export function CombatTab({
   };
 
   /**
-   * Rolls initiative, then sets the turn tracker's counter to the number of
-   * actions the result grants (see {@link initiativeToActions}).
+   * Resolves the initiative roll on {@link DiceRollModal} confirmation, then
+   * sets the turn tracker's counter to the number of actions the result
+   * grants (see {@link initiativeToActions}).
    *
-   * @param mode - Roll mode, defaults to "standard".
+   * `character.initiativeAdvantage` is applied as the effective mode only if
+   * the player left the modal on "standard" — same pattern as
+   * `SummaryTab.confirmRoll`'s per-stat save advantage.
    */
-  const handleInitiativeRoll = async (mode: RollMode = "standard") => {
-    const result = await onRollInitiative(mode);
+  const confirmInitiativeRoll = async (
+    mode: RollMode,
+    advantageCount: number,
+    hidden: boolean,
+  ) => {
+    const finalMode =
+      character.initiativeAdvantage !== "none" && mode === "standard"
+        ? character.initiativeAdvantage
+        : mode;
+    const result = await onRollInitiative(finalMode, advantageCount, hidden);
     if (result && typeof result.total === "number") {
-      const ac = initiativeToActions(result.total);
+      const ac = initiativeToActions(result.total, result.naturalRoll);
       onUpdate({
         combat: { actionsRemaining: ac, initiativeResult: result.total },
       });
     }
+    setRollingInitiative(false);
   };
 
   /** Replaces the character's full actions array (shorthand for `onUpdate({ actions: ... })`). */
@@ -365,7 +373,7 @@ export function CombatTab({
                 </div>
                 <div className="flex flex-col gap-1.5 flex-1">
                   <button
-                    onClick={() => handleInitiativeRoll("standard")}
+                    onClick={() => setRollingInitiative(true)}
                     className="w-full py-2 rounded-lg border border-amber-700/60 bg-amber-950/40 text-amber-300 text-sm font-bold hover:bg-amber-900/50 transition-all active:scale-95"
                   >
                     🎲
@@ -425,17 +433,15 @@ export function CombatTab({
               })}
             </div>
             <p className="text-[10px] text-stone-600 mt-1.5 italic">
-              Initiative: &lt;10 = 1 action · 10–19 = 2 · 20+ = 3
+              Initiative: &lt;10 = 1 action · 10–19 = 2 · 20+ (or nat 20) = 3
             </p>
           </div>
         </div>
         {character.combat.initiativeResult !== null && (
           <p className="text-[10px] font-medium text-amber-400 text-center mt-1.5 -mb-1 ">
             Result: {character.combat.initiativeResult} →{" "}
-            {initiativeToActions(character.combat.initiativeResult)} action
-            {initiativeToActions(character.combat.initiativeResult) > 1
-              ? "s"
-              : ""}
+            {character.combat.actionsRemaining} action
+            {character.combat.actionsRemaining > 1 ? "s" : ""}
           </p>
         )}
       </BentoSection>
@@ -646,6 +652,15 @@ export function CombatTab({
             setAddingAction(false);
           }}
           onCancel={() => setAddingAction(false)}
+        />
+      )}
+      {rollingInitiative && (
+        <DiceRollModal
+          label="Initiative"
+          formula={`1d20+${character.stats.dex + character.initiativeBonus}`}
+          isGM={isGM}
+          onConfirm={confirmInitiativeRoll}
+          onCancel={() => setRollingInitiative(false)}
         />
       )}
       {rollPending && (

@@ -102,14 +102,25 @@ export default function App() {
       if (result?.error) setRollError(result.error);
     });
   };
-  const onRollInitiative = (mode: RollMode = "standard") => {
+  const onRollInitiative = (
+    mode: RollMode = "standard",
+    advantageCount = 0,
+    hidden = false,
+  ) => {
     setRollError(null);
-    // Unlike onRoll/onFreeRoll, CombatTab awaits this and reads `.total`
-    // off the resolved result to derive the starting action count, so the
-    // result must still be returned, not swallowed.
-    return rollInitiative(mode).then((result) => {
-      if (result?.error) setRollError(result.error);
-      return result;
+    // Unlike onRoll/onFreeRoll, CombatTab awaits this and reads `.total`/
+    // `.naturalRoll` off the resolved result to derive the starting action
+    // count (see initiativeToActions), so the result must still be
+    // returned, not swallowed. `naturalRoll` is `kept[0]` — the kept d20
+    // after advantage/disadvantage resolution, not the raw first die (see
+    // RollFormulaResult.kept's doc in formulaParser.ts).
+    return rollInitiative(mode, advantageCount, hidden).then((result) => {
+      if (!result) return null;
+      if (result.error) {
+        setRollError(result.error);
+        return null;
+      }
+      return { total: result.total, naturalRoll: result.kept[0] ?? result.total };
     });
   };
 

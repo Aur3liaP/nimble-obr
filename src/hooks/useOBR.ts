@@ -196,7 +196,11 @@ export interface UseOBRReturn {
   updateCharacter: (updates: Partial<NimbleCharacter>) => Promise<boolean>;
   handleRoll: (req: DiceRollRequest) => Promise<DiceRollResult | null>;
   handleFreeRoll: (req: DiceRollRequest) => Promise<DiceRollResult | null>;
-  rollInitiative: (mode?: RollMode) => Promise<DiceRollResult | null>;
+  rollInitiative: (
+    mode?: RollMode,
+    advantageCount?: number,
+    hidden?: boolean,
+  ) => Promise<DiceRollResult | null>;
   recentRolls: DiceRollResult[];
   createSheetForToken: (item: Item) => Promise<void>;
   claimToken: () => Promise<void>;
@@ -1142,17 +1146,28 @@ export function useOBR(): UseOBRReturn {
 
   /**
    * Rolls initiative for the current character: `1d20 + DEX + initiativeBonus`.
+   * Now routed through {@link DiceRollModal} like every other roll (see
+   * CombatTab), so `mode`/`advantageCount`/`hidden` come from the same
+   * confirmation the player already sees for stat saves/skill checks.
    *
    * @param mode - Roll mode, defaults to "standard".
+   * @param advantageCount - Extra dice for advantage/disadvantage, see {@link DiceRollRequest.advantageCount}.
+   * @param hidden - GM-only hidden roll flag, see {@link DiceRollRequest.hidden}.
    * @returns The resolved {@link DiceRollResult}, or `null` if no character is loaded.
    */
-  const rollInitiative = async (mode: RollMode = "standard") => {
+  const rollInitiative = async (
+    mode: RollMode = "standard",
+    advantageCount = 0,
+    hidden = false,
+  ) => {
     const current = characterRef.current;
     if (!current) return null;
     return handleRoll({
       label: "Initiative",
       formula: `1d20+${current.stats.dex + (current.initiativeBonus || 0)}`,
       mode,
+      advantageCount,
+      hidden,
     });
   };
 

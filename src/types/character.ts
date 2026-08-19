@@ -185,6 +185,14 @@ export interface NimbleCharacter {
 
   armor: Armor;
   initiativeBonus: number;
+  /**
+   * Default roll mode pre-selected in the initiative {@link DiceRollModal}
+   * (Nimble Core Rules 2nd printing, p.15 grants advantage/disadvantage on
+   * initiative from certain sources) — the player can still override it,
+   * exactly like {@link SaveMods}' per-stat advantage does for stat saves
+   * (see `SummaryTab.confirmRoll`).
+   */
+  initiativeAdvantage: SaveAdvantage;
   combat: CombatState;
 
   languages: string[];
@@ -230,7 +238,7 @@ export const METADATA_KEY = "com.nimble-obr.nimble/character_sheet";
  * needs transforming to match. See that file's header for the full
  * procedure.
  */
-export const CURRENT_SCHEMA_VERSION = 1;
+export const CURRENT_SCHEMA_VERSION = 2;
 
 /**
  * Highest level a character can be set to.
@@ -344,6 +352,7 @@ export function createDefaultCharacter(
       defenseBonus: 0,
     },
     initiativeBonus: 0,
+    initiativeAdvantage: "none",
     combat: { actionsRemaining: 3, initiativeResult: null },
     languages: ["Common"],
     abilities: [],

@@ -112,6 +112,28 @@ describe("migrateCharacter — versionless and v0 records", () => {
   });
 });
 
+describe("migrateCharacter — v1 -> v2 (initiativeAdvantage)", () => {
+  it("defaults initiativeAdvantage to 'none' for a v1 record that predates the field", () => {
+    const base = createDefaultCharacter("token-1", "owner-1") as unknown as Record<string, unknown>;
+    const v1 = omit({ ...base, schemaVersion: 1 }, ["initiativeAdvantage"]);
+    const result = migrateCharacter(v1);
+    expect(result.status).toBe("ok");
+    if (result.status !== "ok") return;
+    expect(result.migrated).toBe(true);
+    expect(result.character.initiativeAdvantage).toBe("none");
+    expect(result.character.schemaVersion).toBe(CURRENT_SCHEMA_VERSION);
+  });
+
+  it("does not overwrite an already-present initiativeAdvantage", () => {
+    const base = createDefaultCharacter("token-1", "owner-1") as unknown as Record<string, unknown>;
+    const v1 = { ...base, schemaVersion: 1, initiativeAdvantage: "advantage" };
+    const result = migrateCharacter(v1);
+    expect(result.status).toBe("ok");
+    if (result.status !== "ok") return;
+    expect(result.character.initiativeAdvantage).toBe("advantage");
+  });
+});
+
 describe("migrateCharacter — already current", () => {
   it("reports no migration for a record already at CURRENT_SCHEMA_VERSION", () => {
     const character = createDefaultCharacter("token-1", "owner-1");
