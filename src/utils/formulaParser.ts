@@ -23,7 +23,7 @@
  *    order. Per the glossary, these (and flat damage values) never miss or
  *    crit — see {@link RollFormulaResult.canCritOrFumble}.
  *  - Math: + - * / floor() ceil() min() max()
- *  - Custom helpers: incrementdice(base, level), stepdice(level, d1, d2, d3, d4)
+ *  - Custom helpers: incrementdice(base, level), stepdice(level, d1, d2, d3, d4[, d5])
  *  - Parentheses
  *
  * Deliberately avoids eval() — uses a small hand-written recursive descent
@@ -63,7 +63,7 @@ const MAX_DICE_COUNT = 100;
  *
  * @remarks Same caveat as {@link MAX_DICE_COUNT}: a legal level-20
  * character's dynamic-dice spells top out around d12 (e.g. Entice's
- * `1dstepdice(level,4,8,10,12)`), roughly 80x below this limit.
+ * `1dstepdice(level,4,6,8,10,12)`), roughly 80x below this limit.
  */
 const MAX_DICE_SIDES = 1000;
 
@@ -641,6 +641,51 @@ export function listFormulaFunctions(): FormulaFunctionInfo[] {
 }
 
 /**
+ * Picks a step-dice size for `stepdice(level, ...)`/`1dstepdice(level,
+ * ...)`, given the caster's level and an ordered list of die sizes
+ * (smallest/lowest-level first). Shared by the two places that resolve
+ * this helper — {@link Parser}'s `parsePrimary` (bare `stepdice(...)`) and
+ * {@link resolveDynamicDice}'s regex path (`1dstepdice(...)`) — so a
+ * future change to the breakpoint scheme can't be applied to one and
+ * forgotten in the other. That exact failure mode (two hand-copied
+ * implementations of the same logic silently drifting apart) is why this
+ * project extracts shared tables/logic instead of duplicating it — see
+ * `VARIABLE_TABLE`/`MATH_FUNCTIONS`'s own reasoning elsewhere in this file.
+ *
+ * Two supported arities:
+ * - **4 sizes** (the original shape): 3 breakpoints (5/10/15) → 4 bands.
+ *   Kept working for backward compatibility — nothing in this codebase
+ *   currently calls it this way (`stepdice`'s only real caller, Entice,
+ *   now uses 5), but nothing stops a future formula from doing so.
+ * - **5 sizes** (added for Entice's 2nd-printing die progression — Core
+ *   Rules 2nd printing: base d4, "Increment the die size 1 step every 5
+ *   levels (d6 → d8 → d10 → d12)"): 4 breakpoints (5/10/15/20), the last
+ *   one matching {@link MAX_LEVEL} exactly, so the final size is reachable
+ *   at all. The original 4-size/3-breakpoint shape could never express
+ *   this 5-tier progression — it's one band short by construction, not a
+ *   bug in the breakpoint values themselves.
+ *
+ * @param level - Caster level.
+ * @param sizes - 4 or 5 die sizes, in ascending level-band order.
+ * @throws {FormulaError} If `sizes` isn't length 4 or 5 — a different
+ * count means the caller's formula is malformed, not that the breakpoint
+ * scheme should silently guess.
+ */
+function pickStepDiceSize(level: number, sizes: number[]): number {
+  if (sizes.length !== 4 && sizes.length !== 5) {
+    throw new FormulaError(
+      `stepdice expects 4 or 5 die sizes, got ${sizes.length}.`,
+    );
+  }
+  const breakpoints = sizes.length === 5 ? [5, 10, 15, 20] : [5, 10, 15];
+  let tier = 0;
+  for (const breakpoint of breakpoints) {
+    if (level >= breakpoint) tier++;
+  }
+  return sizes[tier];
+}
+
+/**
  * Minimal recursive-descent arithmetic parser (no `eval`).
  *
  * Grammar (informal):
@@ -650,7 +695,8 @@ export function listFormulaFunctions(): FormulaFunctionInfo[] {
  * unary   := '-' primary | primary
  * primary := number | '(' expr ')' | floor(expr) | ceil(expr)
  *          | min(expr, expr) | max(expr, expr)
- *          | incrementdice(base, level) | stepdice(level, d1, d2, d3, d4)
+ *          | incrementdice(base, level)
+ *          | stepdice(level, d1, d2, d3, d4[, d5])
  * ```
  *
  * Used internally by {@link safeEval}; not exported.
@@ -911,29 +957,21 @@ class Parser {
         return baseSides + increments * 2;
       }
 
-      // stepdice(level, d1, d2, d3, d4)
+      // stepdice(level, d1, d2, d3, d4[, d5]) — see pickStepDiceSize for
+      // the 4-vs-5-size breakpoint scheme.
       if (this.input.startsWith("stepdice(", this.pos)) {
         this.pos += "stepdice(".length;
         const level = this.parseExpr();
 
-        if (this.peek() === ",") this.consume();
-        const d1 = this.parseExpr();
-
-        if (this.peek() === ",") this.consume();
-        const d2 = this.parseExpr();
-
-        if (this.peek() === ",") this.consume();
-        const d3 = this.parseExpr();
-
-        if (this.peek() === ",") this.consume();
-        const d4 = this.parseExpr();
+        const sizes: number[] = [];
+        while (this.peek() === ",") {
+          this.consume();
+          sizes.push(this.parseExpr());
+        }
 
         if (this.peek() === ")") this.consume();
 
-        if (level >= 15) return d4;
-        if (level >= 10) return d3;
-        if (level >= 5) return d2;
-        return d1;
+        return pickStepDiceSize(level, sizes);
       }
 
       // Unknown token — this used to `return 0` silently, which is exactly
@@ -1127,8 +1165,9 @@ function positionalDicePattern(): RegExp {
  * Resolves the project's two custom dynamic-dice helpers into plain NdX
  * notation before the rest of the pipeline (averaging / rolling) runs.
  *
- * - `1dstepdice(level, d1, d2, d3, d4)` → picks the die size based on level
- *   breakpoints (5/10/15).
+ * - `1dstepdice(level, d1, d2, d3, d4[, d5])` → picks the die size based on
+ *   level breakpoints; see {@link pickStepDiceSize} for the 4-vs-5-size
+ *   breakpoint scheme.
  * - `incrementdice(base, level)dSIDES` → increases dice count by
  *   `floor(level / 5)` on top of `base`.
  *
@@ -1151,15 +1190,11 @@ function resolveDynamicDice(
   enforceLimits: boolean = true,
 ): string {
   formula = formula.replace(/1dstepdice\(([^)]+)\)/gi, (_match, args) => {
-    const [level, d1, d2, d3, d4] = args
+    const [level, ...sizes] = args
       .split(",")
       .map((v: string) => Number(v.trim()));
 
-    if (level >= 15) return `1d${d4}`;
-    if (level >= 10) return `1d${d3}`;
-    if (level >= 5) return `1d${d2}`;
-
-    return `1d${d1}`;
+    return `1d${pickStepDiceSize(level, sizes)}`;
   });
 
   formula = formula.replace(

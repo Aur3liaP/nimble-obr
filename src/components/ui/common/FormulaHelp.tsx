@@ -82,7 +82,7 @@ const EXAMPLES: { formula: string; note: string }[] = [
   },
   {
     formula: realSpellFormula("Entice"),
-    note: "Dynamic dice size: 1dstepdice(level, 4, 8, 10, 12) rolls a bigger single die at level 5, 10, and 15, not more dice.",
+    note: "Dynamic dice size: 1dstepdice(level, 4, 6, 8, 10, 12) rolls a bigger single die at level 5, 10, 15, and 20, not more dice.",
   },
 ];
 

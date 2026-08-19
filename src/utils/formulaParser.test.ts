@@ -540,8 +540,8 @@ describe("rollFormula", () => {
     expect(shadowBlast.rolls).toHaveLength(5);
     expect(shadowBlast.error).toBeUndefined();
 
-    // Entice: "1dstepdice(level,4,8,10,12)" -> level >= 15 picks the d12 tier.
-    const entice = rollFormula("1dstepdice(level,4,8,10,12)", char);
+    // Entice: "1dstepdice(level,4,6,8,10,12)" -> level >= 20 picks the d12 tier.
+    const entice = rollFormula("1dstepdice(level,4,6,8,10,12)", char);
     expect(entice.rolls).toHaveLength(1);
     entice.rolls.forEach((r) => expect(r).toBeLessThanOrEqual(12));
     expect(entice.error).toBeUndefined();
@@ -918,6 +918,76 @@ describe("implicit-count dice notation (dN -> 1dN)", () => {
     const entice = rollFormula("1dstepdice(level,4,8,10,12)", char);
     expect(entice.rolls).toHaveLength(1);
     expect(entice.error).toBeUndefined();
+  });
+});
+
+describe("stepdice — 4-size (legacy) and 5-size (2nd-printing Entice) breakpoints", () => {
+  // pickStepDiceSize is shared by two call sites: resolveDynamicDice's
+  // regex path (1dstepdice(...), exercised here via parseDamageFormula's
+  // diceNotation — deterministic, no rolling needed) and Parser.parsePrimary's
+  // bare stepdice(...) primitive (exercised via safeEval directly). Testing
+  // both confirms they stay in sync through the shared helper instead of
+  // silently drifting apart the way two hand-copied implementations would.
+
+  it("5-size shape picks d4/d6/d8/d10/d12 across every level 1-20, matching the book's progression", () => {
+    // Core Rules 2nd printing, Entice: "Increment the die size 1 step every
+    // 5 levels (d6 -> d8 -> d10 -> d12)", base d4. Breakpoints 5/10/15/20.
+    const ctxAt = (level: number) => buildContext(makeCharacter({ level }));
+    const sizeAt = (level: number) =>
+      level >= 20 ? 12 : level >= 15 ? 10 : level >= 10 ? 8 : level >= 5 ? 6 : 4;
+
+    for (let level = 1; level <= 20; level++) {
+      const { diceNotation } = parseDamageFormula(
+        "1dstepdice(level,4,6,8,10,12)",
+        ctxAt(level),
+      );
+      expect(diceNotation).toBe(`1d${sizeAt(level)}`);
+    }
+  });
+
+  it("5-size shape reaches d12 exactly at level 20 (MAX_LEVEL) — the bug this batch fixes (previously capped at d10)", () => {
+    const ctx = buildContext(makeCharacter({ level: 20 }));
+    const { diceNotation } = parseDamageFormula("1dstepdice(level,4,6,8,10,12)", ctx);
+    expect(diceNotation).toBe("1d12");
+  });
+
+  it("4-size shape (legacy, no real caller today, kept working for backward compatibility) still uses the original 3 breakpoints", () => {
+    const cases: [level: number, size: number][] = [
+      [1, 4],
+      [4, 4],
+      [5, 8],
+      [9, 8],
+      [10, 10],
+      [14, 10],
+      [15, 12],
+      [20, 12], // no 4th breakpoint in this shape — level 20 stays at the 15+ tier
+    ];
+    for (const [level, size] of cases) {
+      const ctx = buildContext(makeCharacter({ level }));
+      const { diceNotation } = parseDamageFormula("1dstepdice(level,4,8,10,12)", ctx);
+      expect(diceNotation).toBe(`1d${size}`);
+    }
+  });
+
+  it("rejects a stepdice call with a size count other than 4 or 5, instead of guessing a breakpoint scheme", () => {
+    const ctx = buildContext(makeCharacter({ level: 10 }));
+    expect(() => parseDamageFormula("1dstepdice(level,4,6,8)", ctx)).toThrow(/4 or 5/i);
+    expect(() =>
+      parseDamageFormula("1dstepdice(level,4,6,8,10,12,14)", ctx),
+    ).toThrow(/4 or 5/i);
+  });
+
+  it("the bare stepdice(...) primitive (Parser.parsePrimary, no 1d prefix) shares the same breakpoint logic", () => {
+    // Not how any real spell formula is written (stepdice only supports
+    // the 1d prefix in practice — see CLAUDE.md), but part of the parser's
+    // own grammar; must stay consistent with the 1dstepdice(...) path above
+    // through the shared helper.
+    expect(safeEval("stepdice(1,4,6,8,10,12)")).toBe(4);
+    expect(safeEval("stepdice(5,4,6,8,10,12)")).toBe(6);
+    expect(safeEval("stepdice(10,4,6,8,10,12)")).toBe(8);
+    expect(safeEval("stepdice(15,4,6,8,10,12)")).toBe(10);
+    expect(safeEval("stepdice(20,4,6,8,10,12)")).toBe(12);
+    expect(safeEval("stepdice(20,4,8,10,12)")).toBe(12); // 4-size shape, unchanged
   });
 });
 
