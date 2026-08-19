@@ -20,7 +20,6 @@ import { DicePanel } from "./components/ui/DicePanel";
 import { CharacterHeader } from "./components/ui/CharacterHeader";
 import { SyncStatusBanner } from "./components/ui/SyncStatusBanner";
 import { DeleteUndoToast } from "./components/ui/DeleteUndoToast";
-import { LicenseNotice } from "./components/ui/LicenseNotice";
 import type { DiceRollRequest, RollMode } from "./types/character";
 
 /** Identifiers for the four character sheet tabs. */
@@ -139,7 +138,7 @@ export default function App() {
   const firstItem = selectedItems[0];
 
   return (
-    <div className="flex flex-col h-full bg-stone-950 text-stone-200 overflow-hidden font-sans">
+    <div className="relative flex flex-col h-full bg-stone-950 text-stone-200 overflow-hidden font-sans pb-7">
       {/* ── Sync status — always mounted, renders nothing when idle.
           Not scoped to showSheet: a roll log write can fail with no
           character sheet open at all. ── */}
@@ -250,90 +249,133 @@ export default function App() {
         </div>
       )}
 
-      {/* ── Scrollable content area + floating roll log ─────────────
-          Wrapped together so the floating RollLog pill's `absolute
-          bottom-3` anchors to the bottom of THIS area, not the panel's true
-          bottom edge — which is reserved for LicenseNotice below, outside
-          this wrapper and outside the scrollable `<main>` entirely, so it
-          can never end up inside a scrolling list and always stays
-          visible. ── */}
-      <div className="relative flex-1 min-h-0 overflow-hidden">
-        <main className="h-full overflow-y-auto scrollbar-thin">
-          {/* Sheet tabs */}
-          {showSheet && character && (
-            <>
-              {activeTab === "summary" && (
-                <SummaryTab
-                  character={character}
-                  canEdit={canEdit}
-                  onUpdate={updateCharacter}
-                  onRoll={onRoll}
-                  isGM={isGM}
-                />
-              )}
-              {activeTab === "combat" && (
-                <CombatTab
-                  character={character}
-                  canEdit={canEdit}
-                  isGM={isGM}
-                  onUpdate={updateCharacter}
-                  onRoll={onRoll}
-                  onRollInitiative={onRollInitiative}
-                  onDeleteEntry={deleteWithUndo}
-                />
-              )}
-              {activeTab === "spells" && (
-                <SpellsTab
-                  character={character}
-                  canEdit={canEdit}
-                  isGM={isGM}
-                  onUpdate={updateCharacter}
-                  onRoll={onRoll}
-                  onDeleteEntry={deleteWithUndo}
-                />
-              )}
-              {activeTab === "inventory" && (
-                <InventoryTab
-                  character={character}
-                  canEdit={canEdit}
-                  isGM={isGM}
-                  onUpdate={updateCharacter}
-                  onRoll={onRoll}
-                  onDeleteEntry={deleteWithUndo}
-                />
-              )}
-            </>
-          )}
+      {/* ── Scrollable content area ─────────────────────────────────
+          Part 1h: RESTORED to the pre-part-1f design (a single scroll
+          region) per the "Panel layout contract" in CLAUDE.md, after parts
+          1f and 1g each tried to make `<main>` a flex CONTAINER for its
+          children and each broke a different state — see CLAUDE.md's
+          history for both. `<main>` here is deliberately NOT `flex
+          flex-col` when a sheet tab is open: the contract requires
+          `DicePanel` to "sit at the bottom of the tab content... and
+          scroll WITH the content," which is exactly plain block flow
+          inside a single `overflow-y-auto` region — the tab content and
+          the DicePanel/RollLog wrapper below it are just two stacked
+          block-level children, and scrolling `<main>` moves both together.
+          Part 1g's fix (giving the tab content its OWN internal
+          `overflow-y-auto` region, separate from `<main>`'s) DID stop the
+          DicePanel wrapper from collapsing to 0px, but it also silently
+          pinned DicePanel below a fixed-height, independently-scrolling
+          tab content box — i.e. DicePanel stopped scrolling with the
+          sheet, which nothing had written down as a requirement until the
+          contract above existed to catch it against. That is the class of
+          bug this whole rewrite is meant to end: verify against the
+          contract, not against whichever single state was last reported
+          broken.
 
-          {/* ── DicePanel + RollLog — always mounted here, never unmounted.
-              Mounted once in <main>, visible in all states. */}
-          <div className="px-3 pt-2 pb-3 flex flex-col gap-3">
-            <DicePanel
-              isGM={isGM}
-              onRoll={onFreeRoll}
-              defaultCollapsed={true}
-            />
-            {(showNoToken || showNoSheet || showUnsupportedVersion || showInvalidSheet) && (
-              <RollLog
-                rolls={recentRolls}
+          `<main>` DOES still need `flex flex-col` in the no-sheet states
+          (no-token/no-sheet/unsupported/invalid), because there the
+          DicePanel/RollLog wrapper is `<main>`'s ONLY child — no sibling
+          to compete with for space — so stretching it via `flex-1 min-h-0`
+          to reach `<main>`'s real bottom (needed so `RollLog`'s inline
+          license attribution reaches a genuine bottom edge, not just its
+          own natural content height) is safe there: the 1g collapse bug
+          specifically required TWO children with mismatched flex-basis
+          fighting over shrink space, and a lone child can't do that to
+          itself. This is why the license-attribution fix from parts 1e/1f
+          DOES genuinely depend on `<main>` being flex — but only in the
+          no-sheet branch, never the sheet-open one; conditioning `<main>`'s
+          own classes on `showSheet` satisfies both without re-breaking
+          either. ── */}
+      <main
+        className={`flex-1 overflow-y-auto scrollbar-thin ${showSheet ? "" : "flex flex-col"}`}
+      >
+        {/* Sheet tabs — plain block-flow content, no wrapper div, no
+            independent scroll region of its own. `<main>` is the ONLY
+            scroll container in this state, so DicePanel below sits at the
+            bottom of this content and scrolls away with it — per the
+            contract, that's the intended behavior, not a bug to fix. */}
+        {showSheet && character && (
+          <>
+            {activeTab === "summary" && (
+              <SummaryTab
+                character={character}
+                canEdit={canEdit}
+                onUpdate={updateCharacter}
+                onRoll={onRoll}
                 isGM={isGM}
-                currentPlayerId={playerId}
-                inline
               />
             )}
-          </div>
-        </main>
-
-        {/* Floating pill — only when sheet is visible (not to stack with inline log) */}
-        {showSheet && (
-          <RollLog rolls={recentRolls} isGM={isGM} currentPlayerId={playerId} />
+            {activeTab === "combat" && (
+              <CombatTab
+                character={character}
+                canEdit={canEdit}
+                isGM={isGM}
+                onUpdate={updateCharacter}
+                onRoll={onRoll}
+                onRollInitiative={onRollInitiative}
+                onDeleteEntry={deleteWithUndo}
+              />
+            )}
+            {activeTab === "spells" && (
+              <SpellsTab
+                character={character}
+                canEdit={canEdit}
+                isGM={isGM}
+                onUpdate={updateCharacter}
+                onRoll={onRoll}
+                onDeleteEntry={deleteWithUndo}
+              />
+            )}
+            {activeTab === "inventory" && (
+              <InventoryTab
+                character={character}
+                canEdit={canEdit}
+                isGM={isGM}
+                onUpdate={updateCharacter}
+                onRoll={onRoll}
+                onDeleteEntry={deleteWithUndo}
+              />
+            )}
+          </>
         )}
-      </div>
 
-      {/* ── License notice — Nimble 3rd Party Creator License v2.0 requires
-          this attribution to stay visible at all times, never inside a
-          scrollable area. Always the last, shrink-0 element of the panel. ── */}
-      <LicenseNotice />
+        {/* ── DicePanel + RollLog — always mounted here, never unmounted.
+            Mounted once in <main>, visible in all states. RollLog (inline)
+            also carries the pinned Nimble license notices — see its
+            @file header — present here from the empty state onward.
+
+            Part 1h: plain `flex flex-col gap-3` (natural content height,
+            a normal block-flow child of `<main>`) when a sheet tab is
+            open — no `flex-1`/`min-h-0`, nothing to stretch or collapse.
+            `flex-1 min-h-0` only when this wrapper is `<main>`'s sole
+            child (no-sheet states) — see the comment on `<main>` above for
+            why that's safe there and not elsewhere. */}
+        <div
+          className={`px-3 pt-2 pb-3 flex flex-col gap-3 ${showSheet ? "" : "flex-1 min-h-0"}`}
+        >
+          <DicePanel
+            isGM={isGM}
+            onRoll={onFreeRoll}
+            defaultCollapsed={true}
+          />
+          {(showNoToken || showNoSheet || showUnsupportedVersion || showInvalidSheet) && (
+            <RollLog
+              rolls={recentRolls}
+              isGM={isGM}
+              currentPlayerId={playerId}
+              inline
+            />
+          )}
+        </div>
+      </main>
+
+      {/* Floating pill — only when sheet is visible (not to stack with inline log).
+          Carries the same pinned license notices inside its popup, and no
+          longer unmounts when there are zero rolls — see RollLog's @file
+          header. */}
+      {showSheet && (
+        <RollLog rolls={recentRolls} isGM={isGM} currentPlayerId={playerId} />
+      )}
     </div>
   );
 }
