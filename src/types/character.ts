@@ -285,6 +285,14 @@ export interface DiceRollResult {
   total: number;
   isCritical: boolean;
   isFumble: boolean;
+  /**
+   * Whether this roll's notation can crit/fumble at all — `false` for a
+   * flat/dice-less formula and for positional dice (`d44`/`d66`/`d88`; see
+   * {@link formulaParser.rollPositionalDice}), `true` for a genuine `NdX`
+   * roll. See `RollFormulaResult.canCritOrFumble` in `formulaParser.ts` for
+   * the full rationale; carried through unchanged onto the broadcast result.
+   */
+  canCritOrFumble: boolean;
   hidden: boolean;
   playerId: string;
   playerName: string;

@@ -64,8 +64,8 @@ function realItemFormula(name: string): string {
 /**
  * Worked examples pulled from real spell data, chosen to cover the
  * notations a GM is most likely to get wrong: a variable glued directly
- * to a die, an implicit dice count, and the two dynamic-dice helpers
- * (dice count growing with level, and dice size growing with level).
+ * to a die, positional dice, and the two dynamic-dice helpers (dice count
+ * growing with level, and dice size growing with level).
  */
 const EXAMPLES: { formula: string; note: string }[] = [
   {
@@ -74,7 +74,7 @@ const EXAMPLES: { formula: string; note: string }[] = [
   },
   {
     formula: realSpellFormula("Glacier Strike"),
-    note: "Implicit dice count: \"d66\" means one die with 66 faces, same as 1d66, not 6d6.",
+    note: "Positional dice: \"d66\" rolls 2d6 and reads them as tens/ones (e.g. 4 then 5 = 45), not 6d6 summed. \"d66a\" is the advantage variant: roll 3, drop the lowest. These never miss or crit.",
   },
   {
     formula: realSpellFormula("Shadow Blast"),

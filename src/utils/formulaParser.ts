@@ -11,10 +11,17 @@
  *    as "LVL" rather than "LEVEL" — both are genuine, supported notation,
  *    not a typo to "fix" by rewriting the data. Do not remove this as
  *    "redundant" with LEVEL.
- *  - Dice notation: NdX (e.g. 1d8, 2d6), or implicit-count dN (e.g. Nimble's
- *    single-die d44/d66/d88), normalized to 1dN — averaged for display/
- *    modifier math; actual random rolling is done separately by
- *    {@link rollFormula}
+ *  - Dice notation: NdX (e.g. 1d8, 2d6), or implicit-count dN (e.g. a bare
+ *    `d20`), normalized to 1dN — averaged for display/modifier math; actual
+ *    random rolling is done separately by {@link rollFormula}
+ *  - Positional dice (Nimble Core Rules 2nd printing, p.?): `d44`/`d66`/`d88`
+ *    each roll 2 dice of the single repeated digit's size (d66 → 2 d6 dice,
+ *    NOT one 66-sided die) and read them positionally (tens, ones) rather
+ *    than summing — see {@link rollPositionalDice}. An advantage variant
+ *    (`d44a`/`d66a`/`d88a`) rolls 3 of that same die size, drops the
+ *    lowest, and reads the remaining 2 positionally in their original roll
+ *    order. Per the glossary, these (and flat damage values) never miss or
+ *    crit — see {@link RollFormulaResult.canCritOrFumble}.
  *  - Math: + - * / floor() ceil() min() max()
  *  - Custom helpers: incrementdice(base, level), stepdice(level, d1, d2, d3, d4)
  *  - Parentheses
@@ -356,21 +363,38 @@ function assertDiceWithinLimits(
  * {@link validateFormulaSyntax} passes `false`, deliberately, since it
  * validates syntax against a synthetic character and dice-count/sides
  * bounds are a roll-time concern against the real one. See
- * {@link validateFormulaSyntax}'s doc comment.
+ * {@link validateFormulaSyntax}'s doc comment. Positional dice
+ * (`d44`/`d66`/`d88`, see below) are never subject to this check either
+ * way — they're always exactly 2-3 fixed-size dice, well inside any limit.
  */
 export function diceToAverage(
   formula: string,
   rawFormula: string = formula,
   enforceLimits: boolean = true,
 ): string {
+  // Positional dice first — they resolve to an exact expected value, not a
+  // summed NdX, so they can't go through the generic replace below. Same
+  // preceded-char skip convention as normalizeImplicitDiceCount: only a
+  // bare (unprefixed) token is positional notation.
+  let result = formula.replace(
+    positionalDicePattern(),
+    (match, precedingChar: string, sides: string, advantageSuffix?: string) => {
+      if (precedingChar) return match;
+      return String(
+        positionalDiceAverage(positionalDieFaceSize(sides), !!advantageSuffix),
+      );
+    },
+  );
+
   // e.g.  2d6  →  7   (average of 2×(1+6)/2)
-  return formula.replace(/(\d+)d(\d+)/gi, (match, count, sides) => {
+  result = result.replace(/(\d+)d(\d+)/gi, (match, count, sides) => {
     const n = parseInt(count, 10);
     const s = parseInt(sides, 10);
     if (enforceLimits) assertDiceWithinLimits(n, s, match, rawFormula);
     const avg = Math.round(n * ((1 + s) / 2));
     return String(avg);
   });
+  return result;
 }
 
 /**
@@ -382,15 +406,40 @@ export function diceToAverage(
  * @param ctx - Context used to resolve variables before splitting.
  * @returns The dice part (e.g. "1d8") and the resolved numeric modifier.
  * If there is no leading dice notation, `diceNotation` is empty and the
- * whole formula is evaluated as the modifier.
+ * whole formula is evaluated as the modifier. `positional` is set instead
+ * of a plain `NdX` when the formula leads with positional dice notation
+ * (`d44`/`d66`/`d88`, optional `a` suffix) — see {@link rollPositionalDice}.
  */
 export function parseDamageFormula(
   formula: string,
   ctx: FormulaContext,
-): { diceNotation: string; modifier: number } {
+): { diceNotation: string; modifier: number; positional?: { sides: number; advantage: boolean } } {
   // Substitute variables first, then split dice from modifiers
   let subbed = substituteVariables(formula, ctx);
   subbed = resolveDynamicDice(subbed, formula);
+
+  // Positional dice (d44/d66/d88, optional advantage "a") — checked before
+  // the plain NdX match below, since normalizeImplicitDiceCount deliberately
+  // leaves a bare positional token untouched (see its doc comment) rather
+  // than normalizing it to "1dNN".
+  const positionalMatch = subbed.match(/^d(44|66|88)(a)?(?![a-z0-9])/i);
+  if (positionalMatch) {
+    const rest = subbed.slice(positionalMatch[0].length);
+    const modifier = rest.trim() ? safeEval(rest) : 0;
+    if (isNaN(modifier)) {
+      throw new FormulaError(
+        `Could not evaluate the modifier in formula: "${formula}" (resolved to "${subbed}").`,
+      );
+    }
+    return {
+      diceNotation: positionalMatch[0].toLowerCase(),
+      modifier,
+      positional: {
+        sides: positionalDieFaceSize(positionalMatch[1]),
+        advantage: !!positionalMatch[2],
+      },
+    };
+  }
 
   // Extract leading NdX
   const diceMatch = subbed.match(/^(\d+d\d+)/i);
@@ -808,10 +857,18 @@ export function safeEval(expr: string): number {
 }
 
 /**
- * Normalizes implicit-count dice notation (`dN`, e.g. Nimble's `d66`/`d44`/
- * `d88` single dice) to explicit `1dN` so it reads as real dice notation
- * everywhere downstream (the safety-limit check right below, then
- * `parseDamageFormula`'s leading-dice match, then `rollDice`).
+ * Positional dice sizes recognized by the rulebook (Nimble Core Rules 2nd
+ * printing): `d44`, `d66`, `d88`. Rolled and read positionally by
+ * {@link rollPositionalDice}/{@link positionalDiceAverage}, never summed
+ * like a normal `NdX` — see the @file header.
+ */
+const POSITIONAL_DICE_SIDES = [44, 66, 88] as const;
+
+/**
+ * Normalizes implicit-count dice notation (`dN`, e.g. a bare `d20`) to
+ * explicit `1dN` so it reads as real dice notation everywhere downstream
+ * (the safety-limit check right below, then `parseDamageFormula`'s
+ * leading-dice match, then `rollDice`).
  *
  * Only a `d` with no digit or letter immediately before it qualifies — this
  * is what keeps the already-explicit count in "2d6" untouched, and keeps
@@ -822,15 +879,126 @@ export function safeEval(expr: string): number {
  * the ")" and the trailing "d6" of "incrementdice(1,20)d6", breaking that
  * regex's own `\)d(\d+)` match.
  *
+ * Deliberately excludes {@link POSITIONAL_DICE_SIDES} (44/66/88): a bare
+ * `d66` is Nimble's positional-dice notation (2nd printing), not a literal
+ * 66-sided die, and is resolved separately — see
+ * {@link parseDamageFormula}/{@link diceToAverage}/{@link resolveFormulaDisplay}.
+ * Left untouched here (not rewritten to "1d66") so those callers can still
+ * recognize the bare form after this function runs.
+ *
  * @param formula - Formula with `incrementdice`/`stepdice` already expanded.
- * @returns The formula with every bare `dN` rewritten to `1dN`.
+ * @returns The formula with every bare `dN` (other than a positional size)
+ * rewritten to `1dN`.
  */
 function normalizeImplicitDiceCount(formula: string): string {
   return formula.replace(
     /([a-z0-9]?)d(\d+)/gi,
-    (match, precedingChar: string, sides: string) =>
-      precedingChar ? match : `1d${sides}`,
+    (match, precedingChar: string, sides: string) => {
+      if (precedingChar) return match;
+      if ((POSITIONAL_DICE_SIDES as readonly number[]).includes(Number(sides))) {
+        return match;
+      }
+      return `1d${sides}`;
+    },
   );
+}
+
+/**
+ * Extracts the individual die's face count from a positional-dice token's
+ * captured digits ("44", "66", or "88"). Each is the same digit written
+ * twice — d66 means "roll 2 (or 3, for advantage) d6 dice and read them
+ * positionally", NOT "roll a die with 66 faces" — so the actual die to roll
+ * is sized off a single digit of the token, not the token's numeric value
+ * as a whole.
+ */
+function positionalDieFaceSize(sidesToken: string): number {
+  return Number(sidesToken[0]);
+}
+
+/**
+ * Index of the (first, on a tie) lowest value in `values`. Shared by
+ * {@link rollPositionalDice} (drop the lowest of 3 rolled dice) and
+ * {@link positionalDiceAverage}'s exact enumeration, so the tie-break rule
+ * — drop the leftmost among equal lowest values — can't drift between the
+ * two. Strict `<` (not `<=`) is what makes this "leftmost on a tie": `idx`
+ * only moves to a later index when it's a strictly smaller value.
+ *
+ * @example indexOfLowestValue([4, 2, 5]) // → 1 (drops the 2)
+ * @example indexOfLowestValue([3, 3, 6]) // → 0 (drops the FIRST 3, not the second)
+ */
+function indexOfLowestValue(values: number[]): number {
+  let idx = 0;
+  for (let i = 1; i < values.length; i++) {
+    if (values[i] < values[idx]) idx = i;
+  }
+  return idx;
+}
+
+/**
+ * Reads a set of rolled positional dice into their two-digit value —
+ * `kept[0]` as the tens place, `kept[1]` as the ones place — without
+ * sorting. Position is preserved exactly as rolled: `[4, 5]` reads as 45,
+ * not resorted to the numerically larger 54. Shared by
+ * {@link rollPositionalDice} (real rolls) and {@link positionalDiceAverage}'s
+ * exact enumeration (hypothetical rolls), so both agree on what "reading
+ * positionally" means.
+ */
+function readPositionalValue(kept: [number, number]): number {
+  return kept[0] * 10 + kept[1];
+}
+
+/**
+ * Exact expected value of a positional-dice roll (`dNN` or `dNNa`), used by
+ * {@link diceToAverage} for display/modifier math (the same role
+ * {@link diceToAverage}'s plain-NdX branch plays for ordinary dice).
+ *
+ * Non-advantage: straightforward — the tens and ones dice are independent,
+ * so the average is just the average face value read into both positions.
+ *
+ * Advantage (roll 3, drop lowest — leftmost on a tie — keep the remaining 2
+ * positionally in original roll order): there's no simple closed form,
+ * because which of the 3 original positions survives depends on the values
+ * rolled, not just their ranks. `sides` is always small (4, 6, or 8 —
+ * {@link POSITIONAL_DICE_SIDES}), so this exhaustively enumerates all
+ * `sides^3` equally-likely outcomes (at most 512) and averages the exact
+ * result — cheap, and exact rather than approximated.
+ *
+ * @param sides - Size of each individual die (4, 6, or 8).
+ * @param advantage - Whether this is the "a" (roll-3-drop-lowest) variant.
+ */
+function positionalDiceAverage(sides: number, advantage: boolean): number {
+  const faceAverage = (sides + 1) / 2;
+  if (!advantage) return Math.round(readPositionalValue([faceAverage, faceAverage]));
+
+  let sum = 0;
+  let count = 0;
+  for (let a = 1; a <= sides; a++) {
+    for (let b = 1; b <= sides; b++) {
+      for (let c = 1; c <= sides; c++) {
+        const rolled = [a, b, c];
+        const dropIndex = indexOfLowestValue(rolled);
+        const kept = rolled.filter((_, i) => i !== dropIndex) as [number, number];
+        sum += readPositionalValue(kept);
+        count++;
+      }
+    }
+  }
+  return Math.round(sum / count);
+}
+
+/**
+ * Matches a bare positional-dice token (`d44`/`d66`/`d88`, optionally
+ * suffixed `a` for the advantage variant) not already prefixed with an
+ * explicit count or embedded in another identifier — same
+ * capture-and-skip-if-preceded convention as {@link normalizeImplicitDiceCount},
+ * and the same trailing exclusion so "d668" (not real notation) doesn't
+ * false-match "d66". Callers check `match[1]` (the optional preceding
+ * character) themselves; this is a plain, reusable pattern object, not a
+ * one-shot regex literal, since several functions below need their own
+ * `matchAll`/`match`/`replace` over it.
+ */
+function positionalDicePattern(): RegExp {
+  return /([a-z0-9]?)d(44|66|88)(a)?(?![a-z0-9])/gi;
 }
 
 /**
@@ -1153,7 +1321,9 @@ export function resolveFormulaDisplay(
     f = resolveDynamicDice(f, formula);
     // Evaluate non-dice parts but keep dice notation
     // e.g. "1d8 + 2 + 1" → "1d8+3"
-    const diceMatch = f.match(/\d+d\d+/i);
+    // Positional dice (bare d44/d66/d88, optional "a") shown as-is too, same
+    // as plain NdX — never resolved to a number for display.
+    const diceMatch = f.match(/\d+d\d+|d(?:44|66|88)a?(?![a-z0-9])/i);
     if (!diceMatch) {
       const val = safeEval(f);
       // NaN here means safeEval's character whitelist rejected whatever's
@@ -1259,6 +1429,20 @@ export interface RollFormulaResult {
   total: number;
   isCritical: boolean;
   isFumble: boolean;
+  /**
+   * Whether the "1 = miss / max face = crit" rule can apply to this roll at
+   * all. `false` for a flat, dice-less formula (nothing to crit/fumble on)
+   * and for positional dice (`d44`/`d66`/`d88`, glossary: "these attacks do
+   * not miss or crit") — `true` for a genuine `NdX` roll. This is a property
+   * of the notation itself, not of any particular roll's outcome, which is
+   * why it lives on the result rather than being inferred by a caller from
+   * `kept` being empty (true for both "no dice" and "positional dice with
+   * their rolls collapsed", but only the former is coincidental).
+   * `isCritical`/`isFumble` are already forced `false` whenever this is
+   * `false`, so this exists to let a caller distinguish "didn't crit this
+   * roll" from "this notation can never crit", not to change that logic.
+   */
+  canCritOrFumble: boolean;
   error?: string;
 }
 
@@ -1291,6 +1475,15 @@ export function rollFormulaWithContext(
     diceNotation = parsed.diceNotation;
     modifier = parsed.modifier;
 
+    if (parsed.positional) {
+      // Positional dice roll their own fixed 2 (or 3, for the "a" variant)
+      // dice regardless of `mode`/`extraDice` — that's a property of the
+      // notation itself (see rollPositionalDice), not something the
+      // standard advantage/disadvantage-extra-dice mechanic below applies
+      // to.
+      return rollPositionalDice(parsed.positional, modifier, diceNotation);
+    }
+
     if (!diceNotation) {
       // No dice in formula, e.g. flat "+3" — return immediately,
       // there's nothing to roll.
@@ -1302,6 +1495,7 @@ export function rollFormulaWithContext(
         total: modifier,
         isCritical: false,
         isFumble: false,
+        canCritOrFumble: false,
       };
     }
 
@@ -1319,6 +1513,7 @@ export function rollFormulaWithContext(
       total: 0,
       isCritical: false,
       isFumble: false,
+      canCritOrFumble: false,
       error:
         err instanceof FormulaError
           ? err.message
@@ -1353,5 +1548,57 @@ export function rollFormulaWithContext(
   const isCritical = kept[0] === sides;
   const isFumble = kept[0] === 1;
 
-  return { diceNotation, rolls, kept, modifier, total, isCritical, isFumble };
+  return {
+    diceNotation,
+    rolls,
+    kept,
+    modifier,
+    total,
+    isCritical,
+    isFumble,
+    canCritOrFumble: true,
+  };
+}
+
+/**
+ * Rolls positional dice (`d44`/`d66`/`d88`, optional advantage variant) and
+ * reads them into a single two-digit value — see the @file header and
+ * {@link readPositionalValue}. Never critical or fumble (glossary: "these
+ * attacks do not miss or crit"), regardless of what individual faces come
+ * up, so `canCritOrFumble` is always `false` here.
+ *
+ * Non-advantage: rolls exactly 2 dice, both kept, read in roll order (first
+ * = tens, second = ones) — `[4, 5]` reads as 45, never resorted to 54.
+ *
+ * Advantage (`spec.advantage`): rolls 3, drops the single lowest (leftmost
+ * among ties — {@link indexOfLowestValue}), and reads the remaining 2
+ * *positionally in their original roll order*, not sorted. `[4, 2, 5]` drops
+ * the 2 and reads the remaining `[4, 5]` as 45, not 54.
+ *
+ * @param spec - Die size (4, 6, or 8) and whether this is the "a" variant.
+ * @param modifier - Flat modifier already resolved by {@link parseDamageFormula}.
+ * @param diceNotation - Display-ready notation (e.g. "d66a"), passed through unchanged.
+ */
+function rollPositionalDice(
+  spec: { sides: number; advantage: boolean },
+  modifier: number,
+  diceNotation: string,
+): RollFormulaResult {
+  const { sides, advantage } = spec;
+  const rolls = rollDice(advantage ? 3 : 2, sides);
+  const kept = advantage
+    ? rolls.filter((_, i) => i !== indexOfLowestValue(rolls))
+    : rolls;
+  const total = readPositionalValue(kept as [number, number]) + modifier;
+
+  return {
+    diceNotation,
+    rolls,
+    kept,
+    modifier,
+    total,
+    isCritical: false,
+    isFumble: false,
+    canCritOrFumble: false,
+  };
 }

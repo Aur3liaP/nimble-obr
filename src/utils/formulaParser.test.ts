@@ -825,30 +825,19 @@ describe("resolveDynamicDice parity fixes (point 3)", () => {
 });
 
 describe("implicit-count dice notation (dN -> 1dN)", () => {
-  // Confirmed against the Nimble rulebook: d44/d66/d88 are single dice with
-  // that many faces (progression by spell tier), not two-digit roll tables
-  // — consistent with Nimble's crit rule (max face value crits), which
-  // wouldn't make sense on a table roll. So src/data/spells.ts's use of
-  // "d66"/"d88"/"d44" is correct game data; the parser was too strict.
+  // A bare dN (nothing before the "d") normalizes to a single explicit die.
+  // Nimble Core Rules 2nd printing carves out d44/d66/d88 from this general
+  // rule — see the dedicated "positional dice notation" describe block
+  // below — so d20 stands in here to prove the general mechanism still
+  // works for every other size.
 
   it("normalizes a bare dN with nothing before it to 1dN and rolls one die", () => {
     const char = makeCharacter();
-    mockRolls([50], 66);
-    const result = rollFormula("d66", char);
-    expect(result.rolls).toEqual([50]);
-    expect(result.diceNotation).toBe("1d66");
+    mockRolls([15], 20);
+    const result = rollFormula("d20", char);
+    expect(result.rolls).toEqual([15]);
+    expect(result.diceNotation).toBe("1d20");
     expect(result.error).toBeUndefined();
-  });
-
-  it("rolls the project's real d44/d66/d88 spell formulas without error", () => {
-    // Real formulas from src/data/spells.ts (Entice's sibling spells use
-    // stepdice instead; these four use a bare implicit die directly).
-    const char = makeCharacter();
-    for (const formula of ["d44", "d66", "d66", "d88"]) {
-      const result = rollFormula(formula, char);
-      expect(result.rolls).toHaveLength(1);
-      expect(result.error).toBeUndefined();
-    }
   });
 
   it("does not touch an already-explicit count — non-regression for 2d6", () => {
@@ -905,6 +894,159 @@ describe("implicit-count dice notation (dN -> 1dN)", () => {
     const entice = rollFormula("1dstepdice(level,4,8,10,12)", char);
     expect(entice.rolls).toHaveLength(1);
     expect(entice.error).toBeUndefined();
+  });
+});
+
+describe("positional dice notation (d44/d66/d88, Nimble Core Rules 2nd printing)", () => {
+  // A bare d44/d66/d88 rolls 2 dice of that size and reads them
+  // positionally (tens, ones) rather than summing — e.g. rolling a 4 then a
+  // 5 on d66 reads as 45, not 9. The "a" suffix (d44a/d66a/d88a) is the
+  // advantage variant: roll 3, drop the lowest (leftmost on a tie), and
+  // read the remaining 2 positionally in their ORIGINAL roll order — never
+  // sorted.
+
+  it("rolls 2 dice and reads them positionally: [4, 5] -> 45, not 9 and not resorted", () => {
+    const char = makeCharacter();
+    mockRolls([4, 5], 6);
+    const result = rollFormula("d66", char);
+    expect(result.rolls).toEqual([4, 5]);
+    expect(result.kept).toEqual([4, 5]);
+    expect(result.total).toBe(45);
+    expect(result.diceNotation).toBe("d66");
+    expect(result.error).toBeUndefined();
+  });
+
+  it("preserves roll order even when it produces a smaller number: [5, 4] -> 54, not resorted to 45", () => {
+    const char = makeCharacter();
+    mockRolls([5, 4], 6);
+    const result = rollFormula("d66", char);
+    expect(result.kept).toEqual([5, 4]);
+    expect(result.total).toBe(54);
+  });
+
+  it("works for d44 and d88 too", () => {
+    const char = makeCharacter();
+    mockRolls([3, 1], 4);
+    expect(rollFormula("d44", char).total).toBe(31);
+
+    mockRolls([7, 2], 8);
+    expect(rollFormula("d88", char).total).toBe(72);
+  });
+
+  it("applies a trailing flat modifier on top of the positional value", () => {
+    const char = makeCharacter();
+    mockRolls([4, 5], 6);
+    const result = rollFormula("d66+3", char);
+    expect(result.total).toBe(48);
+    expect(result.modifier).toBe(3);
+  });
+
+  it("advantage (d66a): rolls 3, drops the lowest, and reads the remaining 2 positionally without sorting — [4, 2, 5] drops the 2 and reads [4, 5] as 45, not 54", () => {
+    const char = makeCharacter();
+    mockRolls([4, 2, 5], 6);
+    const result = rollFormula("d66a", char);
+    expect(result.rolls).toEqual([4, 2, 5]);
+    expect(result.kept).toEqual([4, 5]);
+    expect(result.total).toBe(45);
+  });
+
+  it("advantage tie-break: [3, 3, 6] drops the FIRST 3 (leftmost among ties), reading [3, 6] as 36, not 63", () => {
+    const char = makeCharacter();
+    mockRolls([3, 3, 6], 6);
+    const result = rollFormula("d66a", char);
+    expect(result.kept).toEqual([3, 6]);
+    expect(result.total).toBe(36);
+  });
+
+  it("advantage: dropping the last die still preserves the original order of the first two", () => {
+    const char = makeCharacter();
+    mockRolls([6, 5, 1], 6); // lowest is the 3rd die
+    const result = rollFormula("d66a", char);
+    expect(result.kept).toEqual([6, 5]);
+    expect(result.total).toBe(65);
+  });
+
+  it("mutation guard: kept dice are never sorted — a differently-ordered but same-multiset roll produces a different total", () => {
+    // If rollPositionalDice's kept array were ever sorted (the exact bug
+    // this notation exists to avoid — see the @file header), these two
+    // rolls (same 3 values, different roll order) would collapse to the
+    // same total. They must not.
+    const char = makeCharacter();
+    mockRolls([4, 2, 5], 6);
+    const a = rollFormula("d66a", char);
+    mockRolls([5, 2, 4], 6);
+    const b = rollFormula("d66a", char);
+    expect(a.total).not.toBe(b.total);
+    expect(a.total).toBe(45);
+    expect(b.total).toBe(54);
+  });
+
+  it("never crits or fumbles, regardless of individual face values rolled", () => {
+    const char = makeCharacter();
+    // Both dice show their max face (6) — would be a critical on a normal
+    // NdX roll, but positional dice never crit.
+    mockRolls([6, 6], 6);
+    const maxRoll = rollFormula("d66", char);
+    expect(maxRoll.isCritical).toBe(false);
+    expect(maxRoll.canCritOrFumble).toBe(false);
+
+    // Both dice show their min face (1) — would be a fumble on a normal
+    // NdX roll.
+    mockRolls([1, 1], 6);
+    const minRoll = rollFormula("d66", char);
+    expect(minRoll.isFumble).toBe(false);
+    expect(minRoll.canCritOrFumble).toBe(false);
+  });
+
+  it("a flat, dice-less formula also reports canCritOrFumble: false", () => {
+    const char = makeCharacter();
+    expect(rollFormula("+5", char).canCritOrFumble).toBe(false);
+  });
+
+  it("a genuine NdX roll reports canCritOrFumble: true", () => {
+    const char = makeCharacter();
+    mockRolls([4], 8);
+    expect(rollFormula("1d8", char).canCritOrFumble).toBe(true);
+  });
+
+  it("ignores the roll mode (advantage/disadvantage) passed to rollFormula — positional dice always roll their own fixed 2 or 3 dice", () => {
+    const char = makeCharacter();
+    mockRolls([4, 5], 6);
+    const result = rollFormula("d66", char, "advantage", 3);
+    expect(result.rolls).toHaveLength(2);
+    expect(result.total).toBe(45);
+  });
+
+  it("computes an exact average for display/eval math, not a rejection", () => {
+    // Non-advantage: independent tens/ones dice, average face (6+1)/2=3.5
+    // read into both positions -> 3.5*11 = 38.5, rounded to 39.
+    const char = makeCharacter();
+    expect(evalFormula("d66", char)).toEqual({ value: 39 });
+    // Sanity: different sizes produce different averages, not a hardcoded 39.
+    expect(evalFormula("d44", char).value).not.toBe(39);
+  });
+
+  it("resolveFormulaDisplay shows the positional notation itself, not a resolved number", () => {
+    const char = makeCharacter();
+    expect(resolveFormulaDisplay("d66", char).display).toBe("d66");
+    expect(resolveFormulaDisplay("d66a", char).display).toBe("d66a");
+    expect(resolveFormulaDisplay("d66+3", char).display).toBe("d66+3");
+  });
+
+  it("validateFormulaSyntax accepts positional dice notation, advantage variant included", () => {
+    expect(() => validateFormulaSyntax("d66")).not.toThrow();
+    expect(() => validateFormulaSyntax("d66a")).not.toThrow();
+    expect(formulaSyntaxError("d44a")).toBeUndefined();
+    expect(formulaSyntaxError("d88a")).toBeUndefined();
+  });
+
+  it("does not treat an explicit-count prefix as positional — 2d66 stays a literal (nonsensical but unambiguous) 2-dice NdX roll", () => {
+    const char = makeCharacter();
+    mockRolls([10, 20], 66);
+    const result = rollFormula("2d66", char);
+    expect(result.diceNotation).toBe("2d66");
+    expect(result.rolls).toEqual([10, 20]);
+    expect(result.total).toBe(30); // summed, not read positionally
   });
 });
 
