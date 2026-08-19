@@ -50,6 +50,51 @@ Owlbear Rodeo (OBR) extension: a real-time-synced character sheet panel for the 
   overlapping it). Must never end up inside a scrolling list, and must never
   gain Nimble artwork/logo.
 
+### Panel layout contract
+
+**Binding requirements for `App.tsx`'s `<main>`, the tab content area, and
+the `DicePanel`/`RollLog` wrapper.** Written in part 1h after three
+consecutive batches (1e, 1f, 1g) each adjusted flex rules in this exact
+region and broke a different state — every fix was verified against
+whichever state had just been reported broken, with no written statement
+of what "correct" meant for every other state at the same time. This
+section is that statement. A change to `<main>`'s classes, the tab content
+wrapper's classes, or the `DicePanel`/`RollLog` wrapper's classes **must
+not be made without re-reading this section and re-verifying every state
+listed below** — not just the state the change was made for.
+
+- **`DicePanel`, sheet tab open:**
+  - Sits at the bottom of the tab content, in normal document flow.
+  - Scrolls WITH the content: scrolling the sheet up moves `DicePanel` out
+    of view along with it. It is never pinned/fixed relative to the
+    panel's own bottom edge while a sheet is open.
+  - When opened (expanded), the roll log stays visible at the same time —
+    `DicePanel` must never take over the full available height or push the
+    log out of the layout entirely.
+  - Closes itself automatically once a roll is made (see "State
+    transitions" below).
+- **`DicePanel`, no-token / no-sheet / unsupported-version / invalid-sheet
+  state:**
+  - Same behavior: opening it must not hide the inline roll log.
+  - A roll's result must be visible **without scrolling** — not merely
+    reachable by scrolling, actually on-screen the instant the roll lands.
+  - Closes itself automatically once a roll is made.
+- **State transitions:** `DicePanel`'s open/closed state (`collapsed`,
+  local `useState` inside the always-mounted component — see "Structural
+  constraints" below for why it's always mounted) must never carry over in
+  a way that hides or covers the sheet once a token is selected. The
+  auto-close behavior above should make this moot in practice (a roll
+  closes the panel before a token selection could even matter), but this
+  must still be verified explicitly — a user who opens `DicePanel` and then
+  selects a token *without* rolling first is a real path this contract
+  covers too, not just the roll-then-select path.
+
+Verifying this contract means walking every state above individually, not
+running `type-check`/`lint`/`test` — none of them can see layout. See the
+"Verification" note logged against each part-1h/i/… batch that touches
+this region for what was actually checked and what could not be checked in
+a non-OBR environment.
+
 ### Value ranges
 
 Enforced both at the input layer (rejects/clamps in the component) and,
