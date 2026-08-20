@@ -504,6 +504,300 @@ describe("migrateCharacter — v2 -> v3 (sourceKey backfill)", () => {
   });
 });
 
+describe("migrateCharacter — v3 -> v4 (catalogVersion backfill)", () => {
+  // Fixtures start at schemaVersion 3 to isolate MIGRATIONS[3], same
+  // reasoning as the v2 -> v3 block above.
+
+  function migrateOneItemV3(item: Record<string, unknown>): Record<string, unknown> {
+    const base = createDefaultCharacter("token-1", "owner-1") as unknown as Record<string, unknown>;
+    const v3 = { ...base, schemaVersion: 3, inventory: [item] };
+    const result = migrateCharacter(v3);
+    expect(result.status).toBe("ok");
+    if (result.status !== "ok") throw new Error("expected migration to succeed");
+    return (result.character.inventory as unknown as Record<string, unknown>[])[0];
+  }
+
+  function migrateOneActionV3(action: Record<string, unknown>): Record<string, unknown> {
+    const base = createDefaultCharacter("token-1", "owner-1") as unknown as Record<string, unknown>;
+    const v3 = { ...base, schemaVersion: 3, actions: [action] };
+    const result = migrateCharacter(v3);
+    expect(result.status).toBe("ok");
+    if (result.status !== "ok") throw new Error("expected migration to succeed");
+    return (result.character.actions as unknown as Record<string, unknown>[])[0];
+  }
+
+  it("backfills catalogVersion: 0 on a non-custom inventory item that already has a sourceKey", () => {
+    const migrated = migrateOneItemV3({
+      id: "i1",
+      name: "Longsword",
+      description: "",
+      slots: 1,
+      quantity: 1,
+      isEquipped: false,
+      isCustom: false,
+      sourceKey: "longsword",
+      formula: "1d8 + STR",
+    });
+    expect(migrated.catalogVersion).toBe(0);
+  });
+
+  it("leaves catalogVersion undefined for an item with no sourceKey (untraceable to the catalog)", () => {
+    const migrated = migrateOneItemV3({
+      id: "i1",
+      name: "Homebrew Trinket",
+      description: "",
+      slots: 1,
+      quantity: 1,
+      isEquipped: false,
+      isCustom: false,
+    });
+    expect(migrated.catalogVersion).toBeUndefined();
+  });
+
+  it("never touches a custom item, even if it somehow already has a sourceKey", () => {
+    const migrated = migrateOneItemV3({
+      id: "i1",
+      name: "Longsword",
+      description: "",
+      slots: 1,
+      quantity: 1,
+      isEquipped: false,
+      isCustom: true,
+      sourceKey: "longsword",
+    });
+    expect(migrated.catalogVersion).toBeUndefined();
+  });
+
+  it("backfills catalogVersion: 0 even for an entry whose sourceKey no longer exists in the catalog (e.g. Greater Shadow, removed)", () => {
+    // The backfill only depends on sourceKey being PRESENT, not on it
+    // matching a live catalog entry — isOutdated (catalogCopy.ts) is what
+    // decides "no match" means "nothing to flag", not this migration.
+    const migrated = migrateOneActionV3({
+      id: "a1",
+      name: "Greater Shadow",
+      type: "spell",
+      range: "adjacent",
+      formula: "5d12",
+      description: "",
+      isFavorite: false,
+      isCustom: false,
+      sourceKey: "greater-shadow",
+    });
+    expect(migrated.catalogVersion).toBe(0);
+  });
+
+  it("chains correctly for a record starting further back (v1): sourceKey backfilled by MIGRATIONS[2] is visible to this step", () => {
+    const base = createDefaultCharacter("token-1", "owner-1") as unknown as Record<string, unknown>;
+    const template = BASIC_EQUIPMENTS.find((e) => e.sourceKey === "longsword");
+    if (!template) throw new Error("fixture setup: Longsword missing from BASIC_EQUIPMENTS");
+    const v1 = {
+      ...base,
+      schemaVersion: 1,
+      inventory: [
+        {
+          id: "i1",
+          name: "Longsword",
+          description: "",
+          slots: 1,
+          quantity: 1,
+          isEquipped: false,
+          isCustom: false,
+          formula: template.formula,
+        },
+      ],
+    };
+    const result = migrateCharacter(v1);
+    expect(result.status).toBe("ok");
+    if (result.status !== "ok") return;
+    const migrated = result.character.inventory[0];
+    expect(migrated.sourceKey).toBe("longsword");
+    expect(migrated.catalogVersion).toBe(0);
+  });
+
+  it("a character holding a mix — backfilled-with-sourceKey, no-sourceKey, custom, and a removed catalog entry — resolves each independently", () => {
+    const base = createDefaultCharacter("token-1", "owner-1") as unknown as Record<string, unknown>;
+    const v3 = {
+      ...base,
+      schemaVersion: 3,
+      inventory: [
+        {
+          id: "i1",
+          name: "Longsword",
+          description: "",
+          slots: 1,
+          quantity: 1,
+          isEquipped: false,
+          isCustom: false,
+          sourceKey: "longsword",
+        },
+        {
+          id: "i2",
+          name: "Old Rusty Blade",
+          description: "",
+          slots: 1,
+          quantity: 1,
+          isEquipped: false,
+          isCustom: false,
+          // no sourceKey — predates sourceKey and could never be traced
+        },
+        {
+          id: "i3",
+          name: "Grandpa's Locket",
+          description: "",
+          slots: 1,
+          quantity: 1,
+          isEquipped: false,
+          isCustom: true,
+          sourceKey: "should-be-ignored",
+        },
+      ],
+      actions: [
+        {
+          id: "a1",
+          name: "Greater Shadow",
+          type: "spell",
+          range: "adjacent",
+          formula: "5d12",
+          description: "",
+          isFavorite: false,
+          isCustom: false,
+          sourceKey: "greater-shadow", // removed from the catalog, still backfilled here
+        },
+      ],
+    };
+    const result = migrateCharacter(v3);
+    expect(result.status).toBe("ok");
+    if (result.status !== "ok") return;
+
+    const [longsword, oldBlade, locket] = result.character.inventory;
+    expect(longsword.catalogVersion).toBe(0);
+    expect(oldBlade.catalogVersion).toBeUndefined();
+    expect(locket.catalogVersion).toBeUndefined();
+
+    const [greaterShadow] = result.character.actions;
+    expect(greaterShadow.catalogVersion).toBe(0);
+  });
+
+  // Bug report: a real character inspected in OBR showed schemaVersion: 4,
+  // sourceKey intact, but catalogVersion: undefined on every non-custom
+  // entry — as if MIGRATIONS[3] "did nothing". Reproduced here with the
+  // exact entries named in that report (Adventurer's Garb, Sickle, Flame
+  // Dart) run through the real, exported `migrateCharacter` (not the
+  // `migrateOneItemV3`/`migrateOneActionV3` helpers above, which isolate
+  // MIGRATIONS[3] — this uses the full public entry point end to end).
+  // This test PASSES against the current code: MIGRATIONS[3] itself is
+  // correct. See the "already at CURRENT_SCHEMA_VERSION" block below for
+  // the actual mechanism that produces the reported symptom.
+  it("[bug report repro] backfills catalogVersion: 0 on real-shaped non-custom entries with sourceKey and no catalogVersion", () => {
+    const base = createDefaultCharacter("token-1", "owner-1") as unknown as Record<string, unknown>;
+    const v3 = {
+      ...base,
+      schemaVersion: 3,
+      inventory: [
+        {
+          id: "i1",
+          name: "Adventurer’s Garb",
+          description: "Standard clothes. Defense: 2+DEX.",
+          slots: 1,
+          quantity: 1,
+          isEquipped: false,
+          isFavorite: false,
+          isCustom: false,
+          isArmor: true,
+          formula: "2 + DEX",
+          sourceKey: "adventurers-garb",
+        },
+        {
+          id: "i2",
+          name: "Sickle",
+          description: "",
+          slots: 1,
+          quantity: 1,
+          isEquipped: false,
+          isFavorite: false,
+          isCustom: false,
+          sourceKey: "sickle",
+        },
+      ],
+      actions: [
+        {
+          id: "a1",
+          name: "Flame Dart",
+          type: "spell",
+          range: "8",
+          formula: "1d8",
+          description: "",
+          isFavorite: false,
+          isCustom: false,
+          sourceKey: "flame-dart",
+        },
+      ],
+    };
+
+    const result = migrateCharacter(v3);
+    expect(result.status).toBe("ok");
+    if (result.status !== "ok") return;
+    expect(result.character.schemaVersion).toBe(4);
+    for (const item of result.character.inventory) {
+      expect((item as unknown as Record<string, unknown>).catalogVersion).toBe(0);
+    }
+    for (const action of result.character.actions) {
+      expect((action as unknown as Record<string, unknown>).catalogVersion).toBe(0);
+    }
+  });
+
+  // Root cause of the reported symptom, isolated: `migrateCharacter` never
+  // re-enters the migration loop for a record whose `schemaVersion` already
+  // equals `CURRENT_SCHEMA_VERSION` (`applyMigrations`'s `for (let v =
+  // fromVersion; v < migrations.length; ...)` never executes once
+  // `fromVersion >= migrations.length`) — by design, a genuinely current
+  // record has nothing left to migrate. But a record that got STAMPED
+  // schemaVersion 4 by an earlier, incomplete run of this exact migration
+  // chain (e.g. a local dev-server token touched mid-edit, before
+  // MIGRATIONS[3]/the equipment.ts and spells.ts `catalogVersion` data
+  // were finished) is indistinguishable from a genuinely current record:
+  // it keeps whatever it already had (sourceKey, no catalogVersion)
+  // forever, since nothing ever revisits it. This reproduces the exact
+  // reported shape (schemaVersion: 4, sourceKey present, catalogVersion
+  // undefined) with NO involvement of MIGRATIONS[3] at all — pinned here
+  // so this known, deliberate architectural property (see the file
+  // header's migration procedure: "leave every earlier migration function
+  // alone") isn't mistaken for a bug again. Not a defect to fix: this
+  // schema transition has never shipped (nothing from this batch is
+  // committed), so any record in this state is a local testing artifact,
+  // not a real persisted character — see CLAUDE.md's v1 -> v2 folding
+  // precedent for the same reasoning applied to an earlier migration.
+  it("[root cause] a record already stamped at CURRENT_SCHEMA_VERSION is never re-migrated, even if it's missing a field a later migration would have backfilled", () => {
+    const base = createDefaultCharacter("token-1", "owner-1") as unknown as Record<string, unknown>;
+    const stuckAtCurrent = {
+      ...base,
+      schemaVersion: CURRENT_SCHEMA_VERSION,
+      inventory: [
+        {
+          id: "i2",
+          name: "Sickle",
+          description: "",
+          slots: 1,
+          quantity: 1,
+          isEquipped: false,
+          isFavorite: false,
+          isCustom: false,
+          sourceKey: "sickle",
+          // no catalogVersion — simulating a token whose metadata was
+          // written by an earlier, incomplete version of this migration
+        },
+      ],
+    };
+    const result = migrateCharacter(stuckAtCurrent);
+    expect(result.status).toBe("ok");
+    if (result.status !== "ok") return;
+    expect(result.migrated).toBe(false); // confirms the loop never ran
+    expect(
+      (result.character.inventory[0] as unknown as Record<string, unknown>).catalogVersion,
+    ).toBeUndefined();
+  });
+});
+
 describe("migrateCharacter — already current", () => {
   it("reports no migration for a record already at CURRENT_SCHEMA_VERSION", () => {
     const character = createDefaultCharacter("token-1", "owner-1");

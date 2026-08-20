@@ -6,6 +6,7 @@
  */
 
 import { describe, expect, it } from "vitest";
+import type { CharacterAction, InventoryItem } from "../types/character";
 import { BASE_SPELLS } from "../data/spells";
 import { BASIC_EQUIPMENTS } from "../data/equipment";
 import {
@@ -13,6 +14,9 @@ import {
   createCustomSpell,
   copyItemFromCatalog,
   createCustomItem,
+  isOutdated,
+  resetSpellToCatalog,
+  resetItemToCatalog,
   type CustomSpellForm,
   type CustomItemForm,
 } from "./catalogCopy";
@@ -51,11 +55,28 @@ describe("sourceKey — catalog invariants", () => {
   });
 });
 
+describe("catalogVersion — catalog invariants", () => {
+  it("every BASE_SPELLS entry has a catalogVersion of at least 1", () => {
+    const offenders = BASE_SPELLS.filter(
+      (s) => s.catalogVersion === undefined || s.catalogVersion < 1,
+    ).map((s) => `${s.name} :: catalogVersion=${s.catalogVersion}`);
+    expect(offenders).toEqual([]);
+  });
+
+  it("every BASIC_EQUIPMENTS entry has a catalogVersion of at least 1", () => {
+    const offenders = BASIC_EQUIPMENTS.filter(
+      (e) => e.catalogVersion === undefined || e.catalogVersion < 1,
+    ).map((e) => `${e.name} :: catalogVersion=${e.catalogVersion}`);
+    expect(offenders).toEqual([]);
+  });
+});
+
 describe("copySpellFromCatalog", () => {
-  it("carries sourceKey from the template for every real spell", () => {
+  it("carries sourceKey and catalogVersion from the template for every real spell", () => {
     for (const template of BASE_SPELLS) {
       const copy = copySpellFromCatalog(template);
       expect(copy.sourceKey).toBe(template.sourceKey);
+      expect(copy.catalogVersion).toBe(template.catalogVersion);
       expect(copy.isCustom).toBe(false);
     }
   });
@@ -86,31 +107,36 @@ describe("createCustomSpell", () => {
     description: "A player-authored spell.",
   };
 
-  it("never sets sourceKey, even though the shape allows it", () => {
+  it("never sets sourceKey or catalogVersion, even though the shape allows both", () => {
     const custom = createCustomSpell(form);
     expect(custom.sourceKey).toBeUndefined();
     expect("sourceKey" in custom).toBe(false);
+    expect(custom.catalogVersion).toBeUndefined();
+    expect("catalogVersion" in custom).toBe(false);
   });
 
   it("always sets isCustom: true", () => {
     expect(createCustomSpell(form).isCustom).toBe(true);
   });
 
-  it("still never sets sourceKey when the custom name collides with a real catalog entry", () => {
+  it("still never sets sourceKey or catalogVersion when the custom name collides with a real catalog entry", () => {
     // A player naming their homebrew spell identically to an official one
-    // must not accidentally borrow that entry's sourceKey — this path
-    // never even looks at BASE_SPELLS, so there's nothing to borrow from.
+    // must not accidentally borrow that entry's sourceKey/catalogVersion —
+    // this path never even looks at BASE_SPELLS, so there's nothing to
+    // borrow from.
     const collidingForm: CustomSpellForm = { ...form, name: BASE_SPELLS[0].name };
     const custom = createCustomSpell(collidingForm);
     expect(custom.sourceKey).toBeUndefined();
+    expect(custom.catalogVersion).toBeUndefined();
   });
 });
 
 describe("copyItemFromCatalog", () => {
-  it("carries sourceKey from the template for every real equipment entry", () => {
+  it("carries sourceKey and catalogVersion from the template for every real equipment entry", () => {
     for (const template of BASIC_EQUIPMENTS) {
       const copy = copyItemFromCatalog(template);
       expect(copy.sourceKey).toBe(template.sourceKey);
+      expect(copy.catalogVersion).toBe(template.catalogVersion);
       expect(copy.isCustom).toBe(false);
     }
   });
@@ -139,23 +165,142 @@ describe("createCustomItem", () => {
     isArmor: false,
   };
 
-  it("never sets sourceKey, even though the shape allows it", () => {
+  it("never sets sourceKey or catalogVersion, even though the shape allows both", () => {
     const custom = createCustomItem(form);
     expect(custom.sourceKey).toBeUndefined();
     expect("sourceKey" in custom).toBe(false);
+    expect(custom.catalogVersion).toBeUndefined();
+    expect("catalogVersion" in custom).toBe(false);
   });
 
   it("always sets isCustom: true", () => {
     expect(createCustomItem(form).isCustom).toBe(true);
   });
 
-  it("still never sets sourceKey when the custom name collides with a real catalog entry", () => {
+  it("still never sets sourceKey or catalogVersion when the custom name collides with a real catalog entry", () => {
     const collidingForm: CustomItemForm = { ...form, name: BASIC_EQUIPMENTS[0].name };
     const custom = createCustomItem(collidingForm);
     expect(custom.sourceKey).toBeUndefined();
+    expect(custom.catalogVersion).toBeUndefined();
   });
 
   it("stores an empty formula as undefined, not an empty string", () => {
     expect(createCustomItem(form).formula).toBeUndefined();
+  });
+});
+
+describe("isOutdated", () => {
+  const template = { sourceKey: "test-key", catalogVersion: 3 };
+  const catalog = [template, { sourceKey: "other-key", catalogVersion: 1 }];
+
+  it("true when the copy's catalogVersion is behind the current catalog entry's", () => {
+    expect(isOutdated({ sourceKey: "test-key", catalogVersion: 1 }, catalog)).toBe(true);
+    expect(isOutdated({ sourceKey: "test-key", catalogVersion: 2 }, catalog)).toBe(true);
+  });
+
+  it("false when the copy's catalogVersion matches or is ahead of the catalog's (never happens in practice, but not flagged as an error either)", () => {
+    expect(isOutdated({ sourceKey: "test-key", catalogVersion: 3 }, catalog)).toBe(false);
+    expect(isOutdated({ sourceKey: "test-key", catalogVersion: 4 }, catalog)).toBe(false);
+  });
+
+  it("false for a custom entry (no sourceKey)", () => {
+    expect(isOutdated({ catalogVersion: 1 }, catalog)).toBe(false);
+  });
+
+  it("false for a copy with no catalogVersion (predates the system entirely)", () => {
+    expect(isOutdated({ sourceKey: "test-key" }, catalog)).toBe(false);
+  });
+
+  it("false, not an error, when sourceKey no longer exists in the catalog (e.g. a removed entry like Greater Shadow)", () => {
+    expect(
+      isOutdated({ sourceKey: "greater-shadow", catalogVersion: 1 }, catalog),
+    ).toBe(false);
+  });
+
+  it("real catalogs: every current, non-custom copy of a real entry is never outdated against its own catalog", () => {
+    // Sanity check tying isOutdated to the real data: copying an entry
+    // fresh and immediately checking it against the same catalog it came
+    // from must never report outdated.
+    for (const template of BASE_SPELLS) {
+      expect(isOutdated(copySpellFromCatalog(template), BASE_SPELLS)).toBe(false);
+    }
+    for (const template of BASIC_EQUIPMENTS) {
+      expect(isOutdated(copyItemFromCatalog(template), BASIC_EQUIPMENTS)).toBe(false);
+    }
+  });
+});
+
+describe("resetSpellToCatalog", () => {
+  it("overwrites every field from the catalog except id and isFavorite", () => {
+    const template = BASE_SPELLS.find((s) => s.sourceKey === "flame-dart")!;
+    const stale: CharacterAction = {
+      ...copySpellFromCatalog(template),
+      id: "kept-id",
+      isFavorite: true,
+      catalogVersion: 0,
+      description: "A player edit that should be discarded on reset.",
+    };
+
+    const reset = resetSpellToCatalog(stale, BASE_SPELLS);
+    expect(reset.id).toBe("kept-id");
+    expect(reset.isFavorite).toBe(true);
+    expect(reset.description).toBe(template.description);
+    expect(reset.catalogVersion).toBe(template.catalogVersion);
+    expect(reset.formula).toBe(template.formula);
+  });
+
+  it("is a no-op (returns the entry unchanged) when sourceKey matches nothing in the catalog", () => {
+    const orphan: CharacterAction = {
+      id: "a1",
+      name: "Greater Shadow",
+      type: "spell",
+      range: "adjacent",
+      formula: "5d12",
+      description: "Frozen copy of a removed spell.",
+      isFavorite: false,
+      isCustom: false,
+      sourceKey: "greater-shadow",
+      catalogVersion: 0,
+    };
+    expect(resetSpellToCatalog(orphan, BASE_SPELLS)).toBe(orphan);
+  });
+});
+
+describe("resetItemToCatalog", () => {
+  it("overwrites every field from the catalog except id and isFavorite — including isEquipped and quantity, per the documented 'plain overwrite' contract", () => {
+    const template = BASIC_EQUIPMENTS.find((e) => e.sourceKey === "longsword")!;
+    const stale: InventoryItem = {
+      ...copyItemFromCatalog(template),
+      id: "kept-id",
+      isFavorite: true,
+      isEquipped: true,
+      quantity: 3,
+      catalogVersion: 0,
+      description: "A player edit that should be discarded on reset.",
+    };
+
+    const reset = resetItemToCatalog(stale, BASIC_EQUIPMENTS);
+    expect(reset.id).toBe("kept-id");
+    expect(reset.isFavorite).toBe(true);
+    expect(reset.isEquipped).toBe(false);
+    expect(reset.quantity).toBe(1);
+    expect(reset.description).toBe(template.description);
+    expect(reset.catalogVersion).toBe(template.catalogVersion);
+  });
+
+  it("is a no-op (returns the entry unchanged) when sourceKey matches nothing in the catalog", () => {
+    const orphan: InventoryItem = {
+      id: "i1",
+      name: "Some Retired Item",
+      description: "Frozen copy of a removed item.",
+      slots: 1,
+      quantity: 1,
+      isEquipped: false,
+      isFavorite: false,
+      isCustom: false,
+      sourceKey: "does-not-exist",
+      catalogVersion: 0,
+    };
+    expect(resetItemToCatalog(orphan, BASIC_EQUIPMENTS)).toBe(orphan);
   });
 });

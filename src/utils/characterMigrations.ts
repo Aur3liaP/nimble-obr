@@ -345,6 +345,42 @@ function backfillActionSourceKey(action: unknown): unknown {
 }
 
 /**
+ * Backfills `catalogVersion` (see `equipment.ts`/`spells.ts` file headers
+ * for the contract) on one non-custom `inventory` array element, to `0` —
+ * deliberately lower than every real catalog entry's `1`, not "whatever
+ * the current catalog entry's version is" — see `MIGRATIONS[3]`'s own
+ * comment for why `0` is correct here, not a placeholder.
+ *
+ * Only backfills when `sourceKey` is already present (set either by this
+ * same pass's `MIGRATIONS[2]` immediately above, or by an earlier v2 -> v3
+ * migration already applied to this record) — an entry with no
+ * `sourceKey` can never be matched to a catalog entry, so it gets no
+ * `catalogVersion` either, same "nothing to compare against" reasoning as
+ * `isOutdated` in `catalogCopy.ts`.
+ *
+ * @param item - One raw `inventory` array element, of unknown shape.
+ */
+function backfillInventoryCatalogVersion(item: unknown): unknown {
+  if (!isPlainObject(item)) return item;
+  if (item.isCustom === true) return item; // never touch custom items
+  if (typeof item.sourceKey !== "string") return item; // untraceable — no catalogVersion either
+  return { ...item, catalogVersion: 0 };
+}
+
+/**
+ * Same contract as {@link backfillInventoryCatalogVersion}, for one raw
+ * `actions` array element.
+ *
+ * @param action - One raw `actions` array element, of unknown shape.
+ */
+function backfillActionCatalogVersion(action: unknown): unknown {
+  if (!isPlainObject(action)) return action;
+  if (action.isCustom === true) return action;
+  if (typeof action.sourceKey !== "string") return action;
+  return { ...action, catalogVersion: 0 };
+}
+
+/**
  * Ordered migrations, one function per schema version transition.
  * `MIGRATIONS[i]` moves a record from version `i` to version `i + 1`. See
  * the file header for the procedure to append to this list.
@@ -459,6 +495,39 @@ const MIGRATIONS: Migration[] = [
       : character.actions;
     const inventory = Array.isArray(character.inventory)
       ? character.inventory.map(backfillInventorySourceKey)
+      : character.inventory;
+
+    return { ...character, actions, inventory };
+  },
+
+  // v3 -> v4: backfills `catalogVersion` (see equipment.ts/spells.ts file
+  // headers for the contract) onto every non-custom actions/inventory
+  // entry that has a sourceKey — see backfillActionCatalogVersion/
+  // backfillInventoryCatalogVersion above.
+  //
+  // Backfilled to 0, not to "whatever the catalog currently says" and not
+  // skipped: every copy that exists before this migration predates
+  // catalogVersion entirely, and 0 is deliberately LOWER than every real
+  // catalog entry's starting version of 1. That means every one of them
+  // is immediately flagged outdated (isOutdated in catalogCopy.ts) the
+  // moment this migration runs. This is correct, not a bug to "fix" by
+  // matching the current version instead: the 2nd-printing spells/
+  // equipment batches changed most of the catalog's mechanics and text,
+  // and this migration is the FIRST time any player is told their copy
+  // might be stale. Setting catalogVersion to the current value instead
+  // would silently hide exactly the staleness this whole system exists to
+  // surface.
+  //
+  // An entry with no sourceKey (custom, or untraceable even after
+  // MIGRATIONS[2]'s backfill) gets no catalogVersion either — it can never
+  // be matched to a catalog entry, so there is nothing to flag it against
+  // or reset it from.
+  (character) => {
+    const actions = Array.isArray(character.actions)
+      ? character.actions.map(backfillActionCatalogVersion)
+      : character.actions;
+    const inventory = Array.isArray(character.inventory)
+      ? character.inventory.map(backfillInventoryCatalogVersion)
       : character.inventory;
 
     return { ...character, actions, inventory };

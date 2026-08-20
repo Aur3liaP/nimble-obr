@@ -151,6 +151,17 @@ export interface CharacterAction {
    * to the catalog", not a bug to fix by guessing).
    */
   sourceKey?: string;
+  /**
+   * The {@link BASE_SPELLS} entry's `catalogVersion` at copy time — set
+   * alongside `sourceKey` in the same copy paths (`catalogCopy.ts`), never
+   * on a custom action. Compared against the CURRENT catalog entry's
+   * `catalogVersion` (matched by `sourceKey`) to decide whether this copy
+   * is outdated — see `isOutdated` in `catalogCopy.ts` and `spells.ts`'s
+   * file header for the full contract. Undefined means either a custom
+   * entry, or (same as `sourceKey`) a copy that can't be traced to the
+   * catalog at all.
+   */
+  catalogVersion?: number;
 }
 
 export interface InventoryItem {
@@ -182,6 +193,14 @@ export interface InventoryItem {
    * `equipment.ts`'s file header for the append-only contract.
    */
   sourceKey?: string;
+  /**
+   * Same contract as {@link CharacterAction.catalogVersion}: the
+   * {@link BASIC_EQUIPMENTS} entry's `catalogVersion` at copy time, used
+   * by `isOutdated`/`resetItemToCatalog` in `catalogCopy.ts` to detect and
+   * reset a stale copy. See `equipment.ts`'s file header for the full
+   * contract.
+   */
+  catalogVersion?: number;
 }
 
 /**
@@ -270,7 +289,7 @@ export const METADATA_KEY = "com.nimble-obr.nimble/character_sheet";
  * needs transforming to match. See that file's header for the full
  * procedure.
  */
-export const CURRENT_SCHEMA_VERSION = 3;
+export const CURRENT_SCHEMA_VERSION = 4;
 
 /**
  * Highest level a character can be set to.

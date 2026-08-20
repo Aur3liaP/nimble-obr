@@ -16,6 +16,15 @@
  * `sourceKey` ("greater-shadow") is retired — the spell was removed (it's
  * now a Shadowmancer class ability, not a spell) — and must never be
  * reused for anything else.
+ *
+ * ## `catalogVersion` — bump it when players should know something changed
+ *
+ * Every entry also carries `catalogVersion: number`, starting at 1. See
+ * `equipment.ts`'s own file header for the full contract (shared with this
+ * file): bump it by 1 whenever a spell's mechanics or text change in a way
+ * a player should know about; cosmetic-only edits don't require a bump,
+ * at the author's judgment. `isOutdated`/`resetSpellToCatalog` in
+ * `catalogCopy.ts` are what actually use this.
  */
 import type { CharacterAction, SpellSchool } from "../types/character";
 
@@ -26,6 +35,7 @@ export const BASE_SPELLS: SpellTemplate[] = [
   {
     name: "Flame Dart",
     sourceKey: "flame-dart",
+    catalogVersion: 1,
     type: "spell",
     spellTier: 0,
     spellSchool: "fire" as SpellSchool,
@@ -38,6 +48,7 @@ export const BASE_SPELLS: SpellTemplate[] = [
   {
     name: "Heart’s Fire",
     sourceKey: "hearts-fire",
+    catalogVersion: 1,
     type: "spell",
     spellTier: 0,
     spellSchool: "fire" as SpellSchool,
@@ -51,6 +62,7 @@ export const BASE_SPELLS: SpellTemplate[] = [
   {
     name: "Ignite",
     sourceKey: "ignite",
+    catalogVersion: 1,
     type: "spell",
     spellTier: 1,
     spellSchool: "fire" as SpellSchool,
@@ -64,6 +76,7 @@ export const BASE_SPELLS: SpellTemplate[] = [
   {
     name: "Enchant Weapon",
     sourceKey: "enchant-weapon",
+    catalogVersion: 1,
     type: "spell",
     spellTier: 2,
     spellSchool: "fire" as SpellSchool,
@@ -77,6 +90,7 @@ export const BASE_SPELLS: SpellTemplate[] = [
   {
     name: "Flame Barrier",
     sourceKey: "flame-barrier",
+    catalogVersion: 1,
     type: "spell",
     spellTier: 3,
     spellSchool: "fire" as SpellSchool,
@@ -90,6 +104,7 @@ export const BASE_SPELLS: SpellTemplate[] = [
   {
     name: "Pyroclasm",
     sourceKey: "pyroclasm",
+    catalogVersion: 1,
     type: "spell",
     spellTier: 4,
     spellSchool: "fire" as SpellSchool,
@@ -103,6 +118,7 @@ export const BASE_SPELLS: SpellTemplate[] = [
   {
     name: "Fiery Embrace",
     sourceKey: "fiery-embrace",
+    catalogVersion: 1,
     type: "spell",
     spellTier: 5,
     spellSchool: "fire" as SpellSchool,
@@ -116,6 +132,7 @@ export const BASE_SPELLS: SpellTemplate[] = [
   {
     name: "Living Inferno",
     sourceKey: "living-inferno",
+    catalogVersion: 1,
     type: "spell",
     spellTier: 7,
     spellSchool: "fire" as SpellSchool,
@@ -129,6 +146,7 @@ export const BASE_SPELLS: SpellTemplate[] = [
   {
     name: "Dragonform",
     sourceKey: "dragonform",
+    catalogVersion: 1,
     type: "spell",
     spellTier: 9,
     spellSchool: "fire" as SpellSchool,
@@ -142,6 +160,7 @@ export const BASE_SPELLS: SpellTemplate[] = [
   {
     name: "Tooth & Claw (Dragonform)",
     sourceKey: "tooth-claw-dragonform",
+    catalogVersion: 1,
     type: "spell",
     spellTier: 9,
     spellSchool: "fire" as SpellSchool,
@@ -154,6 +173,7 @@ export const BASE_SPELLS: SpellTemplate[] = [
   {
     name: "Immolating Breath (Dragonform)",
     sourceKey: "immolating-breath-dragonform",
+    catalogVersion: 1,
     type: "spell",
     spellTier: 9,
     spellSchool: "fire",
@@ -169,6 +189,7 @@ export const BASE_SPELLS: SpellTemplate[] = [
   {
     name: "Ice Lance",
     sourceKey: "ice-lance",
+    catalogVersion: 1,
     type: "spell",
     spellTier: 0,
     spellSchool: "ice" as SpellSchool,
@@ -181,6 +202,7 @@ export const BASE_SPELLS: SpellTemplate[] = [
   {
     name: "Snowblind",
     sourceKey: "snowblind",
+    catalogVersion: 1,
     type: "spell",
     spellTier: 0,
     spellSchool: "ice" as SpellSchool,
@@ -193,6 +215,7 @@ export const BASE_SPELLS: SpellTemplate[] = [
   {
     name: "Frost Shield",
     sourceKey: "frost-shield",
+    catalogVersion: 1,
     type: "spell",
     spellTier: 1,
     spellSchool: "ice" as SpellSchool,
@@ -206,6 +229,7 @@ export const BASE_SPELLS: SpellTemplate[] = [
   {
     name: "Shatter",
     sourceKey: "shatter",
+    catalogVersion: 1,
     type: "spell",
     spellTier: 2,
     spellSchool: "ice" as SpellSchool,
@@ -219,6 +243,7 @@ export const BASE_SPELLS: SpellTemplate[] = [
   {
     name: "Cryosleep",
     sourceKey: "cryosleep",
+    catalogVersion: 1,
     type: "spell",
     spellTier: 3,
     spellSchool: "ice" as SpellSchool,
@@ -232,6 +257,7 @@ export const BASE_SPELLS: SpellTemplate[] = [
   {
     name: "Rimeblades",
     sourceKey: "rimeblades",
+    catalogVersion: 1,
     type: "spell",
     spellTier: 4,
     spellSchool: "ice" as SpellSchool,
@@ -245,6 +271,7 @@ export const BASE_SPELLS: SpellTemplate[] = [
   {
     name: "Arctic Blast",
     sourceKey: "arctic-blast",
+    catalogVersion: 1,
     type: "spell",
     spellTier: 5,
     spellSchool: "ice" as SpellSchool,
@@ -258,6 +285,7 @@ export const BASE_SPELLS: SpellTemplate[] = [
   {
     name: "Glacier Strike",
     sourceKey: "glacier-strike",
+    catalogVersion: 1,
     type: "spell",
     spellTier: 8,
     spellSchool: "ice" as SpellSchool,
@@ -271,6 +299,7 @@ export const BASE_SPELLS: SpellTemplate[] = [
   {
     name: "Arctic Annihilation",
     sourceKey: "arctic-annihilation",
+    catalogVersion: 1,
     type: "spell",
     spellTier: 9,
     spellSchool: "ice" as SpellSchool,
@@ -286,6 +315,7 @@ export const BASE_SPELLS: SpellTemplate[] = [
   {
     name: "Zap",
     sourceKey: "zap",
+    catalogVersion: 1,
     type: "spell",
     spellTier: 0,
     spellSchool: "lightning" as SpellSchool,
@@ -299,6 +329,7 @@ export const BASE_SPELLS: SpellTemplate[] = [
   {
     name: "Overload",
     sourceKey: "overload",
+    catalogVersion: 1,
     type: "spell",
     spellTier: 0,
     spellSchool: "lightning" as SpellSchool,
@@ -312,6 +343,7 @@ export const BASE_SPELLS: SpellTemplate[] = [
   {
     name: "Arc Lightning",
     sourceKey: "arc-lightning",
+    catalogVersion: 1,
     type: "spell",
     spellTier: 1,
     spellSchool: "lightning" as SpellSchool,
@@ -325,6 +357,7 @@ export const BASE_SPELLS: SpellTemplate[] = [
   {
     name: "Alacrity",
     sourceKey: "alacrity",
+    catalogVersion: 1,
     type: "spell",
     spellTier: 2,
     spellSchool: "lightning" as SpellSchool,
@@ -338,6 +371,7 @@ export const BASE_SPELLS: SpellTemplate[] = [
   {
     name: "Stormlash",
     sourceKey: "stormlash",
+    catalogVersion: 1,
     type: "spell",
     spellTier: 3,
     spellSchool: "lightning" as SpellSchool,
@@ -351,6 +385,7 @@ export const BASE_SPELLS: SpellTemplate[] = [
   {
     name: "Electrickery",
     sourceKey: "electrickery",
+    catalogVersion: 1,
     type: "spell",
     spellTier: 4,
     spellSchool: "lightning" as SpellSchool,
@@ -364,6 +399,7 @@ export const BASE_SPELLS: SpellTemplate[] = [
   {
     name: "Electrocharge",
     sourceKey: "electrocharge",
+    catalogVersion: 1,
     type: "spell",
     spellTier: 5,
     spellSchool: "lightning" as SpellSchool,
@@ -377,6 +413,7 @@ export const BASE_SPELLS: SpellTemplate[] = [
   {
     name: "Ride the Lightning",
     sourceKey: "ride-the-lightning",
+    catalogVersion: 1,
     type: "spell",
     spellTier: 6,
     spellSchool: "lightning" as SpellSchool,
@@ -390,6 +427,7 @@ export const BASE_SPELLS: SpellTemplate[] = [
   {
     name: "Seething Storm",
     sourceKey: "seething-storm",
+    catalogVersion: 1,
     type: "spell",
     spellTier: 9,
     spellSchool: "lightning" as SpellSchool,
@@ -405,6 +443,7 @@ export const BASE_SPELLS: SpellTemplate[] = [
   {
     name: "Razor Wind",
     sourceKey: "razor-wind",
+    catalogVersion: 1,
     type: "spell",
     spellTier: 0,
     spellSchool: "wind" as SpellSchool,
@@ -418,6 +457,7 @@ export const BASE_SPELLS: SpellTemplate[] = [
   {
     name: "Breath of Life",
     sourceKey: "breath-of-life",
+    catalogVersion: 1,
     type: "spell",
     spellTier: 0,
     spellSchool: "wind" as SpellSchool,
@@ -431,6 +471,7 @@ export const BASE_SPELLS: SpellTemplate[] = [
   {
     name: "Blustery Gale",
     sourceKey: "blustery-gale",
+    catalogVersion: 1,
     type: "spell",
     spellTier: 1,
     spellSchool: "wind" as SpellSchool,
@@ -444,6 +485,7 @@ export const BASE_SPELLS: SpellTemplate[] = [
   {
     name: "Barrier of Wind",
     sourceKey: "barrier-of-wind",
+    catalogVersion: 1,
     type: "spell",
     spellTier: 2,
     spellSchool: "wind" as SpellSchool,
@@ -457,6 +499,7 @@ export const BASE_SPELLS: SpellTemplate[] = [
   {
     name: "Fly",
     sourceKey: "fly",
+    catalogVersion: 1,
     type: "spell",
     spellTier: 3,
     spellSchool: "wind" as SpellSchool,
@@ -470,6 +513,7 @@ export const BASE_SPELLS: SpellTemplate[] = [
   {
     name: "Eye of the Storm",
     sourceKey: "eye-of-the-storm",
+    catalogVersion: 1,
     type: "spell",
     spellTier: 4,
     spellSchool: "wind" as SpellSchool,
@@ -483,6 +527,7 @@ export const BASE_SPELLS: SpellTemplate[] = [
   {
     name: "Updraft",
     sourceKey: "updraft",
+    catalogVersion: 1,
     type: "spell",
     spellTier: 5,
     spellSchool: "wind" as SpellSchool,
@@ -496,6 +541,7 @@ export const BASE_SPELLS: SpellTemplate[] = [
   {
     name: "Thousand Cuts",
     sourceKey: "thousand-cuts",
+    catalogVersion: 1,
     type: "spell",
     spellTier: 6,
     spellSchool: "wind" as SpellSchool,
@@ -509,6 +555,7 @@ export const BASE_SPELLS: SpellTemplate[] = [
   {
     name: "Boisterous Winds",
     sourceKey: "boisterous-winds",
+    catalogVersion: 1,
     type: "spell",
     spellTier: 7,
     spellSchool: "wind" as SpellSchool,
@@ -522,6 +569,7 @@ export const BASE_SPELLS: SpellTemplate[] = [
   {
     name: "Vicious Mockery",
     sourceKey: "vicious-mockery",
+    catalogVersion: 1,
     type: "spell",
     spellTier: 0,
     spellSchool: "wind" as SpellSchool,
@@ -537,6 +585,7 @@ export const BASE_SPELLS: SpellTemplate[] = [
   {
     name: "Rebuke",
     sourceKey: "rebuke",
+    catalogVersion: 1,
     type: "spell",
     spellTier: 0,
     spellSchool: "radiant" as SpellSchool,
@@ -550,6 +599,7 @@ export const BASE_SPELLS: SpellTemplate[] = [
   {
     name: "True Strike",
     sourceKey: "true-strike",
+    catalogVersion: 1,
     type: "spell",
     spellTier: 0,
     spellSchool: "radiant" as SpellSchool,
@@ -563,6 +613,7 @@ export const BASE_SPELLS: SpellTemplate[] = [
   {
     name: "Heal",
     sourceKey: "heal",
+    catalogVersion: 1,
     type: "spell",
     spellTier: 1,
     spellSchool: "radiant" as SpellSchool,
@@ -576,6 +627,7 @@ export const BASE_SPELLS: SpellTemplate[] = [
   {
     name: "Warding Bond",
     sourceKey: "warding-bond",
+    catalogVersion: 1,
     type: "spell",
     spellTier: 2,
     spellSchool: "radiant" as SpellSchool,
@@ -589,6 +641,7 @@ export const BASE_SPELLS: SpellTemplate[] = [
   {
     name: "Shield of Justice",
     sourceKey: "shield-of-justice",
+    catalogVersion: 1,
     type: "spell",
     spellTier: 3,
     spellSchool: "radiant" as SpellSchool,
@@ -602,6 +655,7 @@ export const BASE_SPELLS: SpellTemplate[] = [
   {
     name: "Condemn",
     sourceKey: "condemn",
+    catalogVersion: 1,
     type: "spell",
     spellTier: 4,
     spellSchool: "radiant" as SpellSchool,
@@ -615,6 +669,7 @@ export const BASE_SPELLS: SpellTemplate[] = [
   {
     name: "Vengeance",
     sourceKey: "vengeance",
+    catalogVersion: 1,
     type: "spell",
     spellTier: 5,
     spellSchool: "radiant" as SpellSchool,
@@ -628,6 +683,7 @@ export const BASE_SPELLS: SpellTemplate[] = [
   {
     name: "Sacrifice",
     sourceKey: "sacrifice",
+    catalogVersion: 1,
     type: "spell",
     spellTier: 6,
     spellSchool: "radiant" as SpellSchool,
@@ -641,6 +697,7 @@ export const BASE_SPELLS: SpellTemplate[] = [
   {
     name: "Redeem",
     sourceKey: "redeem",
+    catalogVersion: 1,
     type: "spell",
     spellTier: 9,
     spellSchool: "radiant" as SpellSchool,
@@ -653,6 +710,7 @@ export const BASE_SPELLS: SpellTemplate[] = [
   {
     name: "Lifebinding Spirit",
     sourceKey: "lifebinding-spirit",
+    catalogVersion: 1,
     type: "spell",
     spellTier: 1,
     spellSchool: "radiant" as SpellSchool,
@@ -668,6 +726,7 @@ export const BASE_SPELLS: SpellTemplate[] = [
   {
     name: "Entice",
     sourceKey: "entice",
+    catalogVersion: 1,
     type: "spell",
     spellTier: 0,
     spellSchool: "necrotic" as SpellSchool,
@@ -681,6 +740,7 @@ export const BASE_SPELLS: SpellTemplate[] = [
   {
     name: "Withering Touch",
     sourceKey: "withering-touch",
+    catalogVersion: 1,
     type: "spell",
     spellTier: 0,
     spellSchool: "necrotic" as SpellSchool,
@@ -693,6 +753,7 @@ export const BASE_SPELLS: SpellTemplate[] = [
   {
     name: "Shadow Trap",
     sourceKey: "shadow-trap",
+    catalogVersion: 1,
     type: "spell",
     spellTier: 1,
     spellSchool: "necrotic" as SpellSchool,
@@ -706,6 +767,7 @@ export const BASE_SPELLS: SpellTemplate[] = [
   {
     name: "Dread Visage",
     sourceKey: "dread-visage",
+    catalogVersion: 1,
     type: "spell",
     spellTier: 2,
     spellSchool: "necrotic" as SpellSchool,
@@ -719,6 +781,7 @@ export const BASE_SPELLS: SpellTemplate[] = [
   {
     name: "Vampiric Greed",
     sourceKey: "vampiric-greed",
+    catalogVersion: 1,
     type: "spell",
     spellTier: 3,
     spellSchool: "necrotic" as SpellSchool,
@@ -732,6 +795,7 @@ export const BASE_SPELLS: SpellTemplate[] = [
   {
     name: "Vigor Mortis",
     sourceKey: "vigor-mortis",
+    catalogVersion: 1,
     type: "spell",
     spellTier: 4,
     spellSchool: "necrotic" as SpellSchool,
@@ -745,6 +809,7 @@ export const BASE_SPELLS: SpellTemplate[] = [
   {
     name: "Gangrenous Burst",
     sourceKey: "gangrenous-burst",
+    catalogVersion: 1,
     type: "spell",
     spellTier: 5,
     spellSchool: "necrotic" as SpellSchool,
@@ -758,6 +823,7 @@ export const BASE_SPELLS: SpellTemplate[] = [
   {
     name: "Unspeakable Word",
     sourceKey: "unspeakable-word",
+    catalogVersion: 1,
     type: "spell",
     spellTier: 6,
     spellSchool: "necrotic" as SpellSchool,
@@ -771,6 +837,7 @@ export const BASE_SPELLS: SpellTemplate[] = [
   {
     name: "Creeping Death",
     sourceKey: "creeping-death",
+    catalogVersion: 1,
     type: "spell",
     spellTier: 7,
     spellSchool: "necrotic" as SpellSchool,
@@ -784,6 +851,7 @@ export const BASE_SPELLS: SpellTemplate[] = [
   {
     name: "Shadow Blast",
     sourceKey: "shadow-blast",
+    catalogVersion: 1,
     type: "spell",
     spellTier: 0,
     spellSchool: "necrotic" as SpellSchool,
@@ -796,6 +864,7 @@ export const BASE_SPELLS: SpellTemplate[] = [
   {
     name: "Summon Shadow",
     sourceKey: "summon-shadow",
+    catalogVersion: 1,
     type: "spell",
     spellTier: 0,
     spellSchool: "necrotic" as SpellSchool,
@@ -819,6 +888,7 @@ export const BASE_SPELLS: SpellTemplate[] = [
   {
     name: "Firebrand",
     sourceKey: "firebrand",
+    catalogVersion: 1,
     type: "spell",
     spellTier: 0,
     spellSchool: "utility" as SpellSchool,
@@ -832,6 +902,7 @@ export const BASE_SPELLS: SpellTemplate[] = [
   {
     name: "Fire Step",
     sourceKey: "fire-step",
+    catalogVersion: 1,
     type: "spell",
     spellTier: 0,
     spellSchool: "utility" as SpellSchool,
@@ -843,6 +914,7 @@ export const BASE_SPELLS: SpellTemplate[] = [
   {
     name: "Kindle",
     sourceKey: "kindle",
+    catalogVersion: 1,
     type: "spell",
     spellTier: 0,
     spellSchool: "utility" as SpellSchool,
@@ -858,6 +930,7 @@ export const BASE_SPELLS: SpellTemplate[] = [
   {
     name: "Spark Buddy",
     sourceKey: "spark-buddy",
+    catalogVersion: 1,
     type: "spell",
     spellTier: 0,
     spellSchool: "utility" as SpellSchool,
@@ -870,6 +943,7 @@ export const BASE_SPELLS: SpellTemplate[] = [
   {
     name: "Spark Step",
     sourceKey: "spark-step",
+    catalogVersion: 1,
     type: "spell",
     spellTier: 0,
     spellSchool: "utility" as SpellSchool,
@@ -882,6 +956,7 @@ export const BASE_SPELLS: SpellTemplate[] = [
   {
     name: "Tempest’s Command",
     sourceKey: "tempests-command",
+    catalogVersion: 1,
     type: "spell",
     spellTier: 0,
     spellSchool: "utility" as SpellSchool,
@@ -897,6 +972,7 @@ export const BASE_SPELLS: SpellTemplate[] = [
   {
     name: "Chillcraft",
     sourceKey: "chillcraft",
+    catalogVersion: 1,
     type: "spell",
     spellTier: 0,
     spellSchool: "utility" as SpellSchool,
@@ -910,6 +986,7 @@ export const BASE_SPELLS: SpellTemplate[] = [
   {
     name: "Ice Disk",
     sourceKey: "ice-disk",
+    catalogVersion: 1,
     type: "spell",
     spellTier: 0,
     spellSchool: "utility" as SpellSchool,
@@ -922,6 +999,7 @@ export const BASE_SPELLS: SpellTemplate[] = [
   {
     name: "Wintry Scrying",
     sourceKey: "wintry-scrying",
+    catalogVersion: 1,
     type: "spell",
     spellTier: 0,
     spellSchool: "utility" as SpellSchool,
@@ -936,6 +1014,7 @@ export const BASE_SPELLS: SpellTemplate[] = [
   {
     name: "Wind Whisper",
     sourceKey: "wind-whisper",
+    catalogVersion: 1,
     type: "spell",
     spellTier: 0,
     spellSchool: "utility" as SpellSchool,
@@ -949,6 +1028,7 @@ export const BASE_SPELLS: SpellTemplate[] = [
   {
     name: "Helpful Gust",
     sourceKey: "helpful-gust",
+    catalogVersion: 1,
     type: "spell",
     spellTier: 0,
     spellSchool: "utility" as SpellSchool,
@@ -962,6 +1042,7 @@ export const BASE_SPELLS: SpellTemplate[] = [
   {
     name: "Feather Fall",
     sourceKey: "feather-fall",
+    catalogVersion: 1,
     type: "spell",
     spellTier: 0,
     spellSchool: "utility" as SpellSchool,
@@ -976,6 +1057,7 @@ export const BASE_SPELLS: SpellTemplate[] = [
   {
     name: "Light",
     sourceKey: "light",
+    catalogVersion: 1,
     type: "spell",
     spellTier: 0,
     spellSchool: "utility" as SpellSchool,
@@ -988,6 +1070,7 @@ export const BASE_SPELLS: SpellTemplate[] = [
   {
     name: "Beautify",
     sourceKey: "beautify",
+    catalogVersion: 1,
     type: "spell",
     spellTier: 0,
     spellSchool: "utility" as SpellSchool,
@@ -1001,6 +1084,7 @@ export const BASE_SPELLS: SpellTemplate[] = [
   {
     name: "Bond of Peace",
     sourceKey: "bond-of-peace",
+    catalogVersion: 1,
     type: "spell",
     spellTier: 0,
     spellSchool: "utility" as SpellSchool,
@@ -1016,6 +1100,7 @@ export const BASE_SPELLS: SpellTemplate[] = [
   {
     name: "Gravecraft",
     sourceKey: "gravecraft",
+    catalogVersion: 1,
     type: "spell",
     spellTier: 0,
     spellSchool: "utility" as SpellSchool,
@@ -1028,6 +1113,7 @@ export const BASE_SPELLS: SpellTemplate[] = [
   {
     name: "False Face",
     sourceKey: "false-face",
+    catalogVersion: 1,
     type: "spell",
     spellTier: 0,
     spellSchool: "utility" as SpellSchool,
@@ -1040,6 +1126,7 @@ export const BASE_SPELLS: SpellTemplate[] = [
   {
     name: "Thought Leech",
     sourceKey: "thought-leech",
+    catalogVersion: 1,
     type: "spell",
     spellTier: 0,
     spellSchool: "utility" as SpellSchool,
