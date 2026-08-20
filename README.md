@@ -1,135 +1,137 @@
-# 🎲 Nimble Character Sheet : OBR Extension
+# 🎲 Nimble Character Sheet: OBR Extension
 
-Extension Owlbear Rodeo pour jouer au TTRPG **Nimble**. Fiche de personnage interactive en panneau latéral, synchronisée en temps réel pour tous les joueurs à la table.
+*Read this in [French / Français](README.fr.md).*
+
+Owlbear Rodeo extension for playing the **Nimble** TTRPG. Interactive character sheet in a side panel, synced in real time for every player at the table.
 
 ---
 
-## Stack technique
+## Tech Stack
 
 - **React 19** + **TypeScript**
 - **Vite** (dev server + build)
-- **Tailwind CSS v4** (configuré en CSS, pas de `tailwind.config.js`)
+- **Tailwind CSS v4** (configured in CSS, no `tailwind.config.js`)
 - **@owlbear-rodeo/sdk** (v3.1.0)
-- **Vitest** pour les tests unitaires
+- **Vitest** for unit tests
 
 ---
 
 ## 🤖 AI-Augmented Engineering
 
-Ce projet a été développé avec une approche **AI-Augmented Engineering** (développement assisté par LLM), et sert aussi de terrain d'entraînement personnel à l'utilisation avancée de l'IA en contexte professionnel. Il s'est fait en deux phases nettement différentes, avec deux méthodes de travail différentes.
+This project was built with an **AI-Augmented Engineering** approach (LLM-assisted development), and also serves as a personal training ground for advanced AI use in a professional context. It happened in two clearly distinct phases, with two different working methods.
 
-### Phase 1 : Claude en conversation (l'essentiel du projet)
+### Phase 1: Claude in conversation (the bulk of the project)
 
-Architecture générale, schéma de données, maquette de design et toutes les décisions de game design ont été faites à la main. Le code des composants React/Tailwind a été généré par itération avec Claude en conversation, à partir de specs détaillées et d'un contexte injecté manuellement : documentation du SDK OBR, règles officielles de Nimble extraites du PDF de référence pour que les sorts/objets générés respectent fidèlement le livre. Le contrôle s'exerçait naturellement : chaque ligne passait par une relecture et une intégration manuelle avant d'entrer dans le repo.
+Overall architecture, data schema, design mockup, and every game-design decision were made by hand. The React/Tailwind component code was generated iteratively with Claude in conversation, from detailed specs and manually injected context: OBR SDK documentation, official Nimble rules extracted from the reference PDF so the generated spells/items stayed faithful to the book. Control was exercised naturally: every line went through a manual review and integration before entering the repo.
 
-### Phase 2 : Claude Code en agent (reprise du projet)
+### Phase 2: Claude Code as an agent (picking the project back up)
 
-La méthode a changé à la reprise : Claude Code écrit directement dans le repo (nouvelles fonctionnalités, refactors, tests), et le rôle du développeur devient la revue critique plutôt que la relecture ligne à ligne. Le levier n'est plus la relecture de chaque diff au moment où il s'écrit, mais :
+The method changed when the project was picked back up: Claude Code writes directly into the repo (new features, refactors, tests), and the developer's role shifts to critical review rather than line-by-line reading. The lever is no longer reviewing every diff as it's written, but instead:
 
-- des prompts précis et un contexte projet structuré (`CLAUDE.md`, à la racine du repo, qui documente les décisions à ne pas "corriger" et les raisons derrière elles) ;
-- la revue des sorties produites, pas seulement du code mais du raisonnement fourni ;
-- des garde-fous automatisés : suite de tests (voir [Tests et CI](#tests-et-ci)), invariants qui cassent volontairement quand une étape est oubliée (ex. le test `MIGRATIONS invariant` du système de [versionnage de schéma](#versionnage-de-schéma)).
+- precise prompts and a structured project context (`CLAUDE.md`, at the repo root, which documents decisions not to "fix" and the reasoning behind them);
+- reviewing the produced output, not just the code but the reasoning given;
+- automated guardrails: a test suite (see [Tests and CI](#tests-and-ci)), invariants that deliberately break when a step is forgotten (e.g. the `MIGRATIONS invariant` test in the [schema versioning](#schema-versioning) system).
 
-Ce qui ne change pas entre les deux phases : rien n'est accepté sans être relu et testé à la main. En phase 2, plusieurs propositions de l'agent ont été refusées ou corrigées après vérification, et plusieurs bugs ont été trouvés par des tests manuels multi-clients dans OBR, pas par la suite automatisée. Trois exemples concrets de ce que cette revue a attrapé, aucun n'aurait été détecté par un test ou un type-check :
+What doesn't change between the two phases: nothing is accepted without being manually reviewed and tested. In phase 2, several of the agent's proposals were rejected or corrected after verification, and several bugs were found through manual multi-client testing in OBR, not by the automated suite. Three concrete examples of what this review caught, none of which would have been caught by a test or a type-check:
 
-- **`LVL`** : l'agent proposait de corriger la donnée dans `spells.ts` en réécrivant `LVL` en `LEVEL`, en traitant la notation du livre comme une faute de frappe. La bonne correction était d'ajouter `LVL` comme alias dans le parser (voir `VARIABLE_TABLE` dans `formulaParser.ts`) : réécrire la donnée aurait laissé le même piège pour le prochain MJ écrivant une formule custom avec cette abréviation officielle.
-- **`actionsUsed` renommé en `actionsRemaining`** : le champ comptait les actions dépensées, alors que ce qu'un joueur suit réellement à la table, c'est ce qu'il lui reste. Le sens de décompte était inversé (lancer 1 action mettait le compteur à 2 au lieu de 1). Trouvé en jouant avec la fiche, pas en relisant le code.
-- **Le reset du tracker d'actions** : l'agent proposait de le lier au jet d'initiative, en s'appuyant sur une règle inexacte (l'initiative se lance une fois par combat en Nimble, pas à chaque round). Rejeté sur la base de la connaissance du jeu, pas du code.
+- **`LVL`**: the agent proposed fixing the data in `spells.ts` by rewriting `LVL` to `LEVEL`, treating the book's notation as a typo. The right fix was to add `LVL` as an alias in the parser (see `VARIABLE_TABLE` in `formulaParser.ts`): rewriting the data would have left the same trap for the next GM writing a custom formula with that official abbreviation.
+- **`actionsUsed` renamed to `actionsRemaining`**: the field counted actions spent, when what a player actually tracks at the table is what's left. The counting direction was inverted (spending 1 action set the counter to 2 instead of 1). Found by playing with the sheet, not by reading the code.
+- **The action tracker's reset**: the agent proposed tying it to the initiative roll, based on an inaccurate rule (initiative is rolled once per combat in Nimble, not every round). Rejected on game-knowledge grounds, not code.
 
-### Ce que la phase 2 a révélé sur la phase 1
+### What phase 2 revealed about phase 1
 
-Le retour d'expérience le plus intéressant du projet : la rigueur de la phase 2 (tests systématiques, CLAUDE.md documentant chaque garde-fou, JSDoc exigeant de justifier le "pourquoi") a mis au jour plusieurs bugs silencieux introduits en phase 1, présents dans le code depuis des semaines sans qu'aucun test rouge ni aucune erreur de type-check ne les signale :
+The most interesting takeaway of the project: phase 2's rigor (systematic tests, CLAUDE.md documenting every guardrail, JSDoc requiring the "why" to be justified) surfaced several silent bugs introduced in phase 1, present in the code for weeks with no red test or type-check error flagging them:
 
-- **Le garde-fou anti-DoS du parser de formules ne protégeait que l'affichage.** Une limite sur le nombre de dés et leurs faces (`assertDiceWithinLimits`) avait été ajoutée sur le chemin d'affichage (`diceToAverage`) mais pas sur le chemin de résolution des dés dynamiques (`resolveDynamicDice`), qui alimente à la fois l'affichage *et* le jet réel. Un jet réel n'était donc pas protégé par la limite censée le couvrir.
-- **Trois notations officielles du livre étaient silencieusement rejetées.** `d66` (dé à comptage implicite, sans "1" devant), `KEYd20` (variable collée à une notation de dé : la frontière `\b` de regex ne détecte pas de rupture entre "Y" et "D", deux caractères de mot) et `LVL` (abréviation utilisée par le livre lui-même) échouaient toutes les trois à la lecture, alors que le contenu était juste : c'est le parser qui était trop strict.
-- **La variable `FLAW` était documentée, mais jamais câblée.** Elle apparaissait dans le README et dans `buildContext`, sans aucune ligne de substitution dans le parser : une formule l'utilisant ne se serait jamais évaluée correctement.
-- **Plusieurs dégradations silencieuses vers 0 masquaient des erreurs.** Un jeton de formule inconnu, un résultat `NaN`, un compte de dés à 0 : tous retournaient un `0` d'apparence légitime au lieu d'échouer bruyamment, ce qui est particulièrement dangereux pour un lanceur de dés diffusé à toute la table.
-- **Un `updateItems` résolu ne prouve pas que la table a reçu le changement.** Le SDK OBR communique avec son hôte exclusivement par `window.postMessage` entre l'iframe de l'extension et la fenêtre parente, un mécanisme qui ne touche jamais la couche réseau. `updateItems`/`setMetadata` se résolvent dès que l'hôte a appliqué le changement à son état de scène local, ce qui n'est pas la même chose que le relais effectif vers le serveur multijoueur par le WebSocket de l'hôte. Réseau coupé, `updateItems` continue de se résoudre normalement pendant que le WebSocket de l'hôte est fermé. C'est un vrai angle mort de l'extension (voir `SyncStatus` dans `useOBR.ts`), pas une supposition.
-- **Des affirmations sur la synchronisation avaient divergé de ce que le code garantissait réellement.** Ce README lui-même affirmait qu'une écriture "se propage instantanément à tous les clients connectés" ; c'est vrai pour le cas courant, mais faux dans le sens absolu où la phrase le laissait entendre, pour la raison ci-dessus.
+- **The formula parser's anti-DoS guardrail only protected the display path.** A limit on dice count and sides (`assertDiceWithinLimits`) had been added on the display path (`diceToAverage`) but not on the dynamic-dice resolution path (`resolveDynamicDice`), which feeds both the display *and* the real roll. A real roll was therefore not protected by the limit meant to cover it.
+- **Three of the book's official notations were silently rejected.** `d66` (implicit-count die, with no leading "1"), `KEYd20` (a variable glued to dice notation: the regex `\b` boundary doesn't detect a break between "Y" and "D", both word characters), and `LVL` (an abbreviation the book itself uses) all three failed to parse, even though the content was correct: the parser was too strict.
+- **The `FLAW` variable was documented but never wired up.** It appeared in the README and in `buildContext`, with no substitution line anywhere in the parser: a formula using it would never have evaluated correctly.
+- **Several silent degradations to 0 masked errors.** An unknown formula token, a `NaN` result, a dice count of 0: all of them returned a plausible-looking `0` instead of failing loudly, which is particularly dangerous for a dice roller broadcast to the whole table.
+- **A resolved `updateItems` doesn't prove the table received the change.** The OBR SDK talks to its host exclusively through `window.postMessage` between the extension's iframe and the parent window, a mechanism that never touches the network layer. `updateItems`/`setMetadata` resolve as soon as the host has applied the change to its own local scene state, which is not the same thing as the change actually being relayed to the multiplayer server over the host's WebSocket. With the network cut, `updateItems` keeps resolving normally while the host's WebSocket sits closed. This is a real blind spot of the extension (see `SyncStatus` in `useOBR.ts`), not a supposition.
+- **Claims about synchronization had drifted from what the code actually guaranteed.** This very README used to claim that a write "propagates instantly to every connected client"; true for the common case, but false in the absolute sense the sentence implied, for the reason above.
 
-Le point commun à tous ces bugs : aucun n'était visible dans des tests verts ou un type-check propre, et plusieurs venaient d'une mesure de sécurité placée à un endroit plausible mais inefficace. C'est une limite réelle de la méthode de la phase 1 (contexte injecté manuellement, mais pas de suite de tests pour vérifier les invariants dans la durée), et la documenter renforce cette section plutôt que de l'affaiblir : c'est précisément ce que la rigueur de la phase 2 (garde-fous automatisés, JSDoc qui doit justifier chaque décision) a été mise en place pour éviter à l'avenir.
+The common thread across all these bugs: none of them was visible in green tests or a clean type-check, and several came from a safety measure placed somewhere plausible but ineffective. This is a real limit of phase 1's method (manually injected context, but no test suite to verify invariants over time), and documenting it strengthens this section rather than weakening it: it's exactly what phase 2's rigor (automated guardrails, JSDoc that must justify every decision) was put in place to prevent going forward.
 
-### Limites assumées
+### Acknowledged limits
 
-Le contrôle porte sur les décisions structurantes (architecture, schéma de données, game design, permissions) et sur la revue des sorties, pas sur chaque choix d'implémentation interne : plusieurs détails techniques ont bien été décidés en autonomie par l'agent et validés après coup plutôt qu'avant, par exemple le choix de réécrire une migration de schéma dans un effet dédié plutôt qu'au moment du chargement (voir `useOBR.ts`), ou un compteur interne (`armIdRef` dans `useDeleteUndo.ts`) pour invalider un timer d'undo devenu obsolète. Chaque changement touchant aux **permissions** (`canEdit`, `ownerId`) ou à la synchronisation multijoueur a en revanche été testé à la main dans OBR avec plusieurs comptes simultanés (un MJ + plusieurs joueurs) avant d'être validé : `type-check` + `lint` + tests verts est la barre pour "fini" côté code, mais pas une preuve suffisante pour ce qui touche au multijoueur, où il n'existe pas de substitut automatisé.
-
----
-
-## Prérequis
-
-- **Node.js ≥ 18** (LTS recommandé)
-- **npm ≥ 9** (ou pnpm / yarn si tu préfères)
-- Un compte [Owlbear Rodeo](https://www.owlbear.rodeo/) pour tester l'extension
+Control is exercised over structuring decisions (architecture, data schema, game design, permissions) and over reviewing output, not over every internal implementation choice: several technical details were indeed decided autonomously by the agent and validated after the fact rather than before, for example the choice to re-write a schema migration in a dedicated effect rather than at load time (see `useOBR.ts`), or an internal counter (`armIdRef` in `useDeleteUndo.ts`) to invalidate an undo timer that's gone stale. Every change touching **permissions** (`canEdit`, `ownerId`) or multiplayer sync, on the other hand, was manually tested by hand in OBR with several simultaneous accounts (a GM + several players) before being accepted: `type-check` + `lint` + green tests is the bar for "done" on the code side, but not sufficient proof for anything touching multiplayer, where there's no automated substitute.
 
 ---
 
-## Démarrage rapide
+## Prerequisites
+
+- **Node.js ≥ 18** (LTS recommended)
+- **npm ≥ 9** (or pnpm / yarn if you prefer)
+- An [Owlbear Rodeo](https://www.owlbear.rodeo/) account to test the extension
+
+---
+
+## Quick start
 
 ```bash
 npm install
 npm run dev
 ```
 
-Le terminal affiche une URL du type `https://localhost:5173`. C'est celle-là qu'on enregistre dans OBR (voir ci-dessous). Le projet n'a pas besoin d'être recréé de zéro : cette commande suffit. Pour l'historique de comment le projet a été échafaudé à l'origine (Vite + React + TS + Tailwind), voir [docs/dev-setup-from-scratch.md](docs/dev-setup-from-scratch.md).
+The terminal prints a URL like `https://localhost:5173`. That's the one to register in OBR (see below). The project doesn't need to be scaffolded from scratch: this command is enough. For the history of how the project was originally scaffolded (Vite + React + TS + Tailwind), see [docs/dev-setup-from-scratch.md](docs/dev-setup-from-scratch.md).
 
 ---
 
-## Enregistrer l'extension dans Owlbear Rodeo
+## Registering the extension in Owlbear Rodeo
 
-1. Ouvre [owlbear.rodeo](https://www.owlbear.rodeo/) et crée une partie (ou ouvre une existante).
-2. Dans le menu latéral gauche, clique sur l'icône **Extensions** (puzzle piece).
-3. Clique sur **"Add Extension"**.
-4. Entre l'URL du manifest :
-   - en développement local, `https://localhost:5173/manifest.test.json` (`public/manifest.test.json`, nommé "[DEV]" pour se distinguer de la version installée en production dans la liste des extensions) ;
-   - pour utiliser la version publiée, `https://nimble-obr.vercel.app/manifest.json` (déployée depuis la branche `main`).
-5. En local, accepte le certificat HTTPS si ton navigateur te l'affiche (visite `https://localhost:5173` directement une fois).
-6. L'extension apparaît dans le menu, clique dessus pour ouvrir le panneau.
+1. Open [owlbear.rodeo](https://www.owlbear.rodeo/) and create a game (or open an existing one).
+2. In the left-side menu, click the **Extensions** icon (puzzle piece).
+3. Click **"Add Extension"**.
+4. Enter the manifest URL:
+   - for local development, `https://localhost:5173/manifest.test.json` (`public/manifest.test.json`, named "[DEV]" to stand out from the production-installed version in the extensions list);
+   - to use the published version, `https://nimble-obr.vercel.app/manifest.json` (deployed from the `main` branch).
+5. Locally, accept the HTTPS certificate if your browser prompts for it (visit `https://localhost:5173` directly once).
+6. The extension appears in the menu; click it to open the panel.
 
-> **Après une mise à jour de l'extension déjà installée**, recharge la page OBR (F5) avant de rouvrir le panneau. Le schéma de la fiche est versionné (voir [Versionnage de schéma](#versionnage-de-schéma)) : un onglet resté ouvert depuis avant la mise à jour peut se retrouver face à une fiche migrée par un client plus récent, et affichera alors un message demandant de recharger plutôt que de deviner un champ qu'il ne connaît pas encore.
+> **After updating an already-installed extension**, reload the OBR page (F5) before reopening the panel. The sheet's schema is versioned (see [Schema versioning](#schema-versioning)): a tab left open since before the update can end up facing a sheet migrated by a newer client, and will then show a message asking to reload rather than guessing at a field it doesn't know about yet.
 
 ---
 
-## Build de production
+## Production build
 
 ```bash
 npm run build
 ```
 
-Les fichiers statiques sont dans `dist/`. La version publiée est déployée sur **Vercel** depuis la branche `main`, à `https://nimble-obr.vercel.app`. D'autres hébergeurs de statique conviendraient aussi (Netlify par drag & drop de `dist/`, GitHub Pages avec `base: '/nimble-obr/'` dans `vite.config.ts`), mais impliqueraient de changer les URLs `manifest`/`image`/`icon` de [docs/store.md](docs/store.md), qui doivent rester synchronisées avec l'URL réellement déployée.
+The static files land in `dist/`. The published version is deployed on **Vercel** from the `main` branch, at `https://nimble-obr.vercel.app`. Other static hosts would work too (Netlify via drag & drop of `dist/`, GitHub Pages with `base: '/nimble-obr/'` in `vite.config.ts`), but would mean changing the `manifest`/`image`/`icon` URLs in [docs/store.md](docs/store.md), which must stay in sync with the actually deployed URL.
 
 ---
 
-## Structure du projet
+## Project structure
 
 ```
 nimble-obr/
 ├── public/
-│   ├── manifest.json          ← manifest de production
-│   ├── manifest.test.json      ← manifest "[DEV]" pour le développement local
-│   └── icon.svg                ← icône de l'extension
+│   ├── manifest.json          ← production manifest
+│   ├── manifest.test.json      ← "[DEV]" manifest for local development
+│   └── icon.svg                ← extension icon
 ├── docs/
-│   ├── schema-migrations.md    ← versionnage et migration de la fiche
+│   ├── schema-migrations.md    ← sheet schema versioning and migration
 │   ├── dev-setup-from-scratch.md
-│   └── store.md                 ← fiche de la boutique d'extensions OBR
+│   └── store.md                 ← OBR extension store listing
 ├── src/
 │   ├── types/
-│   │   └── character.ts        ← types du domaine (NimbleCharacter, etc.)
+│   │   └── character.ts        ← domain types (NimbleCharacter, etc.)
 │   ├── utils/
-│   │   ├── formulaParser.ts    ← parseur de formules + moteur de dés
-│   │   ├── characterMigrations.ts  ← migrations de schéma
-│   │   └── entryUndo.ts        ← logique pure de l'undo de suppression
+│   │   ├── formulaParser.ts    ← formula parser + dice engine
+│   │   ├── characterMigrations.ts  ← schema migrations
+│   │   └── entryUndo.ts        ← pure delete-undo logic
 │   ├── data/
-│   │   ├── spells.ts           ← sorts officiels (BASE_SPELLS)
-│   │   └── equipment.ts        ← équipement officiel (BASIC_EQUIPMENTS)
+│   │   ├── spells.ts           ← official spells (BASE_SPELLS)
+│   │   └── equipment.ts        ← official equipment (BASIC_EQUIPMENTS)
 │   ├── hooks/
-│   │   ├── useOBR.ts           ← intégration SDK OBR (état, permissions, sync, rolls)
-│   │   ├── useDeleteUndo.ts    ← undo de suppression (spells/items/actions)
+│   │   ├── useOBR.ts           ← OBR SDK integration (state, permissions, sync, rolls)
+│   │   ├── useDeleteUndo.ts    ← delete undo (spells/items/actions)
 │   │   ├── useDraggableValue.ts
-│   │   ├── useFormulaField.ts  ← champ de formule à commit différé
+│   │   ├── useFormulaField.ts  ← deferred-commit formula field
 │   │   └── useSearchFilter.ts
 │   ├── components/
 │   │   ├── ui/
-│   │   │   ├── common/          ← composants réutilisables (BentoSection, FormField, FormulaHelp…)
+│   │   │   ├── common/          ← reusable components (BentoSection, FormField, FormulaHelp…)
 │   │   │   ├── StatBox.tsx
 │   │   │   ├── DiceRollModal.tsx
 │   │   │   ├── DicePanel.tsx
@@ -152,78 +154,79 @@ nimble-obr/
 
 ---
 
-## Architecture des données
+## Data architecture
 
-La fiche est stockée dans les **metadata** du token OBR sous la clé :
+The sheet is stored in the OBR token's **metadata** under the key:
 
 ```
 com.nimble-obr.nimble/character_sheet
 ```
 
-Ce namespace unique évite les conflits avec d'autres extensions. Toute modification appelle `OBR.scene.items.updateItems()`.
+This unique namespace avoids collisions with other extensions' metadata. Every change calls `OBR.scene.items.updateItems()`.
 
-L'historique des lancés de dés (visibles par toute la table) est stocké séparément dans les **metadata de la scène**, sous une clé dérivée du même namespace, et plafonné à 20 entrées.
+The dice roll history (visible to the whole table) is stored separately in the **scene metadata**, under a key derived from the same namespace, capped at 20 entries.
 
-### Versionnage de schéma
+### Schema versioning
 
-La fiche (`NimbleCharacter`) porte un `schemaVersion`. Un choke point unique (`migrateCharacter`) fait passer un enregistrement ancien à la version courante, refuse un enregistrement écrit par un client plus récent (`"unsupported"`, message "reload the page"), et refuse un enregistrement corrompu même après migration (`"invalid"`). La procédure complète pour ajouter un champ, ce qui se passe côté clients au moment d'un déploiement, et les limites connues de la validation de forme sont documentées dans [docs/schema-migrations.md](docs/schema-migrations.md).
+The sheet (`NimbleCharacter`) carries a `schemaVersion`. A single choke point (`migrateCharacter`) brings an old record up to the current version, refuses a record written by a newer client (`"unsupported"`, "reload the page" message), and refuses a record that's corrupted even after migration (`"invalid"`). The full procedure for adding a field, what happens client-side at deploy time, and the known limits of shape validation are documented in [docs/schema-migrations.md](docs/schema-migrations.md).
 
-### Qui peut modifier quoi ?
+### Who can edit what?
 
-| Rôle | Peut modifier |
+| Role | Can edit |
 |------|--------------|
-| Joueur, propriétaire du token (`ownerId`) | Sa propre fiche |
-| GM | Toutes les fiches, indépendamment de `ownerId` |
-| Joueur, autre token | Lecture seule (boutons d'édition masqués, pas seulement désactivés) |
+| Player, token owner (`ownerId`) | Their own sheet |
+| GM | Any sheet, regardless of `ownerId` |
+| Player, another token | Read-only (edit buttons hidden, not just disabled) |
 
-Cette permission est centralisée dans un objet `permissions` (`{ canEdit, isGM, isOwner, isUnclaimed }`), calculé une seule fois dans `useOBR` et propagé explicitement en props à chaque composant interactif : il ne se propage jamais "automatiquement" via le contexte React, ce qui nécessite une vérification systématique de chaque nouveau composant ajouté.
+This permission is centralized in a `permissions` object (`{ canEdit, isGM, isOwner, isUnclaimed }`), computed once in `useOBR` and passed explicitly as props to every interactive component: it never propagates "automatically" through React context, which requires a systematic check for every newly added component.
 
-**Garde côté écriture** : `updateCharacter` (dans `useOBR`) revérifie `canEdit` avant chaque appel à `OBR.scene.items.updateItems`, et abandonne silencieusement (avec un `console.warn`) si l'appelant n'a pas les droits. Ce n'est pas une vraie barrière de sécurité, OBR n'a pas d'ACL serveur sur les metadata, donc un joueur déterminé pourrait toujours écrire via les devtools, mais ça évite les écritures accidentelles déclenchées par un état UI obsolète.
+**Write-side guard**: `updateCharacter` (in `useOBR`) re-checks `canEdit` before every call to `OBR.scene.items.updateItems`, and silently gives up (with a `console.warn`) if the caller doesn't have rights. This isn't a real security boundary, OBR has no server-side ACL on metadata, so a determined player could still write via devtools, but it avoids accidental writes triggered by stale UI state.
 
-**Lancer un dé reste possible en lecture seule** : lancer un dé n'est volontairement pas soumis à `canEdit`, un joueur qui regarde la fiche d'un autre peut quand même lancer un dé avec ses stats. Seule la persistance de modifications sur la fiche elle-même passe par la garde de `updateCharacter`.
+**Rolling dice stays possible read-only**: rolling a die is deliberately not gated by `canEdit`, a player looking at someone else's sheet can still roll a die using that character's stats. Only persisting changes to the sheet itself goes through `updateCharacter`'s guard.
 
-**"Claim" / "Take over"** : réclamer ou reprendre une fiche n'est pas non plus gardé par `canEdit`, puisque c'est justement le point d'entrée qui accorde les droits d'édition. Actuellement, n'importe quel joueur peut reprendre la fiche d'un autre joueur déjà réclamée (choix délibéré pour une table de confiance entre amis) ; si ce comportement doit être restreint au GM, la garde doit être ajoutée côté bouton dans `App.tsx`/`CharacterHeader.tsx`.
+**"Claim" / "Take over"**: claiming or taking over a sheet isn't gated by `canEdit` either, since that's precisely the entry point that grants edit rights. Currently, any player can take over another player's already-claimed sheet (a deliberate choice for a table of trusted friends); if this needs to be restricted to the GM, the guard should be added at the button call site in `App.tsx`/`CharacterHeader.tsx`.
 
-### Feedback de synchronisation
+### Sync feedback
 
-Chaque écriture vers OBR est suivie (`SyncStatus` dans `useOBR`) et remonte dans un bandeau discret en haut du panneau :
-- rien ne s'affiche pour une écriture normale (l'état "idle" est le cas courant, une écriture réussie ne doit pas s'afficher) ;
-- un indicateur "Saving…" apparaît si une écriture est en vol plus longtemps que prévu ;
-- un bandeau "hors ligne" s'affiche si `navigator.onLine` est faux ; la fiche reste utilisable localement (jets, brouillons de formule) mais rien n'est diffusé à la table tant que la connexion n'est pas revenue ;
-- un échec d'écriture affiche un bandeau persistant avec un bouton "Retry", qui reste affiché jusqu'à un retry réussi ou un dismiss explicite.
+Every write to OBR is tracked (`SyncStatus` in `useOBR`) and surfaces in a discreet banner at the top of the panel:
+- nothing is shown for a normal write (the "idle" state is the common case, a successful write shouldn't display anything);
+- a "Saving…" indicator appears if a write is in flight longer than expected;
+- an "offline" banner shows if `navigator.onLine` is false; the sheet stays usable locally (rolls, formula drafts) but nothing is broadcast to the table until the connection comes back;
+- a failed write shows a persistent banner with a "Retry" button, which stays displayed until a successful retry or an explicit dismiss.
 
-Ce mécanisme couvre les erreurs remontées par l'hôte OBR et la perte totale d'interface réseau. Il ne couvre pas la coupure du relais WebSocket de l'hôte OBR vers le serveur multijoueur pendant que le réseau reste up : voir la note sur `updateItems` plus haut, dans la section AI-Augmented Engineering.
+This mechanism covers errors reported by the OBR host and total loss of network interface. It does not cover the OBR host's WebSocket relay to the multiplayer server dropping while the network stays up: see the note on `updateItems` above, in the AI-Augmented Engineering section.
 
 ---
 
-## Formules supportées
+## Supported formulas
 
-Le parser de formules (`src/utils/formulaParser.ts`) supporte :
+The formula parser (`src/utils/formulaParser.ts`) supports:
 
-| Syntaxe | Exemple | Résultat |
+| Syntax | Example | Result |
 |---------|---------|----------|
-| Dés | `1d8`, `2d6` | tirage aléatoire |
-| Dé à comptage implicite | `d66`, `d44` | notation du livre pour un dé unique, normalisée en `1dN` |
-| Stats | `STR`, `DEX`, `INT`, `WIL` | valeur du personnage |
-| Stat clé / défaut | `KEY`, `FLAW` | valeur de la stat marquée clé/défaut |
-| Compétences | `MIGHT`, `STEALTH`, `ARCANA`… | valeur de la compétence |
-| Niveau | `LEVEL`, `LVL` (alias du livre) | niveau actuel |
-| PV | `HP`, `MAXHP` | points de vie actuels / maximum |
-| Maths | `+`, `-`, `*`, `/` | opérations de base |
-| Arrondi | `floor(LEVEL/5)`, `ceil(...)` | arrondi inférieur/supérieur |
-| Min/Max | `min(a, b)`, `max(a, b)` | valeur min/max |
-| Dés dynamiques | `incrementdice(1, level)d12`, `stepdice(level, 4, 8, 10, 12)` | dés évolutifs avec le niveau |
-| Combiné | `1d10 + STR + floor(LEVEL/5) * 5` | formule avancée |
+| Dice | `1d8`, `2d6` | random roll |
+| Implicit-count die | `d20`, `d12`… | book notation with no explicit count, normalized to `1dN` |
+| Positional dice | `d44`, `d66`, `d88`, advantage variant `d66a` | 2nd printing: two dice (three for `a`, keeping the 2 highest without resorting them) read positionally (tens/ones), e.g. 4 then 5 → 45. Never miss or crit. |
+| Stats | `STR`, `DEX`, `INT`, `WIL` | character's value |
+| Key / flaw stat | `KEY`, `FLAW` | value of the stat marked key/flaw |
+| Skills | `MIGHT`, `STEALTH`, `ARCANA`… | skill's value |
+| Level | `LEVEL`, `LVL` (book alias) | current level |
+| HP | `HP`, `MAXHP` | current / max hit points |
+| Math | `+`, `-`, `*`, `/` | basic operations |
+| Rounding | `floor(LEVEL/5)`, `ceil(...)` | round down/up |
+| Min/Max | `min(a, b)`, `max(a, b)` | min/max value |
+| Dynamic dice | `incrementdice(1, level)d12`, `stepdice(level, 4, 8, 10, 12)` | dice that scale with level |
+| Combined | `1d10 + STR + floor(LEVEL/5) * 5` | advanced formula |
 
-Un panneau d'aide intégré (bouton "?" à côté de chaque champ de formule) documente cette même liste ainsi que des exemples réels tirés des sorts/objets du jeu. Cette liste n'est jamais recopiée à la main dans l'UI : elle est générée par réflexion sur les tables internes du parser, précisément pour éviter qu'une variable documentée ne se retrouve jamais câblée (voir `FLAW` plus haut).
+A built-in help panel (the "?" button next to every formula field) documents this same list plus real worked examples pulled from the game's spells/items. This list is never hand-copied into the UI: it's generated by reflecting over the parser's own internal tables, precisely to avoid a documented variable ever ending up unwired (see `FLAW` above).
 
-**Limites de sécurité** : une formule est limitée à 200 caractères et 30 niveaux d'imbrication ; un jet est limité à 100 dés maximum, chacun à 1000 faces maximum. Ce sont des garde-fous contre une formule mal formée ou malveillante, pas des limites d'équilibrage : un sort légal de personnage niveau 20 en est très loin.
+**Safety limits**: a formula is capped at 200 characters and 30 nesting levels; a roll is capped at 100 dice maximum, each with 1000 sides maximum. These are guardrails against a malformed or malicious formula, not balance limits: a legal level-20 character's spell is nowhere close to them.
 
-> `eval()` n'est **jamais** utilisé, le parser est un descent récursif maison, pour éviter tout risque d'exécution de code arbitraire via une formule tapée par un joueur ou le MJ.
+> `eval()` is **never** used, the parser is a hand-written recursive descent parser, to avoid any risk of arbitrary code execution via a formula typed by a player or the GM.
 
 ---
 
-## Tests et CI
+## Tests and CI
 
 ```bash
 npm run type-check   # tsc --noEmit
@@ -231,36 +234,42 @@ npm run lint         # eslint
 npm test             # vitest run
 ```
 
-Une suite Vitest couvre les fonctions pures du projet (aucune dépendance au SDK OBR) : le parser de formules, les migrations de schéma, la logique de l'undo de suppression, et la logique de filtrage de recherche partagée entre les onglets Inventaire et Sorts. Elle tourne dans `.github/workflows/ci.yml` sur chaque pull request et sur push vers `main`/`dev` (type-check + lint + tests).
+A Vitest suite covers the project's pure functions (no dependency on the OBR SDK): the formula parser, schema migrations, delete-undo logic, and the search-filter logic shared between the Inventory and Spells tabs. It runs in `.github/workflows/ci.yml` on every pull request and on push to `main`/`dev` (type-check + lint + tests).
 
-Ce que la suite ne couvre pas, par construction : tout ce qui touche à la synchronisation multi-clients réelle, aux permissions en situation (plusieurs comptes OBR simultanés), et à l'UI elle-même. Ces changements-là passent par une vérification manuelle à plusieurs comptes dans OBR, il n'existe pas de substitut automatisé pour ça dans ce projet.
-
----
-
-## Accessibilité
-
-Indicateurs de focus clavier visibles sur les éléments interactifs (curseurs de barre HP/Mana, boutons d'action), et labels `aria-label` sur les boutons qui n'affichent qu'une icône (actions de ligne, dismiss d'un bandeau, suppression d'une langue). Ce n'est pas un audit d'accessibilité complet, seulement les correctifs ciblés faits à ce jour.
+What the suite does not cover, by construction: anything touching real multi-client sync, permissions in practice (several simultaneous OBR accounts), and the UI itself. Those changes go through manual verification with several accounts in OBR; there's no automated substitute for that in this project.
 
 ---
 
-## Undo de suppression
+## Accessibility
 
-Supprimer un sort, un objet ou une action est immédiat et diffusé à la table, sans confirmation. En contrepartie, un toast local (visible seulement du client qui a supprimé) permet d'annuler pendant quelques secondes. Un seul niveau d'annulation à la fois : une nouvelle suppression pendant que le toast est affiché remplace l'annulation en attente plutôt que d'empiler un historique.
-
----
-
-## Prochaines étapes (roadmap)
-
-- [ ] Onglet traduction FR/EN
-- [ ] Sélection de classe avec pré-remplissage des stats de départ
-- [ ] Panneau d'extension repositionnable / détachable (recherche en cours sur le SDK OBR)
-- [ ] Thème clair "parchemin" optionnel
-- [ ] Import/export JSON de la fiche
-- [ ] Raccourcis clavier pour les lancers fréquents
+Visible keyboard focus indicators on interactive elements (HP/Mana bar sliders, action buttons), and `aria-label`s on buttons that only show an icon (row actions, banner dismiss, removing a language). This is not a full accessibility audit, only the targeted fixes made so far.
 
 ---
 
-## Ressources
+## Delete undo
+
+Deleting a spell, item, or action is immediate and broadcast to the table, with no confirmation. As a counterbalance, a local toast (visible only to the client who deleted it) allows undoing for a few seconds. Only one level of undo at a time: a new deletion while the toast is showing replaces the pending undo rather than stacking a history.
+
+---
+
+## Next steps (roadmap)
+
+- [ ] FR/EN translation tab
+- [ ] Class selection with starting-stat pre-fill
+- [ ] Repositionable / detachable extension panel (researching the OBR SDK)
+- [ ] Optional light "parchment" theme
+- [ ] JSON import/export of the sheet
+- [ ] Keyboard shortcuts for frequent rolls
+
+---
+
+## License
+
+Nimble OBR is an independent product published under the Nimble 3rd Party Creator License. Nimble TTRPG (c) Nimble Co.
+
+---
+
+## Resources
 
 - [OBR SDK docs](https://extensions.owlbear.rodeo/docs)
 - [Vite docs](https://vitejs.dev)

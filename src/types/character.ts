@@ -60,13 +60,22 @@ export interface Skills {
 }
 
 /**
- * Defense/armor configuration for a character.
+ * Defense configuration for a character.
+ *
+ * Nimble Core Rules 2nd printing renames the hero stat "Armor" to
+ * "Defense" — "Armor" now refers exclusively to worn equipment
+ * ({@link InventoryItem.isArmor}). This interface (renamed from `Armor` in
+ * the schema v2 migration, see `characterMigrations.ts`) carries
+ * `defenseBonus`, which comes from traits that are not armor at all
+ * (Dragonborn +1 Defense, Turtlefolk +4 Defense, Fearless -1 Defense,
+ * Ratfolk +2 Defense) — `character.armor.defenseBonus` was semantically
+ * wrong even before the printing renamed the stat.
  *
  * Defense is derived from whichever inventory item (with `isArmor: true`)
- * is referenced by `equippedItemId`, plus a flat `defenseBonus` (class
- * features, racial traits, etc.) — see `computeDefense` in CombatTab.
+ * is referenced by `equippedItemId`, plus the flat `defenseBonus` above —
+ * see `computeDefense` in `src/utils/computeDefense.ts`.
  */
-export interface Armor {
+export interface Defense {
   /** ID of the equipped armor InventoryItem */
   equippedItemId?: string;
   /** Flat bonus from class ability, racial trait, etc. */
@@ -107,7 +116,20 @@ export interface CharacterAction {
   name: string;
   type: ActionType;
   range: string;
-  damage: string;
+  /**
+   * The actual rollable formula, and the single source of truth for what's
+   * rollable. Empty means not rollable — no roll button, by design (e.g.
+   * Dragonform).
+   *
+   * There used to also be a `damage` field: display-only flavor text (e.g.
+   * "2d6+STR", "Special") carrying the book's own notation, kept in sync
+   * with `formula` by hand across ~80 spells. Removed in the schema v2
+   * migration (`characterMigrations.ts`) once `resolveFormulaDisplay`'s
+   * resolved value made it strictly less useful than `formula` itself —
+   * see that migration for how existing characters' frozen action copies
+   * (which may still have both fields in their persisted metadata) are
+   * handled on load.
+   */
   formula: string;
   description: string;
   isFavorite: boolean;
@@ -118,14 +140,28 @@ export interface CharacterAction {
   isCustom?: boolean;
   actionCost?: number;
   /**
-   * If true, `formula` is flavor-text shorthand for the GM to interpret
-   * manually rather than a formula meant to be evaluated or rolled by the
-   * engine. Mirrors {@link InventoryItem.manualResolution}; not currently
-   * set on any spell in src/data/spells.ts, but the field exists so a
-   * future flavor-only spell formula has somewhere to be marked instead of
-   * failing the game-data validation test with no way to exclude it.
+   * Stable, immutable identifier of the {@link BASE_SPELLS} catalog entry
+   * this action was copied from — set only when copied from the catalog
+   * (never on a custom action, `isCustom: true`), and NEVER the same thing
+   * as `name` (which can and does change across printings). See
+   * `spells.ts`'s file header for the append-only contract. Undefined
+   * means either a custom entry, or a catalog copy predating this field
+   * (backfilled by name where possible in the schema v3 migration —
+   * `undefined` after that backfill genuinely means "cannot be traced back
+   * to the catalog", not a bug to fix by guessing).
    */
-  manualResolution?: boolean;
+  sourceKey?: string;
+  /**
+   * The {@link BASE_SPELLS} entry's `catalogVersion` at copy time — set
+   * alongside `sourceKey` in the same copy paths (`catalogCopy.ts`), never
+   * on a custom action. Compared against the CURRENT catalog entry's
+   * `catalogVersion` (matched by `sourceKey`) to decide whether this copy
+   * is outdated — see `isOutdated` in `catalogCopy.ts` and `spells.ts`'s
+   * file header for the full contract. Undefined means either a custom
+   * entry, or (same as `sourceKey`) a copy that can't be traced to the
+   * catalog at all.
+   */
+  catalogVersion?: number;
 }
 
 export interface InventoryItem {
@@ -140,7 +176,6 @@ export interface InventoryItem {
   isCustom?: boolean;
   /** If true, this item can be selected as worn armor in the defense calculation */
   isArmor?: boolean;
-  armorValue?: number;
   actionCost?: number;
   /**
    * If true, `formula` is flavor-text shorthand for the GM to interpret
@@ -150,6 +185,22 @@ export interface InventoryItem {
    * Content-validation tests exclude these instead of treating them as bugs.
    */
   manualResolution?: boolean;
+  /**
+   * Stable, immutable identifier of the {@link BASIC_EQUIPMENTS} catalog
+   * entry this item was copied from — same contract as
+   * {@link CharacterAction.sourceKey}: set only when copied from the
+   * catalog, never on a custom item, never the same thing as `name`. See
+   * `equipment.ts`'s file header for the append-only contract.
+   */
+  sourceKey?: string;
+  /**
+   * Same contract as {@link CharacterAction.catalogVersion}: the
+   * {@link BASIC_EQUIPMENTS} entry's `catalogVersion` at copy time, used
+   * by `isOutdated`/`resetItemToCatalog` in `catalogCopy.ts` to detect and
+   * reset a stale copy. See `equipment.ts`'s file header for the full
+   * contract.
+   */
+  catalogVersion?: number;
 }
 
 /**
@@ -183,8 +234,16 @@ export interface NimbleCharacter {
   saveMods: SaveMods;
   skills: Skills;
 
-  armor: Armor;
+  defense: Defense;
   initiativeBonus: number;
+  /**
+   * Default roll mode pre-selected in the initiative {@link DiceRollModal}
+   * (Nimble Core Rules 2nd printing, p.15 grants advantage/disadvantage on
+   * initiative from certain sources) — the player can still override it,
+   * exactly like {@link SaveMods}' per-stat advantage does for stat saves
+   * (see `SummaryTab.confirmRoll`).
+   */
+  initiativeAdvantage: SaveAdvantage;
   combat: CombatState;
 
   languages: string[];
@@ -230,7 +289,7 @@ export const METADATA_KEY = "com.nimble-obr.nimble/character_sheet";
  * needs transforming to match. See that file's header for the full
  * procedure.
  */
-export const CURRENT_SCHEMA_VERSION = 1;
+export const CURRENT_SCHEMA_VERSION = 4;
 
 /**
  * Highest level a character can be set to.
@@ -246,6 +305,27 @@ export const CURRENT_SCHEMA_VERSION = 1;
  * committed.
  */
 export const MAX_LEVEL = 20;
+
+/**
+ * Legal range for a stat bonus (STR/DEX/INT/WIL). Nimble Core Rules 2nd
+ * printing, p.6: "The maximum a hero's stat can typically go is +5"; the
+ * floor mirrors it symmetrically. Enforced both at the input layer
+ * ({@link StatBox}) and, defense in depth, at the write choke point
+ * (`updateCharacter` in `useOBR.ts`) — same reasoning as {@link MAX_LEVEL}.
+ */
+export const MIN_STAT = -5;
+export const MAX_STAT = 5;
+
+/**
+ * Legal range for a skill's total bonus. Nimble Core Rules 2nd printing,
+ * p.7 and p.21: the +12 ceiling is absolute (not "stat + invested points"),
+ * and the floor is -5 because a skill is stat bonus + invested points,
+ * invested points are never negative, so the worst case is a -5 stat with
+ * nothing invested. Enforced at the write choke point (`updateCharacter` in
+ * `useOBR.ts`), same reasoning as {@link MAX_LEVEL}.
+ */
+export const MIN_SKILL = -5;
+export const MAX_SKILL = 12;
 
 export type RollMode = "standard" | "advantage" | "disadvantage";
 export type AdvantageCount = number;
@@ -277,6 +357,14 @@ export interface DiceRollResult {
   total: number;
   isCritical: boolean;
   isFumble: boolean;
+  /**
+   * Whether this roll's notation can crit/fumble at all — `false` for a
+   * flat/dice-less formula and for positional dice (`d44`/`d66`/`d88`; see
+   * {@link formulaParser.rollPositionalDice}), `true` for a genuine `NdX`
+   * roll. See `RollFormulaResult.canCritOrFumble` in `formulaParser.ts` for
+   * the full rationale; carried through unchanged onto the broadcast result.
+   */
+  canCritOrFumble: boolean;
   hidden: boolean;
   playerId: string;
   playerName: string;
@@ -339,11 +427,12 @@ export function createDefaultCharacter(
       perception: 0,
       stealth: 0,
     },
-    armor: {
+    defense: {
       equippedItemId: undefined,
       defenseBonus: 0,
     },
     initiativeBonus: 0,
+    initiativeAdvantage: "none",
     combat: { actionsRemaining: 3, initiativeResult: null },
     languages: ["Common"],
     abilities: [],

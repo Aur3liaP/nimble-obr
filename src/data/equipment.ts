@@ -1,3 +1,42 @@
+/**
+ * @file Official equipment catalog (weapons, armor, adventuring gear,
+ * magic items, wands).
+ *
+ * ## `sourceKey` is append-only
+ *
+ * Every entry's `sourceKey` is a stable, immutable identifier, independent
+ * of `name` — added in the "stable source identity" batch specifically
+ * because `name` is not stable (the 2nd-printing content batch renamed
+ * "Spear" to "Great Spear" and introduced an unrelated new "Spear", and
+ * "Mithril Plate" to "Adamantine Plate"; more renames land with future
+ * printing-content batches). A character's `InventoryItem` is a frozen
+ * COPY of a template at add-time — `sourceKey` is the only reliable way to
+ * trace that copy back to the catalog entry it came from, across a rename.
+ *
+ * Once an entry ships (i.e. this file has been released with that
+ * `sourceKey` present), its `sourceKey` **must never be edited or
+ * reused**, even if the entry's `name` changes again later — existing
+ * character records reference it. Renaming an item is safe (that's the
+ * whole point); changing or reusing its `sourceKey` is not. A brand-new
+ * entry gets a brand-new, never-before-used `sourceKey`.
+ *
+ * ## `catalogVersion` — bump it when players should know something changed
+ *
+ * Every entry also carries `catalogVersion: number`, starting at 1. A
+ * character's `InventoryItem` copy carries the `catalogVersion` it was
+ * copied at; `isOutdated` (`catalogCopy.ts`) compares that against the
+ * CURRENT entry's version (matched by `sourceKey`, never by text — see
+ * that function's own doc for why) to show the "outdated" badge and offer
+ * "Reset to book version".
+ *
+ * Whenever an entry's MECHANICS OR TEXT change in a way a player should
+ * know about, bump `catalogVersion` by 1. Purely cosmetic edits (typo
+ * fixes, formatting, rewording that changes nothing a player would act
+ * on) do not require a bump — that judgment call is the author's, made at
+ * edit time, not derived automatically. There is no format/consistency
+ * test for this the way there is for `sourceKey` presence/uniqueness:
+ * whether a given edit "counts" isn't mechanically checkable.
+ */
 import type { InventoryItem } from "../types/character";
 
 type ItemTemplate = Omit<InventoryItem, "id" | "isFavorite">;
@@ -6,45 +45,49 @@ export const BASIC_EQUIPMENTS: ItemTemplate[] = [
   // ── CLOTH (Tissu) ──────────────────────────────────────────
   {
     name: "Adventurer’s Garb",
-    description: "Standard clothes. Armor: 2+DEX.",
+    sourceKey: "adventurers-garb",
+    catalogVersion: 1,
+    description: "Standard clothes. Defense: 2+DEX.",
     slots: 1,
     quantity: 1,
     isEquipped: false,
     isArmor: true,
-    armorValue: 2,
     formula: "2 + DEX",
     isCustom: false,
   },
   {
     name: "Garb Minor Enchantment",
-    description: "Magic cloth. Armor: 3+DEX.",
+    sourceKey: "garb-minor-enchantment",
+    catalogVersion: 1,
+    description: "Magic cloth. Defense: 3+DEX.",
     slots: 1,
     quantity: 1,
     isEquipped: false,
     isArmor: true,
-    armorValue: 3,
     formula: "3 + DEX",
     isCustom: false,
   },
   {
     name: "Garb Major Enchantment",
-    description: "Magic cloth. Armor: 4+DEX.",
+    sourceKey: "garb-major-enchantment",
+    catalogVersion: 1,
+    description: "Magic cloth. Defense: 4+DEX.",
     slots: 1,
     quantity: 1,
     isEquipped: false,
     isArmor: true,
-    armorValue: 4,
     formula: "4 + DEX",
     isCustom: false,
   },
   {
     name: "Garb Epic Enchantment",
-    description: "Legendary magic cloth. Armor: 5+DEX.",
+    sourceKey: "garb-epic-enchantment",
+    catalogVersion: 1,
+    description: "Legendary magic cloth. Defense: 5+DEX.",
     slots: 1,
     quantity: 1,
     isEquipped: false,
     isArmor: true,
-    armorValue: 5,
     formula: "5 + DEX",
     isCustom: false,
   },
@@ -52,45 +95,49 @@ export const BASIC_EQUIPMENTS: ItemTemplate[] = [
   // ── LEATHER (Cuir) ─────────────────────────────────────────
   {
     name: "Cheap Hides",
-    description: "Basic animal skins. Armor: 3+DEX.",
+    sourceKey: "cheap-hides",
+    catalogVersion: 1,
+    description: "Basic animal skins. Defense: 3+DEX.",
     slots: 1,
     quantity: 1,
     isEquipped: false,
     isArmor: true,
-    armorValue: 3,
     formula: "3 + DEX",
     isCustom: false,
   },
   {
     name: "Ox Hide",
-    description: "Tough leather. Armor: 4+DEX.",
+    sourceKey: "ox-hide",
+    catalogVersion: 1,
+    description: "Tough leather. Defense: 4+DEX.",
     slots: 1,
     quantity: 1,
     isEquipped: false,
     isArmor: true,
-    armorValue: 4,
     formula: "4 + DEX",
     isCustom: false,
   },
   {
     name: "Hard Leather",
-    description: "Boiled leather. Req: 1 STR. Armor: 5+DEX.",
+    sourceKey: "hard-leather",
+    catalogVersion: 1,
+    description: "Boiled leather. Req: 1 STR. Defense: 5+DEX.",
     slots: 1,
     quantity: 1,
     isEquipped: false,
     isArmor: true,
-    armorValue: 5,
     formula: "5 + DEX",
     isCustom: false,
   },
   {
     name: "Wyrmhide",
-    description: "Dragon-like leather. Req: 1 STR. Armor: 6+DEX.",
+    sourceKey: "wyrmhide",
+    catalogVersion: 1,
+    description: "Dragon-like leather. Req: 1 STR. Defense: 6+DEX.",
     slots: 1,
     quantity: 1,
     isEquipped: false,
     isArmor: true,
-    armorValue: 6,
     formula: "6 + DEX",
     isCustom: false,
   },
@@ -98,45 +145,49 @@ export const BASIC_EQUIPMENTS: ItemTemplate[] = [
   // ── MAIL (Mailles) ─────────────────────────────────────────
   {
     name: "Rusty Mail",
-    description: "Old chain mail. Armor: 6+DEX (max 2).",
+    sourceKey: "rusty-mail",
+    catalogVersion: 1,
+    description: "Old chain mail. Defense: 6+DEX (max 2).",
     slots: 1,
     quantity: 1,
     isEquipped: false,
     isArmor: true,
-    armorValue: 6,
     formula: "6 + Math.min(DEX, 2)",
     isCustom: false,
   },
   {
     name: "Chain Shirt",
-    description: "Standard mail. Req: 2 STR. Armor: 9+DEX (max 2).",
+    sourceKey: "chain-shirt",
+    catalogVersion: 1,
+    description: "Standard mail. Req: 2 STR. Defense: 9+DEX (max 2).",
     slots: 1,
     quantity: 1,
     isEquipped: false,
     isArmor: true,
-    armorValue: 9,
     formula: "9 + Math.min(DEX, 2)",
     isCustom: false,
   },
   {
     name: "Scale Mail",
-    description: "Metal scales. Req: 3 STR. Armor: 12+DEX (max 2).",
+    sourceKey: "scale-mail",
+    catalogVersion: 1,
+    description: "Metal scales. Req: 3 STR. Defense: 12+DEX (max 2).",
     slots: 1,
     quantity: 1,
     isEquipped: false,
     isArmor: true,
-    armorValue: 12,
     formula: "12 + Math.min(DEX, 2)",
     isCustom: false,
   },
   {
     name: "Dragonscale",
-    description: "True dragon scales. Req: 4 STR. Armor: 15+DEX (max 2).",
+    sourceKey: "dragonscale",
+    catalogVersion: 1,
+    description: "True dragon scales. Req: 4 STR. Defense: 15+DEX (max 2).",
     slots: 1,
     quantity: 1,
     isEquipped: false,
     isArmor: true,
-    armorValue: 15,
     formula: "15 + Math.min(DEX, 2)",
     isCustom: false,
   },
@@ -144,45 +195,49 @@ export const BASIC_EQUIPMENTS: ItemTemplate[] = [
   // ── PLATE (Plates) ─────────────────────────────────────────
   {
     name: "Rusty Plate",
-    description: "Old plate armor. Req: 2 STR. Armor: 10 (DEX 0).",
+    sourceKey: "rusty-plate",
+    catalogVersion: 1,
+    description: "Old plate armor. Req: 2 STR. Defense: 10 (DEX 0).",
     slots: 1,
     quantity: 1,
     isEquipped: false,
     isArmor: true,
-    armorValue: 10,
     formula: "10",
     isCustom: false,
   },
   {
     name: "Half Plate",
-    description: "Partial plate. Req: 3 STR. Armor: 14 (DEX 0).",
+    sourceKey: "half-plate",
+    catalogVersion: 1,
+    description: "Partial plate. Req: 3 STR. Defense: 14 (DEX 0).",
     slots: 1,
     quantity: 1,
     isEquipped: false,
     isArmor: true,
-    armorValue: 14,
     formula: "14",
     isCustom: false,
   },
   {
     name: "Full Plate",
-    description: "Heavy plate. Req: 4 STR. Armor: 18 (DEX 0).",
+    sourceKey: "full-plate",
+    catalogVersion: 1,
+    description: "Heavy plate. Req: 4 STR. Defense: 18 (DEX 0).",
     slots: 1,
     quantity: 1,
     isEquipped: false,
     isArmor: true,
-    armorValue: 18,
     formula: "18",
     isCustom: false,
   },
   {
-    name: "Mithril Plate",
-    description: "Magic light-weight heavy plate. Req: 5 STR. Armor: 22 (DEX 0).",
+    name: "Adamantine Plate",
+    sourceKey: "adamantine-plate",
+    catalogVersion: 1,
+    description: "Magic light-weight heavy plate. Req: 5 STR. Defense: 22 (DEX 0).",
     slots: 1,
     quantity: 1,
     isEquipped: false,
     isArmor: true,
-    armorValue: 22,
     formula: "22",
     isCustom: false,
   },
@@ -190,51 +245,57 @@ export const BASIC_EQUIPMENTS: ItemTemplate[] = [
   // ── SHIELDS (Boucliers) ────────────────────────────────────
   {
     name: "Wooden Buckler",
-    description: "Small shield. Armor: +2.",
+    sourceKey: "wooden-buckler",
+    catalogVersion: 1,
+    description: "Small shield. Defense: +2.",
     slots: 1,
     quantity: 1,
     isEquipped: false,
     isArmor: true,
-    armorValue: 2,
     formula: "+2",
     isCustom: false,
   },
   {
     name: "Iron Shield",
-    description: "Standard shield. Req: 2 STR. Armor: +4.",
+    sourceKey: "iron-shield",
+    catalogVersion: 1,
+    description: "Standard shield. Req: 2 STR. Defense: +4.",
     slots: 1,
     quantity: 1,
     isEquipped: false,
     isArmor: true,
-    armorValue: 4,
     formula: "+4",
     isCustom: false,
   },
   {
     name: "Tower Shield",
-    description: "Massive shield. Req: 3 STR. Armor: +6.",
+    sourceKey: "tower-shield",
+    catalogVersion: 1,
+    description: "Massive shield. Req: 3 STR. Defense: +6.",
     slots: 1,
     quantity: 1,
     isEquipped: false,
     isArmor: true,
-    armorValue: 6,
     formula: "+6",
     isCustom: false,
   },
   {
     name: "Dragon Shield",
-    description: "Legendary shield. Req: 3 STR. Armor: +8.",
+    sourceKey: "dragon-shield",
+    catalogVersion: 1,
+    description: "Legendary shield. Req: 3 STR. Defense: +8.",
     slots: 1,
     quantity: 1,
     isEquipped: false,
     isArmor: true,
-    armorValue: 8,
     formula: "+8",
     isCustom: false,
   },
 // ────── MELEE WEAPONS ──────────────────────────────
   {
     name: "Dagger",
+    sourceKey: "dagger",
+    catalogVersion: 1,
     description: "Light, Thrown 4. Piercing damage.",
     slots: 1,
     quantity: 1,
@@ -245,6 +306,8 @@ export const BASIC_EQUIPMENTS: ItemTemplate[] = [
   },
   {
     name: "Sickle",
+    sourceKey: "sickle",
+    catalogVersion: 1,
     description: "Slashing damage. Property: Vicious (Roll 1 additional die on crit damage).",
     slots: 1,
     quantity: 1,
@@ -255,6 +318,8 @@ export const BASIC_EQUIPMENTS: ItemTemplate[] = [
   },
   {
     name: "Club / Mace",
+    sourceKey: "club-mace",
+    catalogVersion: 1,
     description: "Simple bludgeoning weapon.",
     slots: 1,
     quantity: 1,
@@ -265,6 +330,8 @@ export const BASIC_EQUIPMENTS: ItemTemplate[] = [
   },
   {
     name: "Hand Axe",
+    sourceKey: "hand-axe",
+    catalogVersion: 1,
     description: "Thrown 4. Slashing damage.",
     slots: 1,
     quantity: 1,
@@ -274,7 +341,21 @@ export const BASIC_EQUIPMENTS: ItemTemplate[] = [
     isCustom: false,
   },
   {
+    name: "Spear",
+    sourceKey: "spear",
+    catalogVersion: 1,
+    description: "2-handed, Reach 2. Piercing damage.",
+    slots: 1,
+    quantity: 1,
+    isEquipped: false,
+    formula: "1d6 + STR",
+    actionCost: 1,
+    isCustom: false,
+  },
+  {
     name: "Short Sword",
+    sourceKey: "short-sword",
+    catalogVersion: 1,
     description: "Light. Piercing damage.",
     slots: 1,
     quantity: 1,
@@ -285,6 +366,8 @@ export const BASIC_EQUIPMENTS: ItemTemplate[] = [
   },
   {
     name: "Rapier",
+    sourceKey: "rapier",
+    catalogVersion: 1,
     description: "Finesse blade. Piercing damage.",
     slots: 1,
     quantity: 1,
@@ -295,6 +378,8 @@ export const BASIC_EQUIPMENTS: ItemTemplate[] = [
   },
   {
     name: "Staff",
+    sourceKey: "staff",
+    catalogVersion: 1,
     description: "2-handed. Bludgeoning damage.",
     slots: 1,
     quantity: 1,
@@ -305,6 +390,8 @@ export const BASIC_EQUIPMENTS: ItemTemplate[] = [
   },
   {
     name: "Longsword",
+    sourceKey: "longsword",
+    catalogVersion: 1,
     description: "2-handed (Can be 1-handed if Req: 2 STR). Slashing damage.",
     slots: 1,
     quantity: 1,
@@ -315,6 +402,8 @@ export const BASIC_EQUIPMENTS: ItemTemplate[] = [
   },
   {
     name: "Battleaxe",
+    sourceKey: "battleaxe",
+    catalogVersion: 1,
     description: "2-handed. Slashing damage.",
     slots: 1,
     quantity: 1,
@@ -325,6 +414,8 @@ export const BASIC_EQUIPMENTS: ItemTemplate[] = [
   },
   {
     name: "Pole Hammer",
+    sourceKey: "pole-hammer",
+    catalogVersion: 1,
     description: "2-handed, Reach 2. Bludgeoning damage.",
     slots: 1,
     quantity: 1,
@@ -335,6 +426,8 @@ export const BASIC_EQUIPMENTS: ItemTemplate[] = [
   },
   {
     name: "Glaive",
+    sourceKey: "glaive",
+    catalogVersion: 1,
     description: "2-handed, Reach 2. Slashing damage.",
     slots: 1,
     quantity: 1,
@@ -344,7 +437,9 @@ export const BASIC_EQUIPMENTS: ItemTemplate[] = [
     isCustom: false,
   },
   {
-    name: "Spear",
+    name: "Great Spear",
+    sourceKey: "great-spear",
+    catalogVersion: 1,
     description: "2-handed, Reach 2. Piercing damage.",
     slots: 1,
     quantity: 1,
@@ -355,16 +450,20 @@ export const BASIC_EQUIPMENTS: ItemTemplate[] = [
   },
   {
     name: "Greatmaul",
+    sourceKey: "greatmaul",
+    catalogVersion: 1,
     description: "2-handed. Req: 2 STR. Bludgeoning damage.",
     slots: 1,
     quantity: 1,
     isEquipped: false,
-    formula: "1d12 + STR",
+    formula: "3d4 + STR",
     actionCost: 1,
     isCustom: false,
   },
   {
     name: "Greataxe",
+    sourceKey: "greataxe",
+    catalogVersion: 1,
     description: "2-handed. Req: 2 STR. Slashing damage.",
     slots: 1,
     quantity: 1,
@@ -375,27 +474,33 @@ export const BASIC_EQUIPMENTS: ItemTemplate[] = [
   },
   {
     name: "Greatsword",
+    sourceKey: "greatsword",
+    catalogVersion: 1,
     description: "2-handed. Req: 2 STR. Slashing/Piercing damage.",
     slots: 1,
     quantity: 1,
     isEquipped: false,
-    formula: "3d4 + STR",
+    formula: "1d12 + STR",
     actionCost: 1,
     isCustom: false,
   },
   {
     name: "Unarmed Strikes",
-    description: "Fists or feet. Roll 1d4.",
+    sourceKey: "unarmed-strikes",
+    catalogVersion: 1,
+    description: "Fists or feet. Heroes not proficient in unarmed strikes cannot crit.",
     slots: 0,
     quantity: 1,
     isEquipped: true,
-    formula: "1 + STR",
+    formula: "1d4 + STR",
     actionCost: 1,
     isCustom: false,
   },
   {
     name: "Improvised Weapon",
-    description: "Chair, frying pan, big rock. May break on crit.",
+    sourceKey: "improvised-weapon",
+    catalogVersion: 1,
+    description: "Chair, frying pan, big rock. Roll 1d4 or 1d6 + STR (GM's choice); likely to break after a few hits.",
     slots: 1,
     quantity: 1,
     isEquipped: false,
@@ -406,6 +511,8 @@ export const BASIC_EQUIPMENTS: ItemTemplate[] = [
 // ────── RANGED WEAPONS ──────────────────────────────
   {
     name: "Sling",
+    sourceKey: "sling",
+    catalogVersion: 1,
     description: "2-handed, Range 12. Property: Vicious (Roll 1 additional die on crit damage). Bludgeoning damage.",
     slots: 1,
     quantity: 1,
@@ -416,6 +523,8 @@ export const BASIC_EQUIPMENTS: ItemTemplate[] = [
   },
   {
     name: "Javelins (Stack of 4)",
+    sourceKey: "javelins-stack-of-4",
+    catalogVersion: 1,
     description: "Range 8. Piercing damage. One slot holds a stack of 4.",
     slots: 1,
     quantity: 1,
@@ -426,6 +535,8 @@ export const BASIC_EQUIPMENTS: ItemTemplate[] = [
   },
   {
     name: "Throwing Hammers (Stack of 3)",
+    sourceKey: "throwing-hammers-stack-of-3",
+    catalogVersion: 1,
     description: "Range 4. Bludgeoning damage. One slot holds a stack of 3.",
     slots: 1,
     quantity: 1,
@@ -436,6 +547,8 @@ export const BASIC_EQUIPMENTS: ItemTemplate[] = [
   },
   {
     name: "Shortbow",
+    sourceKey: "shortbow",
+    catalogVersion: 1,
     description: "2-handed, Range 12. Piercing damage.",
     slots: 1,
     quantity: 1,
@@ -446,6 +559,8 @@ export const BASIC_EQUIPMENTS: ItemTemplate[] = [
   },
   {
     name: "Longbow",
+    sourceKey: "longbow",
+    catalogVersion: 1,
     description: "2-handed, Range 16. Req: 1 STR. Piercing damage.",
     slots: 1,
     quantity: 1,
@@ -456,6 +571,8 @@ export const BASIC_EQUIPMENTS: ItemTemplate[] = [
   },
   {
     name: "Crossbow",
+    sourceKey: "crossbow",
+    catalogVersion: 1,
     description: "2-handed, Range 8. Property: Load (Requires 1 extra action to load before each shot). Piercing damage.",
     slots: 1,
     quantity: 1,
@@ -466,6 +583,8 @@ export const BASIC_EQUIPMENTS: ItemTemplate[] = [
   },
   {
     name: "Handheld Ballista",
+    sourceKey: "handheld-ballista",
+    catalogVersion: 1,
     description: "2-handed, Range 8. Req: 2 STR. Property: Load (Requires 2 extra actions to load before each shot). Piercing damage.",
     slots: 1,
     quantity: 1,
@@ -477,6 +596,8 @@ export const BASIC_EQUIPMENTS: ItemTemplate[] = [
 // ────── ADVENTURER'S GEAR ──────────────────────────────
   {
     name: "Healing Potion",
+    sourceKey: "healing-potion",
+    catalogVersion: 1,
     description: "Action: Heal 2d4+4 HP. (1 slot holds 2 potions).",
     slots: 0.5,
     quantity: 1,
@@ -487,6 +608,8 @@ export const BASIC_EQUIPMENTS: ItemTemplate[] = [
   },
   {
     name: "Greater Healing Potion",
+    sourceKey: "greater-healing-potion",
+    catalogVersion: 1,
     description: "Action: Heal 3d6+6 HP. (1 slot holds 2 potions).",
     slots: 0.5,
     quantity: 1,
@@ -497,6 +620,8 @@ export const BASIC_EQUIPMENTS: ItemTemplate[] = [
   },
   {
     name: "Supreme Healing Potion",
+    sourceKey: "supreme-healing-potion",
+    catalogVersion: 1,
     description: "Action: Heal 4d8+8 HP. (1 slot holds 2 potions).",
     slots: 0.5,
     quantity: 1,
@@ -506,7 +631,19 @@ export const BASIC_EQUIPMENTS: ItemTemplate[] = [
     isCustom: false,
   },
   {
+    name: "Medical Kit (1 use)",
+    sourceKey: "medical-kit-1-use",
+    catalogVersion: 1,
+    description: "Recover 1 Wound during a Field Rest.",
+    slots: 1,
+    quantity: 1,
+    isEquipped: false,
+    isCustom: false,
+  },
+  {
     name: "Torch",
+    sourceKey: "torch",
+    catalogVersion: 1,
     description: "Range 6. Lasts for 1 dungeon. Needs 1 free hand.",
     slots: 0.5,
     quantity: 1,
@@ -515,6 +652,8 @@ export const BASIC_EQUIPMENTS: ItemTemplate[] = [
   },
   {
     name: "Lantern & Oil",
+    sourceKey: "lantern-oil",
+    catalogVersion: 1,
     description: "Range 6. Lasts for 1 outing (until Safe Rest). Needs 1 free hand.",
     slots: 1,
     quantity: 1,
@@ -523,6 +662,8 @@ export const BASIC_EQUIPMENTS: ItemTemplate[] = [
   },
   {
     name: "Camping Supplies",
+    sourceKey: "camping-supplies",
+    catalogVersion: 1,
     description: "Includes bedroll, rations, and simple tent.",
     slots: 1,
     quantity: 1,
@@ -531,6 +672,8 @@ export const BASIC_EQUIPMENTS: ItemTemplate[] = [
   },
   {
     name: "Rope (50 ft.)",
+    sourceKey: "rope-50-ft",
+    catalogVersion: 1,
     description: "Essential for climbing. 10 gp.",
     slots: 1,
     quantity: 1,
@@ -541,6 +684,8 @@ export const BASIC_EQUIPMENTS: ItemTemplate[] = [
   // ── UTILITY ITEM ─────────────────────────
   {
     name: "Lock Pick",
+    sourceKey: "lock-pick",
+    catalogVersion: 1,
     description: "Required for Finesse checks to open locks.",
     slots: 1,
     quantity: 1,
@@ -549,6 +694,8 @@ export const BASIC_EQUIPMENTS: ItemTemplate[] = [
   },
   {
     name: "Crowbar",
+    sourceKey: "crowbar",
+    catalogVersion: 1,
     description: "Provides leverage. 'It’s LIKE a key'.",
     slots: 1,
     quantity: 1,
@@ -557,6 +704,8 @@ export const BASIC_EQUIPMENTS: ItemTemplate[] = [
   },
   {
     name: "Grappling Hook",
+    sourceKey: "grappling-hook",
+    catalogVersion: 1,
     description: "For climbing or catching BIG fish.",
     slots: 1,
     quantity: 1,
@@ -565,6 +714,8 @@ export const BASIC_EQUIPMENTS: ItemTemplate[] = [
   },
   {
     name: "Hunting Trap",
+    sourceKey: "hunting-trap",
+    catalogVersion: 1,
     description: "Snap snap, don't lose a finger!",
     slots: 1,
     quantity: 1,
@@ -574,6 +725,8 @@ export const BASIC_EQUIPMENTS: ItemTemplate[] = [
   },
   {
     name: "Vial of Pitch",
+    sourceKey: "vial-of-pitch",
+    catalogVersion: 1,
     description: "Sticky and VERY flammable.",
     slots: 1,
     quantity: 1,
@@ -582,6 +735,8 @@ export const BASIC_EQUIPMENTS: ItemTemplate[] = [
   },
   {
     name: "Chain (10 ft.)",
+    sourceKey: "chain-10-ft",
+    catalogVersion: 1,
     description: "Like rope, but stronger and heavy.",
     slots: 1,
     quantity: 1,
@@ -590,6 +745,8 @@ export const BASIC_EQUIPMENTS: ItemTemplate[] = [
   },
   {
     name: "Shovel",
+    sourceKey: "shovel",
+    catalogVersion: 1,
     description: "Sometimes you need a hole dug.",
     slots: 1,
     quantity: 1,
@@ -600,6 +757,8 @@ export const BASIC_EQUIPMENTS: ItemTemplate[] = [
   // ── SMALL ITEM ────────────────────────────────
   {
     name: "Mirror",
+    sourceKey: "mirror",
+    catalogVersion: 1,
     description: "For medusas AND spinach teeth.",
     slots: 1,
     quantity: 1,
@@ -608,6 +767,8 @@ export const BASIC_EQUIPMENTS: ItemTemplate[] = [
   },
   {
     name: "Telescope",
+    sourceKey: "telescope",
+    catalogVersion: 1,
     description: "Arrr. See far away.",
     slots: 1,
     quantity: 1,
@@ -616,6 +777,8 @@ export const BASIC_EQUIPMENTS: ItemTemplate[] = [
   },
   {
     name: "Magnifying Glass",
+    sourceKey: "magnifying-glass",
+    catalogVersion: 1,
     description: "Make the small, big.",
     slots: 1,
     quantity: 1,
@@ -624,6 +787,8 @@ export const BASIC_EQUIPMENTS: ItemTemplate[] = [
   },
   {
     name: "Chalk",
+    sourceKey: "chalk",
+    catalogVersion: 1,
     description: "Not JUST for kids. Mark your path.",
     slots: 1,
     quantity: 1,
@@ -632,6 +797,8 @@ export const BASIC_EQUIPMENTS: ItemTemplate[] = [
   },
   {
     name: "Instrument",
+    sourceKey: "instrument",
+    catalogVersion: 1,
     description: "Drums, Horn, Lyre, Flute, etc.",
     slots: 1,
     quantity: 1,
@@ -640,6 +807,8 @@ export const BASIC_EQUIPMENTS: ItemTemplate[] = [
   },
   {
     name: "Large Sack",
+    sourceKey: "large-sack",
+    catalogVersion: 1,
     description: "Like a BIG pocket for loot.",
     slots: 1,
     quantity: 1,
@@ -648,6 +817,8 @@ export const BASIC_EQUIPMENTS: ItemTemplate[] = [
   },
   {
     name: "Manacles",
+    sourceKey: "manacles",
+    catalogVersion: 1,
     description: "For when someone has been bad.",
     slots: 1,
     quantity: 1,
@@ -656,6 +827,8 @@ export const BASIC_EQUIPMENTS: ItemTemplate[] = [
   },
   {
     name: "Pitons",
+    sourceKey: "pitons",
+    catalogVersion: 1,
     description: "Metal spikes, for sealing doors.",
     slots: 1,
     quantity: 1,
@@ -665,6 +838,8 @@ export const BASIC_EQUIPMENTS: ItemTemplate[] = [
   // ── MAGIC ITEMS ──────────────────
   {
     name: "Weapon of Animosity",
+    sourceKey: "weapon-of-animosity",
+    catalogVersion: 1,
     description: "Deals additional damage on hit, but user takes that damage on a miss.",
     slots: 1,
     quantity: 1,
@@ -676,6 +851,8 @@ export const BASIC_EQUIPMENTS: ItemTemplate[] = [
   },
   {
     name: "Weapon of Wounding",
+    sourceKey: "weapon-of-wounding",
+    catalogVersion: 1,
     description: "Suffer 1d6 damage to deal twice that much additional damage on hit.",
     slots: 1,
     quantity: 1,
@@ -687,17 +864,20 @@ export const BASIC_EQUIPMENTS: ItemTemplate[] = [
   },
   {
     name: "Resolute Fangs, Golden Bastion",
+    sourceKey: "resolute-fangs-golden-bastion",
+    catalogVersion: 1,
     description: "Legendary Shield. Reaction: Grapple attacker. Action: Become immovable.",
     slots: 1,
     quantity: 1,
     isEquipped: false,
     isArmor: true,
-    armorValue: 8,
     formula: "+8",
     isCustom: false,
   },
   {
     name: "Vindication",
+    sourceKey: "vindication",
+    catalogVersion: 1,
     description: "Legendary Weapon of Animosity. Deals +1d12 damage, but user takes it on a miss.",
     slots: 1,
     quantity: 1,
@@ -709,6 +889,8 @@ export const BASIC_EQUIPMENTS: ItemTemplate[] = [
   },
   {
     name: "Key of Doors",
+    sourceKey: "key-of-doors",
+    catalogVersion: 1,
     description: "Insert into a locked door to open it to any doorway previously walked through.",
     slots: 1,
     quantity: 1,
@@ -717,6 +899,8 @@ export const BASIC_EQUIPMENTS: ItemTemplate[] = [
   },
   {
     name: "Grim Coronet",
+    sourceKey: "grim-coronet",
+    catalogVersion: 1,
     description: "When you would die, gain 3 actions and take a turn immediately before dying.",
     slots: 1,
     quantity: 1,
@@ -725,6 +909,8 @@ export const BASIC_EQUIPMENTS: ItemTemplate[] = [
   },
   {
     name: "Skitter Shoes",
+    sourceKey: "skitter-shoes",
+    catalogVersion: 1,
     description: "Walk on walls/ceilings at half speed. DC 10 STR save if ending turn upside down.",
     slots: 1,
     quantity: 1,
@@ -733,6 +919,8 @@ export const BASIC_EQUIPMENTS: ItemTemplate[] = [
   },
   {
     name: "Button of Protection",
+    sourceKey: "button-of-protection",
+    catalogVersion: 1,
     description: "Reaction: Throw to emit a flash; attacker must WIL save or miss.",
     slots: 0, // Petit objet, souvent cousu
     quantity: 1,
@@ -741,6 +929,8 @@ export const BASIC_EQUIPMENTS: ItemTemplate[] = [
   },
   {
     name: "Pocket Cauldron",
+    sourceKey: "pocket-cauldron",
+    catalogVersion: 1,
     description: "During Safe Rest, brew 1 potion (Futuresight, Requiem, or Time).",
     slots: 1,
     quantity: 1,
@@ -749,6 +939,8 @@ export const BASIC_EQUIPMENTS: ItemTemplate[] = [
   },
   {
     name: "Handwraps of Force",
+    sourceKey: "handwraps-of-force",
+    catalogVersion: 1,
     description: "Push target 2 spaces on unarmed strike, or propel self 4 spaces.",
     slots: 1,
     quantity: 1,
@@ -759,6 +951,8 @@ export const BASIC_EQUIPMENTS: ItemTemplate[] = [
   },
   {
     name: "Ball of Spiders",
+    sourceKey: "ball-of-spiders",
+    catalogVersion: 1,
     description: "Action: Throw (range 6). 2x2 area must WIL save or be Frightened.",
     slots: 1,
     quantity: 1,
@@ -770,6 +964,8 @@ export const BASIC_EQUIPMENTS: ItemTemplate[] = [
   // ── WANDS ────────────────────────────
   {
     name: "Wand of Firestep",
+    sourceKey: "wand-of-firestep",
+    catalogVersion: 1,
     description: "Cast Firestep (Cantrip). 3 charges. Recharge in a forge.",
     slots: 1,
     quantity: 1,
@@ -779,6 +975,8 @@ export const BASIC_EQUIPMENTS: ItemTemplate[] = [
   },
   {
     name: "Wand of Dread Visage",
+    sourceKey: "wand-of-dread-visage",
+    catalogVersion: 1,
     description: "Cast Dread Visage (Tier 2). 2 charges. Recharge in a corpse.",
     slots: 1,
     quantity: 1,
@@ -788,6 +986,8 @@ export const BASIC_EQUIPMENTS: ItemTemplate[] = [
   },
   {
     name: "Wand of Fly",
+    sourceKey: "wand-of-fly",
+    catalogVersion: 1,
     description: "Cast Fly (Tier 3). 2 charges. Recharge by letting a bird fly with it.",
     slots: 1,
     quantity: 1,
@@ -797,6 +997,8 @@ export const BASIC_EQUIPMENTS: ItemTemplate[] = [
   },
   {
     name: "Wand of Ride the Lightning",
+    sourceKey: "wand-of-ride-the-lightning",
+    catalogVersion: 1,
     description: "Cast Ride the Lightning (Tier 6). 2 charges. Recharge via thunderstorms.",
     slots: 1,
     quantity: 1,
@@ -806,6 +1008,8 @@ export const BASIC_EQUIPMENTS: ItemTemplate[] = [
   },
   {
     name: "Elderwyrm’s Majesty",
+    sourceKey: "elderwyrms-majesty",
+    catalogVersion: 1,
     description: "Tier 9. Cast Dragonform. Recharge by giving a gift to a dragon.",
     slots: 1,
     quantity: 1,
@@ -815,6 +1019,8 @@ export const BASIC_EQUIPMENTS: ItemTemplate[] = [
   },
   {
     name: "Heartwood, Splinter of the Tree of Life",
+    sourceKey: "heartwood-splinter-of-the-tree-of-life",
+    catalogVersion: 1,
     description: "Tier 9. Cast Redeem (no components). Recharge: 100 years of hymns.",
     slots: 1,
     quantity: 1,

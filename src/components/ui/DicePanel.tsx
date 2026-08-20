@@ -9,6 +9,7 @@
 
 import { useState } from "react";
 import type { DiceRollRequest, RollMode } from "../../types/character";
+import { formatModifier } from "../../utils/formatModifier";
 import { NumericStepper } from "./common";
 
 interface DicePanelProps {
@@ -127,20 +128,26 @@ export function DicePanel({
   const [hidden, setHidden] = useState(false);
 
   const handleRoll = (die: DieOption) => {
-    const modStr =
-      modifier !== 0 ? (modifier > 0 ? `+${modifier}` : `${modifier}`) : "";
+    const modStr = modifier !== 0 ? formatModifier(modifier) : "";
     const formula = `${count}d${die.sides}${modStr}`;
     const countPrefix = count > 1 ? `${count}` : "";
-    const modLabel =
-      modifier !== 0 ? (modifier > 0 ? `+${modifier}` : `${modifier}`) : "";
 
     onRoll({
-      label: `Free Roll - ${countPrefix}${die.label}${modLabel}`,
+      label: `Free Roll - ${countPrefix}${die.label}${modStr}`,
       formula,
       mode,
       advantageCount: mode === "standard" ? 0 : extraCount,
       hidden: isGM ? hidden : false,
     });
+    // Part 1h, Panel layout contract (CLAUDE.md): closes itself on every
+    // roll, in every state this panel can be opened from — not a
+    // restoration, the new intentional behavior for this batch. Keeps the
+    // expanded grid from lingering over the roll log after its job is
+    // done, and is what makes the "opening DicePanel must not hide the
+    // sheet/log" requirement moot in the common case: the panel is only
+    // ever open for the brief moment between expanding it and picking a
+    // die.
+    setCollapsed(true);
   };
 
   return (
@@ -198,7 +205,7 @@ export function DicePanel({
               value={modifier}
               onChange={setModifier}
               compact
-              displayFn={(v) => (v > 0 ? `+${v}` : String(v))}
+              displayFn={formatModifier}
               valueClass={
                 modifier > 0
                   ? "text-emerald-300"

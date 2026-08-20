@@ -4,7 +4,7 @@
  * {@link BASIC_EQUIPMENTS} or create a custom item).
  *
  * Armor items added here (`isArmor: true`) become selectable in the
- * Combat tab's defense calculator via `character.armor.equippedItemId`.
+ * Combat tab's defense calculator via `character.defense.equippedItemId`.
  */
 
 import { useState, useMemo } from "react";
@@ -14,6 +14,8 @@ import type {
   DiceRollRequest,
 } from "../../types/character";
 import { DiceRollModal } from "../ui/DiceRollModal";
+import { resolveFormulaDisplay, isEngineRollableItem } from "../../utils/formulaParser";
+import { copyItemFromCatalog, createCustomItem, isOutdated, resetItemToCatalog } from "../../utils/catalogCopy";
 import { BASIC_EQUIPMENTS } from "../../data/equipment";
 import { BentoSection } from "../ui/common/BentoSection";
 import { TextAction } from "../ui/common/RowActions";
@@ -23,6 +25,7 @@ import { NumericStepper } from "../ui/common/NumericStepper";
 import { ModalShell } from "../ui/common/ModalShell";
 import { FormulaField, FormulaDiscardNotice } from "../ui/common/FormulaField";
 import { ItemRowBase } from "../ui/common/ItemRowBase";
+import { OutdatedBadge } from "../ui/common/OutdatedBadge";
 import { useFormulaField } from "../../hooks/useFormulaField";
 import { useSearchFilter } from "../../hooks/useSearchFilter";
 import type { UndoableArrayKey } from "../../hooks/useDeleteUndo";
@@ -177,28 +180,11 @@ function AddItemModal({
 
   /**
    * Converts a {@link BASIC_EQUIPMENTS} template into a concrete, non-custom
-   * {@link InventoryItem} and hands it to `onAdd`.
-   *
-   * #12 — uses `crypto.randomUUID()`, same as the "custom" path below, so
-   * IDs are uniformly collision-safe regardless of which mode an item was
-   * added through (the "custom" form previously used `Date.now()`, which
-   * could collide on a fast double-click).
+   * {@link InventoryItem} (see {@link copyItemFromCatalog}) and hands it to
+   * `onAdd`.
    */
   const handleAddFromList = (template: (typeof BASIC_EQUIPMENTS)[0]) => {
-    onAdd({
-      id: `i-${crypto.randomUUID()}`,
-      name: template.name,
-      description: template.description ?? "",
-      slots: template.slots,
-      quantity: 1,
-      isEquipped: false,
-      isFavorite: false,
-      isCustom: false,
-      isArmor: template.isArmor ?? false,
-      armorValue: template.armorValue,
-      formula: template.formula,
-      actionCost: template.actionCost,
-    });
+    onAdd(copyItemFromCatalog(template));
   };
 
   const categoryOptions = (
@@ -247,19 +233,7 @@ function AddItemModal({
             formulaField.markTouched();
             return;
           }
-          onAdd({
-            // #12 — was Date.now(), now uniformized on crypto.randomUUID()
-            id: `i-${crypto.randomUUID()}`,
-            name: form.name,
-            description: form.description,
-            slots: form.slots,
-            quantity: 1,
-            isEquipped: false,
-            isFavorite: form.isFavorite,
-            isCustom: true,
-            isArmor: form.isArmor,
-            formula: form.formula || undefined,
-          });
+          onAdd(createCustomItem(form));
         }}
         className={`flex-1 py-2 rounded-lg text-sm font-bold transition-colors ${
           formulaField.error
@@ -576,6 +550,7 @@ export function InventoryTab({
               <ItemRow
                 key={item.id}
                 item={item}
+                character={character}
                 canEdit={canEdit}
                 isGM={isGM}
                 isExpanded={expandedId === item.id}
@@ -583,7 +558,7 @@ export function InventoryTab({
                 onRowClick={() => handleRowClick(item.id)}
                 onEditToggle={() => handleEditToggle(item.id)}
                 onRoll={
-                  item.formula
+                  isEngineRollableItem(item)
                     ? () =>
                         setRollPending({
                           label: item.name,
@@ -673,6 +648,7 @@ export function InventoryTab({
  * the original behavior).
  *
  * @param item - The item to render.
+ * @param character - Used to resolve the formula's display string (variables substituted, dice kept) — same as ActionRow/SpellRow.
  * @param canEdit - Gates quantity stepper, favorite toggle, roll button, edit, and delete.
  * @param isExpanded - Whether the description panel is open.
  * @param isEditing - Whether the inline edit form is open.
@@ -686,6 +662,7 @@ export function InventoryTab({
  */
 function ItemRow({
   item,
+  character,
   canEdit,
   isExpanded,
   isEditing,
@@ -698,6 +675,7 @@ function ItemRow({
   onUpdate,
 }: {
   item: InventoryItem;
+  character: NimbleCharacter;
   canEdit: boolean;
   isGM: boolean;
   isExpanded: boolean;
@@ -722,6 +700,43 @@ function ItemRow({
   const formulaField = useFormulaField(item.formula ?? "", (v) =>
     onUpdate({ formula: v || undefined }),
   );
+
+  // Resolved display string (variables substituted, dice kept), matching
+  // ActionRow/SpellRow — this row used to show item.formula raw (e.g.
+  // "1d4 + DEX", "6 + Math.min(DEX, 2)"), unlike every other tab.
+  //
+  // `manualResolution: true` is the deliberate exception: that text (e.g.
+  // "WeaponDamage + 1d4") is flavor-text shorthand for the GM to interpret
+  // by hand, not a formula this parser can evaluate — it must never reach
+  // resolveFormulaDisplay (which would report it as a broken formula, not
+  // what it actually is) or the roll button (gated separately, see onRoll
+  // above this component).
+  const { display: resolvedFormula, error: formulaError } = item.manualResolution
+    ? { display: item.formula ?? "", error: undefined }
+    : resolveFormulaDisplay(item.formula ?? "", character);
+
+  // Version comparison only, never text — see isOutdated's own doc for
+  // why a freely-editable description can't be diffed against the
+  // catalog to detect this.
+  const outdated = isOutdated(item, BASIC_EQUIPMENTS);
+
+  /**
+   * "Reset to book version": a plain overwrite from the current catalog
+   * entry, confirmed first since it discards any edits — no diff view, no
+   * attempt to preserve player notes, as decided. Preserves id/isFavorite
+   * only (see resetItemToCatalog); everything else, including
+   * isEquipped/quantity, resets to the template's defaults.
+   */
+  const handleResetToCatalog = () => {
+    if (
+      !window.confirm(
+        `Reset "${item.name}" to the current book version? Any edits you've made to this item (including quantity and equipped state) will be lost.`,
+      )
+    ) {
+      return;
+    }
+    onUpdate(resetItemToCatalog(item, BASIC_EQUIPMENTS));
+  };
 
   const editPanel = isEditing ? (
     <div className="px-3 pb-3 border-t border-emerald-800/30 pt-2 flex flex-col gap-2">
@@ -765,7 +780,16 @@ function ItemRow({
         </div>
       </GridFields>
       <div className="flex justify-between items-center mt-1">
-        <TextAction onClick={onDelete} label="Remove item" variant="danger" />
+        <div className="flex items-center gap-3">
+          <TextAction onClick={onDelete} label="Remove item" variant="danger" />
+          {outdated && (
+            <TextAction
+              onClick={handleResetToCatalog}
+              label="Reset to book version"
+              variant="neutral"
+            />
+          )}
+        </div>
         <TextAction
           onClick={() => {
             formulaField.closeEdit();
@@ -781,8 +805,10 @@ function ItemRow({
   return (
     <ItemRowBase
       name={item.name}
+      nameExtra={outdated ? <OutdatedBadge /> : undefined}
       icon={item.isArmor ? "🛡" : undefined}
-      formula={item.formula}
+      formula={resolvedFormula}
+      formulaError={formulaError}
       description={item.description}
       isExpanded={isExpanded}
       onRowClick={onRowClick}
