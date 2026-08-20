@@ -17,7 +17,9 @@ import type {
 } from "../../types/character";
 import { DiceRollModal } from "../ui/DiceRollModal";
 import { resolveFormulaDisplay } from "../../utils/formulaParser";
+import { copySpellFromCatalog, createCustomSpell, isOutdated, resetSpellToCatalog } from "../../utils/catalogCopy";
 import { BASE_SPELLS } from "../../data/spells";
+import { OutdatedBadge } from "../ui/common/OutdatedBadge";
 import { BentoSection } from "../ui/common/BentoSection";
 import { FavoriteButton } from "../ui/common/FavoriteButton";
 import { RollButton } from "../ui/common/RollButton";
@@ -154,17 +156,17 @@ function AddSpellModal({
     manaCost: 0,
     school: "" as SpellSchool | "",
     range: "",
-    damage: "",
+    formula: "",
     description: "",
   });
   const setF = (k: string, v: string | number) =>
     setForm((p) => ({ ...p, [k]: v }));
 
-  // Custom-form damage never reaches OBR through this hook (nothing here
+  // Custom-form formula never reaches OBR through this hook (nothing here
   // is persisted until "Add" is clicked) — onCommit just updates local
   // form state, so the field can't hold an invalid, uncommitted draft
   // when "Add" is checked below.
-  const formulaField = useFormulaField(form.damage, (v) => setF("damage", v));
+  const formulaField = useFormulaField(form.formula, (v) => setF("formula", v));
 
   // Suppress unused warning — kept for future duplicate detection
   void existingIds;
@@ -187,27 +189,11 @@ function AddSpellModal({
 
   /**
    * Converts a {@link BASE_SPELLS} template into a concrete, non-custom
-   * {@link CharacterAction} and hands it to `onAdd`. Mana cost defaults to
-   * the spell's tier when not explicitly set (cantrips are always free).
+   * {@link CharacterAction} (see {@link copySpellFromCatalog}) and hands it
+   * to `onAdd`.
    */
   const handleAddFromList = (template: (typeof BASE_SPELLS)[0]) => {
-    onAdd({
-      id: `sp-${crypto.randomUUID()}`,
-      name: template.name,
-      type: "spell",
-      range: template.range,
-      damage: template.damage,
-      formula: template.formula || template.damage,
-      description: template.description,
-      isFavorite: false,
-      isCustom: false,
-      spellTier: template.spellTier,
-      spellSchool: template.spellSchool as SpellSchool | undefined,
-      manaCost:
-        template.manaCost ??
-        (template.spellTier === 0 ? 0 : template.spellTier),
-      actionCost: template.actionCost,
-    });
+    onAdd(copySpellFromCatalog(template));
   };
 
   // Tier pills options
@@ -261,20 +247,7 @@ function AddSpellModal({
             formulaField.markTouched();
             return;
           }
-          onAdd({
-            id: `sp-${crypto.randomUUID()}`,
-            name: form.name,
-            type: "spell",
-            range: form.range,
-            damage: form.damage,
-            formula: form.damage,
-            description: form.description,
-            isFavorite: false,
-            isCustom: true,
-            spellTier: form.tier,
-            spellSchool: (form.school as SpellSchool) || undefined,
-            manaCost: form.tier === 0 ? 0 : form.manaCost,
-          });
+          onAdd(createCustomSpell(form));
         }}
         className={`flex-1 py-2 rounded-lg text-sm font-bold transition-colors ${
           formulaField.error
@@ -661,7 +634,7 @@ export function SpellsTab({
                 onRoll={() =>
                   setRollPending({
                     label: spell.name,
-                    formula: spell.formula || spell.damage,
+                    formula: spell.formula,
                   })
                 }
                 onToggleFavorite={() =>
@@ -786,13 +759,36 @@ function SpellRow({
     : "text-violet-300 border-violet-800/60 bg-violet-950/30";
   const schoolIcon = school ? SCHOOL_ICONS[school] : "✨";
   const { display: resolvedFormula, error: formulaError } =
-    resolveFormulaDisplay(spell.formula || spell.damage, character);
+    resolveFormulaDisplay(spell.formula, character);
   // Called unconditionally (not only while isEditing) so a discard
   // warning from closeEdit() survives the edit panel unmounting and can
   // still render in the collapsed view below.
-  const formulaField = useFormulaField(spell.formula ?? spell.damage ?? "", (v) =>
-    onUpdate({ formula: v, damage: v }),
+  const formulaField = useFormulaField(spell.formula, (v) =>
+    onUpdate({ formula: v }),
   );
+
+  // Version comparison only, never text — see isOutdated's own doc for
+  // why a freely-editable description can't be diffed against the
+  // catalog to detect this.
+  const outdated = isOutdated(spell, BASE_SPELLS);
+
+  /**
+   * "Reset to book version": a plain overwrite from the current catalog
+   * entry, confirmed first since it discards any edits — no diff view, no
+   * attempt to preserve player notes, as decided. Preserves id/isFavorite
+   * only (see resetSpellToCatalog); everything else resets to the
+   * template's current text.
+   */
+  const handleResetToCatalog = () => {
+    if (
+      !window.confirm(
+        `Reset "${spell.name}" to the current book version? Any edits you've made to this spell will be lost.`,
+      )
+    ) {
+      return;
+    }
+    onUpdate(resetSpellToCatalog(spell, BASE_SPELLS));
+  };
 
   return (
     <div
@@ -829,6 +825,7 @@ function SpellRow({
                 ✦{spell.manaCost}
               </span>
             )}
+            {outdated && <OutdatedBadge />}
           </div>
           <div className="flex items-center gap-3 mt-0.5">
             <RowMeta range={spell.range} actionCost={spell.actionCost} />
@@ -859,7 +856,7 @@ function SpellRow({
             canEdit={canEdit}
             onToggle={onToggleFavorite}
           />
-          {canEdit && (spell.formula || spell.damage) && (
+          {canEdit && spell.formula && (
             <RollButton onClick={onRoll} accent="violet" />
           )}
         </div>
@@ -947,11 +944,20 @@ function SpellRow({
             rows={3}
           />
           <div className="flex justify-between items-center mt-1">
-            <TextAction
-              onClick={onDelete}
-              label="Remove spell"
-              variant="danger"
-            />
+            <div className="flex items-center gap-3">
+              <TextAction
+                onClick={onDelete}
+                label="Remove spell"
+                variant="danger"
+              />
+              {outdated && (
+                <TextAction
+                  onClick={handleResetToCatalog}
+                  label="Reset to book version"
+                  variant="neutral"
+                />
+              )}
+            </div>
             <TextAction
               onClick={() => {
                 formulaField.closeEdit();

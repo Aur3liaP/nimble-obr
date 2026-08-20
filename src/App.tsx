@@ -101,14 +101,25 @@ export default function App() {
       if (result?.error) setRollError(result.error);
     });
   };
-  const onRollInitiative = (mode: RollMode = "standard") => {
+  const onRollInitiative = (
+    mode: RollMode = "standard",
+    advantageCount = 0,
+    hidden = false,
+  ) => {
     setRollError(null);
-    // Unlike onRoll/onFreeRoll, CombatTab awaits this and reads `.total`
-    // off the resolved result to derive the starting action count, so the
-    // result must still be returned, not swallowed.
-    return rollInitiative(mode).then((result) => {
-      if (result?.error) setRollError(result.error);
-      return result;
+    // Unlike onRoll/onFreeRoll, CombatTab awaits this and reads `.total`/
+    // `.naturalRoll` off the resolved result to derive the starting action
+    // count (see initiativeToActions), so the result must still be
+    // returned, not swallowed. `naturalRoll` is `kept[0]` — the kept d20
+    // after advantage/disadvantage resolution, not the raw first die (see
+    // RollFormulaResult.kept's doc in formulaParser.ts).
+    return rollInitiative(mode, advantageCount, hidden).then((result) => {
+      if (!result) return null;
+      if (result.error) {
+        setRollError(result.error);
+        return null;
+      }
+      return { total: result.total, naturalRoll: result.kept[0] ?? result.total };
     });
   };
 
@@ -238,9 +249,51 @@ export default function App() {
         </div>
       )}
 
-      {/* ── Scrollable content area ───────────────────────────────── */}
-      <main className="flex-1 overflow-y-auto scrollbar-thin">
-        {/* Sheet tabs */}
+      {/* ── Scrollable content area ─────────────────────────────────
+          Part 1h: RESTORED to the pre-part-1f design (a single scroll
+          region) per the "Panel layout contract" in CLAUDE.md, after parts
+          1f and 1g each tried to make `<main>` a flex CONTAINER for its
+          children and each broke a different state — see CLAUDE.md's
+          history for both. `<main>` here is deliberately NOT `flex
+          flex-col` when a sheet tab is open: the contract requires
+          `DicePanel` to "sit at the bottom of the tab content... and
+          scroll WITH the content," which is exactly plain block flow
+          inside a single `overflow-y-auto` region — the tab content and
+          the DicePanel/RollLog wrapper below it are just two stacked
+          block-level children, and scrolling `<main>` moves both together.
+          Part 1g's fix (giving the tab content its OWN internal
+          `overflow-y-auto` region, separate from `<main>`'s) DID stop the
+          DicePanel wrapper from collapsing to 0px, but it also silently
+          pinned DicePanel below a fixed-height, independently-scrolling
+          tab content box — i.e. DicePanel stopped scrolling with the
+          sheet, which nothing had written down as a requirement until the
+          contract above existed to catch it against. That is the class of
+          bug this whole rewrite is meant to end: verify against the
+          contract, not against whichever single state was last reported
+          broken.
+
+          `<main>` DOES still need `flex flex-col` in the no-sheet states
+          (no-token/no-sheet/unsupported/invalid), because there the
+          DicePanel/RollLog wrapper is `<main>`'s ONLY child — no sibling
+          to compete with for space — so stretching it via `flex-1 min-h-0`
+          to reach `<main>`'s real bottom (needed so `RollLog`'s inline
+          license attribution reaches a genuine bottom edge, not just its
+          own natural content height) is safe there: the 1g collapse bug
+          specifically required TWO children with mismatched flex-basis
+          fighting over shrink space, and a lone child can't do that to
+          itself. This is why the license-attribution fix from parts 1e/1f
+          DOES genuinely depend on `<main>` being flex — but only in the
+          no-sheet branch, never the sheet-open one; conditioning `<main>`'s
+          own classes on `showSheet` satisfies both without re-breaking
+          either. ── */}
+      <main
+        className={`flex-1 overflow-y-auto scrollbar-thin ${showSheet ? "" : "flex flex-col"}`}
+      >
+        {/* Sheet tabs — plain block-flow content, no wrapper div, no
+            independent scroll region of its own. `<main>` is the ONLY
+            scroll container in this state, so DicePanel below sits at the
+            bottom of this content and scrolls away with it — per the
+            contract, that's the intended behavior, not a bug to fix. */}
         {showSheet && character && (
           <>
             {activeTab === "summary" && (
@@ -287,8 +340,19 @@ export default function App() {
         )}
 
         {/* ── DicePanel + RollLog — always mounted here, never unmounted.
-            Mounted once in <main>, visible in all states. */}
-        <div className="px-3 pt-2 pb-3 flex flex-col gap-3">
+            Mounted once in <main>, visible in all states. RollLog (inline)
+            also carries the pinned Nimble license notices — see its
+            @file header — present here from the empty state onward.
+
+            Part 1h: plain `flex flex-col gap-3` (natural content height,
+            a normal block-flow child of `<main>`) when a sheet tab is
+            open — no `flex-1`/`min-h-0`, nothing to stretch or collapse.
+            `flex-1 min-h-0` only when this wrapper is `<main>`'s sole
+            child (no-sheet states) — see the comment on `<main>` above for
+            why that's safe there and not elsewhere. */}
+        <div
+          className={`px-3 pt-2 pb-3 flex flex-col gap-3 ${showSheet ? "" : "flex-1 min-h-0"}`}
+        >
           <DicePanel
             isGM={isGM}
             onRoll={onFreeRoll}
@@ -305,7 +369,10 @@ export default function App() {
         </div>
       </main>
 
-      {/* Floating pill — only when sheet is visible (not to stack with inline log) */}
+      {/* Floating pill — only when sheet is visible (not to stack with inline log).
+          Carries the same pinned license notices inside its popup, and no
+          longer unmounts when there are zero rolls — see RollLog's @file
+          header. */}
       {showSheet && (
         <RollLog rolls={recentRolls} isGM={isGM} currentPlayerId={playerId} />
       )}

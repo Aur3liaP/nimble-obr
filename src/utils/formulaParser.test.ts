@@ -19,11 +19,14 @@ import {
   formulaSyntaxError,
   FormulaError,
   type FormulaContext,
+  isEngineRollableItem,
+  normalizeSubstitutedSignsForDisplay,
   parseDamageFormula,
   resolveFormulaDisplay,
   rollFormula,
   rollFormulaWithContext,
   safeEval,
+  substituteVariables,
   validateFormula,
   validateFormulaSyntax,
   VARIABLE_TABLE,
@@ -133,6 +136,27 @@ describe("safeEval", () => {
     expect(safeEval("+2")).toBe(2);
     expect(safeEval("+3+2")).toBe(5);
     expect(safeEval("8")).toBe(safeEval("+8"));
+  });
+
+  it("handles a leading unary minus and chained signs ('+-', '--', '-+', '++')", () => {
+    // Bug: a negative stat substituted right after the formula's own
+    // operator produces a CHAINED sign — "1d8+STR" with STR=-1 substitutes
+    // to "1d8+-1", and once the dice part is split off, the remainder
+    // handed to safeEval starts with "+-1". parseUnary used to consume the
+    // outer sign and hand the rest straight to parsePrimary, which has no
+    // idea what to do with the second sign character still sitting at the
+    // front and threw "Unrecognized token in formula: \"-1\"." — reported
+    // in the wild via initiative (`1d20+${dex+bonus}`, e.g. "1d20+-2" for
+    // a total of -2), but not initiative-specific: any formula whose
+    // trailing modifier ends up glued to a negative substituted value hits
+    // this, including the stock stat arrays (+2/+2/+0/-1, +3/+1/-1/-1).
+    expect(safeEval("-2")).toBe(-2);
+    expect(safeEval("+-2")).toBe(-2);
+    expect(safeEval("--2")).toBe(2);
+    expect(safeEval("-+2")).toBe(-2);
+    expect(safeEval("++2")).toBe(2);
+    expect(safeEval("0+-2")).toBe(-2);
+    expect(safeEval("0--2")).toBe(2);
   });
 
   it("rejects a bare '.' with no digits instead of silently treating it as 0", () => {
@@ -516,8 +540,8 @@ describe("rollFormula", () => {
     expect(shadowBlast.rolls).toHaveLength(5);
     expect(shadowBlast.error).toBeUndefined();
 
-    // Entice: "1dstepdice(level,4,8,10,12)" -> level >= 15 picks the d12 tier.
-    const entice = rollFormula("1dstepdice(level,4,8,10,12)", char);
+    // Entice: "1dstepdice(level,4,6,8,10,12)" -> level >= 20 picks the d12 tier.
+    const entice = rollFormula("1dstepdice(level,4,6,8,10,12)", char);
     expect(entice.rolls).toHaveLength(1);
     entice.rolls.forEach((r) => expect(r).toBeLessThanOrEqual(12));
     expect(entice.error).toBeUndefined();
@@ -825,30 +849,19 @@ describe("resolveDynamicDice parity fixes (point 3)", () => {
 });
 
 describe("implicit-count dice notation (dN -> 1dN)", () => {
-  // Confirmed against the Nimble rulebook: d44/d66/d88 are single dice with
-  // that many faces (progression by spell tier), not two-digit roll tables
-  // — consistent with Nimble's crit rule (max face value crits), which
-  // wouldn't make sense on a table roll. So src/data/spells.ts's use of
-  // "d66"/"d88"/"d44" is correct game data; the parser was too strict.
+  // A bare dN (nothing before the "d") normalizes to a single explicit die.
+  // Nimble Core Rules 2nd printing carves out d44/d66/d88 from this general
+  // rule — see the dedicated "positional dice notation" describe block
+  // below — so d20 stands in here to prove the general mechanism still
+  // works for every other size.
 
   it("normalizes a bare dN with nothing before it to 1dN and rolls one die", () => {
     const char = makeCharacter();
-    mockRolls([50], 66);
-    const result = rollFormula("d66", char);
-    expect(result.rolls).toEqual([50]);
-    expect(result.diceNotation).toBe("1d66");
+    mockRolls([15], 20);
+    const result = rollFormula("d20", char);
+    expect(result.rolls).toEqual([15]);
+    expect(result.diceNotation).toBe("1d20");
     expect(result.error).toBeUndefined();
-  });
-
-  it("rolls the project's real d44/d66/d88 spell formulas without error", () => {
-    // Real formulas from src/data/spells.ts (Entice's sibling spells use
-    // stepdice instead; these four use a bare implicit die directly).
-    const char = makeCharacter();
-    for (const formula of ["d44", "d66", "d66", "d88"]) {
-      const result = rollFormula(formula, char);
-      expect(result.rolls).toHaveLength(1);
-      expect(result.error).toBeUndefined();
-    }
   });
 
   it("does not touch an already-explicit count — non-regression for 2d6", () => {
@@ -905,6 +918,229 @@ describe("implicit-count dice notation (dN -> 1dN)", () => {
     const entice = rollFormula("1dstepdice(level,4,8,10,12)", char);
     expect(entice.rolls).toHaveLength(1);
     expect(entice.error).toBeUndefined();
+  });
+});
+
+describe("stepdice — 4-size (legacy) and 5-size (2nd-printing Entice) breakpoints", () => {
+  // pickStepDiceSize is shared by two call sites: resolveDynamicDice's
+  // regex path (1dstepdice(...), exercised here via parseDamageFormula's
+  // diceNotation — deterministic, no rolling needed) and Parser.parsePrimary's
+  // bare stepdice(...) primitive (exercised via safeEval directly). Testing
+  // both confirms they stay in sync through the shared helper instead of
+  // silently drifting apart the way two hand-copied implementations would.
+
+  it("5-size shape picks d4/d6/d8/d10/d12 across every level 1-20, matching the book's progression", () => {
+    // Core Rules 2nd printing, Entice: "Increment the die size 1 step every
+    // 5 levels (d6 -> d8 -> d10 -> d12)", base d4. Breakpoints 5/10/15/20.
+    const ctxAt = (level: number) => buildContext(makeCharacter({ level }));
+    const sizeAt = (level: number) =>
+      level >= 20 ? 12 : level >= 15 ? 10 : level >= 10 ? 8 : level >= 5 ? 6 : 4;
+
+    for (let level = 1; level <= 20; level++) {
+      const { diceNotation } = parseDamageFormula(
+        "1dstepdice(level,4,6,8,10,12)",
+        ctxAt(level),
+      );
+      expect(diceNotation).toBe(`1d${sizeAt(level)}`);
+    }
+  });
+
+  it("5-size shape reaches d12 exactly at level 20 (MAX_LEVEL) — the bug this batch fixes (previously capped at d10)", () => {
+    const ctx = buildContext(makeCharacter({ level: 20 }));
+    const { diceNotation } = parseDamageFormula("1dstepdice(level,4,6,8,10,12)", ctx);
+    expect(diceNotation).toBe("1d12");
+  });
+
+  it("4-size shape (legacy, no real caller today, kept working for backward compatibility) still uses the original 3 breakpoints", () => {
+    const cases: [level: number, size: number][] = [
+      [1, 4],
+      [4, 4],
+      [5, 8],
+      [9, 8],
+      [10, 10],
+      [14, 10],
+      [15, 12],
+      [20, 12], // no 4th breakpoint in this shape — level 20 stays at the 15+ tier
+    ];
+    for (const [level, size] of cases) {
+      const ctx = buildContext(makeCharacter({ level }));
+      const { diceNotation } = parseDamageFormula("1dstepdice(level,4,8,10,12)", ctx);
+      expect(diceNotation).toBe(`1d${size}`);
+    }
+  });
+
+  it("rejects a stepdice call with a size count other than 4 or 5, instead of guessing a breakpoint scheme", () => {
+    const ctx = buildContext(makeCharacter({ level: 10 }));
+    expect(() => parseDamageFormula("1dstepdice(level,4,6,8)", ctx)).toThrow(/4 or 5/i);
+    expect(() =>
+      parseDamageFormula("1dstepdice(level,4,6,8,10,12,14)", ctx),
+    ).toThrow(/4 or 5/i);
+  });
+
+  it("the bare stepdice(...) primitive (Parser.parsePrimary, no 1d prefix) shares the same breakpoint logic", () => {
+    // Not how any real spell formula is written (stepdice only supports
+    // the 1d prefix in practice — see CLAUDE.md), but part of the parser's
+    // own grammar; must stay consistent with the 1dstepdice(...) path above
+    // through the shared helper.
+    expect(safeEval("stepdice(1,4,6,8,10,12)")).toBe(4);
+    expect(safeEval("stepdice(5,4,6,8,10,12)")).toBe(6);
+    expect(safeEval("stepdice(10,4,6,8,10,12)")).toBe(8);
+    expect(safeEval("stepdice(15,4,6,8,10,12)")).toBe(10);
+    expect(safeEval("stepdice(20,4,6,8,10,12)")).toBe(12);
+    expect(safeEval("stepdice(20,4,8,10,12)")).toBe(12); // 4-size shape, unchanged
+  });
+});
+
+describe("positional dice notation (d44/d66/d88, Nimble Core Rules 2nd printing)", () => {
+  // A bare d44/d66/d88 rolls 2 dice of that size and reads them
+  // positionally (tens, ones) rather than summing — e.g. rolling a 4 then a
+  // 5 on d66 reads as 45, not 9. The "a" suffix (d44a/d66a/d88a) is the
+  // advantage variant: roll 3, drop the lowest (leftmost on a tie), and
+  // read the remaining 2 positionally in their ORIGINAL roll order — never
+  // sorted.
+
+  it("rolls 2 dice and reads them positionally: [4, 5] -> 45, not 9 and not resorted", () => {
+    const char = makeCharacter();
+    mockRolls([4, 5], 6);
+    const result = rollFormula("d66", char);
+    expect(result.rolls).toEqual([4, 5]);
+    expect(result.kept).toEqual([4, 5]);
+    expect(result.total).toBe(45);
+    expect(result.diceNotation).toBe("d66");
+    expect(result.error).toBeUndefined();
+  });
+
+  it("preserves roll order even when it produces a smaller number: [5, 4] -> 54, not resorted to 45", () => {
+    const char = makeCharacter();
+    mockRolls([5, 4], 6);
+    const result = rollFormula("d66", char);
+    expect(result.kept).toEqual([5, 4]);
+    expect(result.total).toBe(54);
+  });
+
+  it("works for d44 and d88 too", () => {
+    const char = makeCharacter();
+    mockRolls([3, 1], 4);
+    expect(rollFormula("d44", char).total).toBe(31);
+
+    mockRolls([7, 2], 8);
+    expect(rollFormula("d88", char).total).toBe(72);
+  });
+
+  it("applies a trailing flat modifier on top of the positional value", () => {
+    const char = makeCharacter();
+    mockRolls([4, 5], 6);
+    const result = rollFormula("d66+3", char);
+    expect(result.total).toBe(48);
+    expect(result.modifier).toBe(3);
+  });
+
+  it("advantage (d66a): rolls 3, drops the lowest, and reads the remaining 2 positionally without sorting — [4, 2, 5] drops the 2 and reads [4, 5] as 45, not 54", () => {
+    const char = makeCharacter();
+    mockRolls([4, 2, 5], 6);
+    const result = rollFormula("d66a", char);
+    expect(result.rolls).toEqual([4, 2, 5]);
+    expect(result.kept).toEqual([4, 5]);
+    expect(result.total).toBe(45);
+  });
+
+  it("advantage tie-break: [3, 3, 6] drops the FIRST 3 (leftmost among ties), reading [3, 6] as 36, not 63", () => {
+    const char = makeCharacter();
+    mockRolls([3, 3, 6], 6);
+    const result = rollFormula("d66a", char);
+    expect(result.kept).toEqual([3, 6]);
+    expect(result.total).toBe(36);
+  });
+
+  it("advantage: dropping the last die still preserves the original order of the first two", () => {
+    const char = makeCharacter();
+    mockRolls([6, 5, 1], 6); // lowest is the 3rd die
+    const result = rollFormula("d66a", char);
+    expect(result.kept).toEqual([6, 5]);
+    expect(result.total).toBe(65);
+  });
+
+  it("mutation guard: kept dice are never sorted — a differently-ordered but same-multiset roll produces a different total", () => {
+    // If rollPositionalDice's kept array were ever sorted (the exact bug
+    // this notation exists to avoid — see the @file header), these two
+    // rolls (same 3 values, different roll order) would collapse to the
+    // same total. They must not.
+    const char = makeCharacter();
+    mockRolls([4, 2, 5], 6);
+    const a = rollFormula("d66a", char);
+    mockRolls([5, 2, 4], 6);
+    const b = rollFormula("d66a", char);
+    expect(a.total).not.toBe(b.total);
+    expect(a.total).toBe(45);
+    expect(b.total).toBe(54);
+  });
+
+  it("never crits or fumbles, regardless of individual face values rolled", () => {
+    const char = makeCharacter();
+    // Both dice show their max face (6) — would be a critical on a normal
+    // NdX roll, but positional dice never crit.
+    mockRolls([6, 6], 6);
+    const maxRoll = rollFormula("d66", char);
+    expect(maxRoll.isCritical).toBe(false);
+    expect(maxRoll.canCritOrFumble).toBe(false);
+
+    // Both dice show their min face (1) — would be a fumble on a normal
+    // NdX roll.
+    mockRolls([1, 1], 6);
+    const minRoll = rollFormula("d66", char);
+    expect(minRoll.isFumble).toBe(false);
+    expect(minRoll.canCritOrFumble).toBe(false);
+  });
+
+  it("a flat, dice-less formula also reports canCritOrFumble: false", () => {
+    const char = makeCharacter();
+    expect(rollFormula("+5", char).canCritOrFumble).toBe(false);
+  });
+
+  it("a genuine NdX roll reports canCritOrFumble: true", () => {
+    const char = makeCharacter();
+    mockRolls([4], 8);
+    expect(rollFormula("1d8", char).canCritOrFumble).toBe(true);
+  });
+
+  it("ignores the roll mode (advantage/disadvantage) passed to rollFormula — positional dice always roll their own fixed 2 or 3 dice", () => {
+    const char = makeCharacter();
+    mockRolls([4, 5], 6);
+    const result = rollFormula("d66", char, "advantage", 3);
+    expect(result.rolls).toHaveLength(2);
+    expect(result.total).toBe(45);
+  });
+
+  it("computes an exact average for display/eval math, not a rejection", () => {
+    // Non-advantage: independent tens/ones dice, average face (6+1)/2=3.5
+    // read into both positions -> 3.5*11 = 38.5, rounded to 39.
+    const char = makeCharacter();
+    expect(evalFormula("d66", char)).toEqual({ value: 39 });
+    // Sanity: different sizes produce different averages, not a hardcoded 39.
+    expect(evalFormula("d44", char).value).not.toBe(39);
+  });
+
+  it("resolveFormulaDisplay shows the positional notation itself, not a resolved number", () => {
+    const char = makeCharacter();
+    expect(resolveFormulaDisplay("d66", char).display).toBe("d66");
+    expect(resolveFormulaDisplay("d66a", char).display).toBe("d66a");
+    expect(resolveFormulaDisplay("d66+3", char).display).toBe("d66+3");
+  });
+
+  it("validateFormulaSyntax accepts positional dice notation, advantage variant included", () => {
+    expect(() => validateFormulaSyntax("d66")).not.toThrow();
+    expect(() => validateFormulaSyntax("d66a")).not.toThrow();
+    expect(formulaSyntaxError("d44a")).toBeUndefined();
+    expect(formulaSyntaxError("d88a")).toBeUndefined();
+  });
+
+  it("does not treat an explicit-count prefix as positional — 2d66 stays a literal (nonsensical but unambiguous) 2-dice NdX roll", () => {
+    const char = makeCharacter();
+    mockRolls([10, 20], 66);
+    const result = rollFormula("2d66", char);
+    expect(result.diceNotation).toBe("2d66");
+    expect(result.rolls).toEqual([10, 20]);
+    expect(result.total).toBe(30); // summed, not read positionally
   });
 });
 
@@ -1206,6 +1442,186 @@ describe("FormulaContext contract: every field must actually substitute (point 4
   });
 });
 
+describe("negative stat modifiers (chained-sign parser bug)", () => {
+  // Reported via initiative going negative (`1d20+${dex+bonus}` becomes
+  // e.g. "1d20+-2"), but the root cause (parseUnary's sign branches jumping
+  // straight to parsePrimary instead of recursing) is generic: any formula
+  // whose trailing modifier ends up glued to a negative substituted stat
+  // hits the same case, initiative or not. Covers the formula shapes this
+  // project's own game data actually uses.
+
+  it("1d8+STR: negative STR rolls and displays correctly", () => {
+    const char = makeCharacter({ stats: { str: -2, dex: 0, int: 0, wil: 0 } });
+    mockRolls([5], 8);
+    const result = rollFormula("1d8+STR", char);
+    expect(result.error).toBeUndefined();
+    expect(result.modifier).toBe(-2);
+    expect(result.total).toBe(3);
+    expect(resolveFormulaDisplay("1d8+STR", char).display).toBe("1d8-2");
+  });
+
+  it("1d6+DEX: negative DEX rolls and displays correctly", () => {
+    const char = makeCharacter({ stats: { str: 0, dex: -3, int: 0, wil: 0 } });
+    mockRolls([4], 6);
+    const result = rollFormula("1d6+DEX", char);
+    expect(result.error).toBeUndefined();
+    expect(result.modifier).toBe(-3);
+    expect(result.total).toBe(1);
+    expect(resolveFormulaDisplay("1d6+DEX", char).display).toBe("1d6-3");
+  });
+
+  it("2d4+KEY: negative key stat rolls and displays correctly", () => {
+    const char = makeCharacter({
+      stats: { str: -1, dex: 0, int: 0, wil: 0 },
+      keyStat: "str",
+    });
+    mockRolls([2, 3], 4);
+    const result = rollFormula("2d4+KEY", char);
+    expect(result.error).toBeUndefined();
+    expect(result.modifier).toBe(-1);
+    expect(result.total).toBe(4);
+    expect(resolveFormulaDisplay("2d4+KEY", char).display).toBe("2d4-1");
+  });
+
+  it("10+STR: a flat (dice-less) formula with a negative stat", () => {
+    const char = makeCharacter({ stats: { str: -2, dex: 0, int: 0, wil: 0 } });
+    const result = rollFormula("10+STR", char);
+    expect(result.error).toBeUndefined();
+    expect(result.total).toBe(8);
+    expect(resolveFormulaDisplay("10+STR", char).display).toBe("8");
+  });
+
+  it("plain '-2': a bare negative literal with no variables or dice", () => {
+    const char = makeCharacter();
+    const result = rollFormula("-2", char);
+    expect(result.error).toBeUndefined();
+    expect(result.total).toBe(-2);
+    expect(resolveFormulaDisplay("-2", char).display).toBe("-2");
+  });
+
+  it("KEYd20 with a negative key stat still fails loudly (a negative dice count can't roll — documented, deliberate), not with the wrong 'unrecognized token' error the sign-chain bug caused", () => {
+    // Distinct from the bug above: here KEY substitutes directly into the
+    // dice COUNT position ("KEYd20" -> "-2d20"), not a trailing modifier.
+    // Nimble has no notion of rolling a negative number of dice, and this
+    // project deliberately never guesses one — see the "dice lower bound /
+    // negative count" decisions in CLAUDE.md (a leading "-" is caught by
+    // Parser.parse's full-consumption check, on purpose). Must still
+    // reject, just not by way of the "Unrecognized token" bug fixed above.
+    const char = makeCharacter({
+      stats: { str: -2, dex: 0, int: 0, wil: 0 },
+      keyStat: "str",
+    });
+    const result = rollFormula("KEYd20", char);
+    expect(result.error).toBeTruthy();
+    expect(result.error).not.toMatch(/unrecognized token/i);
+    expect(result.rolls).toEqual([]);
+  });
+});
+
+describe("substituteVariables stays purely semantic — does NOT normalize signs for display (part 1f)", () => {
+  // Part 1e put sign-normalization INSIDE substituteVariables itself.
+  // Part 1f moved it back out (see normalizeSubstitutedSignsForDisplay
+  // below) — this block pins the reverted behavior: a glued "+-"/"--" is
+  // expected, legitimate output here, not something this function cleans
+  // up. See that function's own doc for the two reasons the move happened
+  // (a presentation concern was leaking into a semantic pipeline stage,
+  // AND normalizing only the armor term in isolation didn't even fix
+  // computeDefense's actual bug, which was in how the bonus term got
+  // joined on afterward).
+
+  it("leaves a glued '+' followed by a negative substituted value as-is", () => {
+    const ctx = { ...NO_CHARACTER_CTX, stats: { ...NO_CHARACTER_CTX.stats, dex: -2 } };
+    expect(substituteVariables("3+DEX", ctx)).toBe("3+-2");
+  });
+
+  it("leaves a glued '-' followed by a negative substituted value as-is", () => {
+    const ctx = { ...NO_CHARACTER_CTX, stats: { ...NO_CHARACTER_CTX.stats, dex: -2 } };
+    expect(substituteVariables("3-DEX", ctx)).toBe("3--2");
+  });
+
+  it("still evaluates to the correct value regardless — Parser.parseUnary (part 1c) handles the chained sign at eval time, independent of this function", () => {
+    const char = makeCharacter({ stats: { str: 0, dex: -2, int: 0, wil: 0 } });
+    expect(evalFormula("3+DEX", char)).toEqual({ value: 1 });
+    expect(evalFormula("3-DEX", char)).toEqual({ value: 5 });
+  });
+
+  it("real game data is spaced ('3 + DEX'), not glued ('3+DEX') — the substituted output keeps that whitespace, which is exactly what part 1g's normalizeSubstitutedSignsForDisplay fix had to account for (see that describe block)", () => {
+    const ctx = { ...NO_CHARACTER_CTX, stats: { ...NO_CHARACTER_CTX.stats, dex: -2 } };
+    expect(substituteVariables("3 + DEX", ctx)).toBe("3 + -2");
+  });
+
+  it("resolveFormulaDisplay is not exposed to the glued-sign shape either — it always evaluates through safeEval before formatting a number", () => {
+    const char = makeCharacter({ stats: { str: 0, dex: -2, int: 0, wil: 0 } });
+    expect(resolveFormulaDisplay("1d8+DEX", char).display).toBe("1d8-2");
+    expect(resolveFormulaDisplay("3+DEX", char).display).toBe("1");
+  });
+});
+
+describe("normalizeSubstitutedSignsForDisplay (part 1f, display-only)", () => {
+  // The display-only counterpart to substituteVariables staying semantic
+  // above — a caller that shows a substituted-but-unevaluated string
+  // directly (computeDefense's breakdown) calls this explicitly instead.
+
+  it("collapses '+' followed by a negative value to a single '-'", () => {
+    expect(normalizeSubstitutedSignsForDisplay("3+-2")).toBe("3-2");
+  });
+
+  it("collapses '-' followed by a negative value to a single '+'", () => {
+    expect(normalizeSubstitutedSignsForDisplay("3--2")).toBe("3+2");
+  });
+
+  it("normalizes every occurrence in the string, not just the first", () => {
+    expect(normalizeSubstitutedSignsForDisplay("-1+-2+3")).toBe("-1-2+3");
+  });
+
+  it("leaves an already-clean sign untouched — no false-positive collapse", () => {
+    expect(normalizeSubstitutedSignsForDisplay("3+2")).toBe("3+2");
+    expect(normalizeSubstitutedSignsForDisplay("3-2")).toBe("3-2");
+  });
+});
+
+describe("normalizeSubstitutedSignsForDisplay tolerates whitespace around the signs (part 1g)", () => {
+  // Part 1f's regex only matched a sign glued with zero whitespace
+  // ("3+-2"). Real armor formulas in equipment.ts are written with spaces
+  // ("3 + DEX"), so substitution actually produces "3 + -2" — a space
+  // between the literal "+" and the substituted "-2" — which part 1f's
+  // test never exercised and the old regex never matched. This is the
+  // exact bug reported after part 1f shipped: OBR showed
+  // "3 + -2-2 = -1" instead of the intended "3-2-2 = -1".
+
+  it("collapses '+' then a space then '-' (single space, the real equipment.ts shape)", () => {
+    expect(normalizeSubstitutedSignsForDisplay("3 + -2")).toBe("3-2");
+  });
+
+  it("collapses '+' then two spaces then '-'", () => {
+    expect(normalizeSubstitutedSignsForDisplay("3 +  -2")).toBe("3-2");
+  });
+
+  it("collapses '-' then a space then '-' to a single '+'", () => {
+    expect(normalizeSubstitutedSignsForDisplay("3 - -2")).toBe("3+2");
+  });
+
+  it("reproduces and fixes the exact reported regression string", () => {
+    // Before this app's very first sign-normalization attempt (part 1e):
+    // "3 + -2 -2 = -1". After part 1f's zero-whitespace-only fix (the
+    // bonus join got collapsed, the armor term's own "+ -" did not):
+    // "3 + -2-2 = -1". After this part 1g fix, both collapse.
+    expect(normalizeSubstitutedSignsForDisplay("3 + -2-2 = -1")).toBe("3-2-2 = -1");
+  });
+
+  it("does not falsely collapse two separate, already-clean negative terms with no whitespace between them", () => {
+    // "-2-2" is two legitimate terms ("-2" armor/DEX, "-2" bonus), not a
+    // glued double-sign: the "-" between them is immediately followed by a
+    // digit, not another "-", on either pass.
+    expect(normalizeSubstitutedSignsForDisplay("-2-2")).toBe("-2-2");
+  });
+
+  it("leaves an already-clean, spaced sign untouched — no false-positive collapse", () => {
+    expect(normalizeSubstitutedSignsForDisplay("3 + 2")).toBe("3 + 2");
+    expect(normalizeSubstitutedSignsForDisplay("3 - 2")).toBe("3 - 2");
+  });
+});
+
 describe("game data validation (point 4)", () => {
   // Iterates every formula in src/data/spells.ts and src/data/equipment.ts
   // through validateFormula, and additionally requires a non-empty
@@ -1214,11 +1630,20 @@ describe("game data validation (point 4)", () => {
   // d66/d88/d44 evaluating to a flat 0 instead of rolling.
   //
   // No hardcoded list of "known-bad" formulas: entries meant to be resolved
-  // by a human rather than the engine (e.g. "WeaponDamage + 1d4" on a magic
-  // item, referencing a weapon this app has no variable for) are marked in
-  // the DATA with `manualResolution: true` and excluded here. Everything
-  // else must resolve cleanly — a newly added broken formula fails this
-  // test on its own, nothing to remember to update by hand.
+  // by a human rather than the engine (e.g. equipment reading
+  // "WeaponDamage + 1d4", referencing a weapon this app has no variable
+  // for) are marked in the DATA with `manualResolution: true` and excluded
+  // here. Everything else must resolve cleanly — a newly added broken
+  // formula fails this test on its own, nothing to remember to update by
+  // hand.
+  //
+  // Checks `formula` alone, for both spells and equipment — `formula` is
+  // the single source of truth for what's rollable (`CharacterAction` no
+  // longer has a `damage` field at all as of the schema v2 migration; see
+  // the "action.formula || action.damage fallback" and "damage removal"
+  // bullets in CLAUDE.md). `CharacterAction` also has no `manualResolution`
+  // (never set on any spell — removed in part 1c); `InventoryItem.manualResolution`
+  // is still real (3 equipment entries use it) and still excluded here.
   //
   // A level-20 character is used throughout: level feeds incrementdice/
   // stepdice, and this project's actual dynamic-dice spells only reach a
@@ -1239,10 +1664,7 @@ describe("game data validation (point 4)", () => {
   }
 
   const entries: { name: string; formula: string }[] = [
-    ...BASE_SPELLS.filter((s) => !s.manualResolution).map((s) => ({
-      name: s.name,
-      formula: s.formula,
-    })),
+    ...BASE_SPELLS.map((s) => ({ name: s.name, formula: s.formula })),
     ...BASIC_EQUIPMENTS.filter((e) => !e.manualResolution).map((e) => ({
       name: e.name,
       formula: e.formula ?? "",
@@ -1258,7 +1680,7 @@ describe("game data validation (point 4)", () => {
     expect(manualCount).toBe(3); // Weapon of Animosity, Weapon of Wounding, Vindication
   });
 
-  it("validates every non-manualResolution spell/equipment formula, with dice-shaped formulas producing real dice notation", () => {
+  it("validates every rollable spell/equipment formula, with dice-shaped formulas producing real dice notation", () => {
     const failures: string[] = [];
 
     for (const { name, formula } of entries) {
@@ -1289,6 +1711,84 @@ describe("game data validation (point 4)", () => {
     }
 
     expect(failures).toEqual([]);
+  });
+
+  it("every rollable entry's formula also passes validateFormulaSyntax, independent of any one character's context", () => {
+    // Distinct from the test above: validateFormula needs a real character
+    // context (dice-count/sides bounds are checked against it, and dynamic
+    // dice like incrementdice/stepdice resolve differently per level).
+    // validateFormulaSyntax needs neither — it's a pure "does this even
+    // parse" gate (see its own doc comment), which is exactly the class of
+    // bug that shipped here: "Special" isn't a bounds problem or a
+    // level-dependent problem, it's not a formula at all. Kept as its own
+    // assertion, on the same `entries` list, so this specific gate is
+    // traceable on its own rather than folded into the mixed failure list
+    // above.
+    const failures: string[] = [];
+    for (const { name, formula } of entries) {
+      try {
+        validateFormulaSyntax(formula);
+      } catch (err) {
+        failures.push(
+          `${name} :: "${formula}" :: ${err instanceof Error ? err.message : String(err)}`,
+        );
+      }
+    }
+
+    expect(failures).toEqual([]);
+  });
+});
+
+// Part 1c's "game data guard" (BASE_SPELLS.damage must not orphan a real
+// formula) lived here — removed alongside CharacterAction.damage itself in
+// the schema v2 migration: the field no longer exists on either the type
+// or the data, so the shape this test guarded against can't occur anymore.
+// The equivalent concern for an EXISTING character's frozen action data
+// (which may still have both fields in persisted metadata) is now covered
+// by `characterMigrations.test.ts`'s "CharacterAction.damage removal"
+// describe block instead — see `migrateActionDamageField` there.
+
+describe("InventoryItem.manualResolution is honored by the roll path (isEngineRollableItem)", () => {
+  // manualResolution is the fifth instance of the same failure mode in this
+  // codebase (d66, KEYd20, LVL, FLAW, now this one): a field documented in
+  // prose — its own JSDoc claimed "not a formula meant to be evaluated or
+  // rolled by the engine" — that nothing actually wired up. Weapon of
+  // Animosity/Weapon of Wounding/Vindication all rendered a working-looking
+  // roll button that threw a formula error the moment anyone clicked it.
+  //
+  // Mirrors the "FormulaContext contract" reflective test above (see its
+  // comment): the common failure isn't a missing variable/field, it's that
+  // nothing verifies a *documented* one is actually wired. Drives off the
+  // DATA (BASIC_EQUIPMENTS), not a hardcoded list of item names, so a
+  // future entry that sets `manualResolution: true` is covered
+  // automatically — and removing the `isEngineRollableItem` check from a
+  // UI call site (InventoryTab's roll button/favorites filter, CombatTab's
+  // favorites filter) turns this test red.
+  const manualEntries = BASIC_EQUIPMENTS.filter((e) => e.manualResolution);
+
+  it("has at least the known manualResolution equipment to check (sanity check the flag isn't silently ignored)", () => {
+    expect(manualEntries.length).toBe(3); // Weapon of Animosity, Weapon of Wounding, Vindication
+  });
+
+  it("every manualResolution equipment entry is treated as non-rollable by isEngineRollableItem", () => {
+    const offenders = manualEntries
+      .filter((e) => isEngineRollableItem(e))
+      .map((e) => e.name);
+
+    expect(offenders).toEqual([]);
+  });
+
+  it("a normal equipment entry with a real formula is still treated as rollable (sanity check the flag isn't over-broad)", () => {
+    const normalRollable = BASIC_EQUIPMENTS.find(
+      (e) => !e.manualResolution && e.formula,
+    );
+    expect(normalRollable).toBeDefined();
+    expect(isEngineRollableItem(normalRollable!)).toBe(true);
+  });
+
+  it("an item with no formula at all is non-rollable regardless of manualResolution", () => {
+    expect(isEngineRollableItem({ formula: "", manualResolution: false })).toBe(false);
+    expect(isEngineRollableItem({ manualResolution: false })).toBe(false);
   });
 });
 

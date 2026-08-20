@@ -10,6 +10,8 @@
 import { useState } from "react";
 import {
   MAX_LEVEL,
+  MIN_SKILL,
+  MAX_SKILL,
   type NimbleCharacter,
   type DiceRollRequest,
   type RollMode,
@@ -19,6 +21,7 @@ import {
 import { StatGrid } from "../ui/StatBox";
 import { LanguageSelector } from "../ui/LanguageSelector";
 import { DiceRollModal } from "../ui/DiceRollModal";
+import { formatModifier } from "../../utils/formatModifier";
 import { BentoSection } from "../ui/common/BentoSection";
 import {
   InlineEditField,
@@ -183,7 +186,7 @@ export function SummaryTab({
     const strBonus = character.stats.str;
     const formula =
       strBonus !== 0
-        ? `1${character.hitDice.dice}${strBonus >= 0 ? "+" : ""}${strBonus}`
+        ? `1${character.hitDice.dice}${formatModifier(strBonus)}`
         : `1${character.hitDice.dice}`;
     setRollPending({
       label: `Hit Die (${character.hitDice.dice})`,
@@ -191,8 +194,6 @@ export function SummaryTab({
       saveAdv: "none",
     });
   };
-
-  const strSign = character.stats.str >= 0 ? "+" : "";
 
   // ── Render ────────────────────────────────────────────────────
 
@@ -334,10 +335,35 @@ export function SummaryTab({
               canEdit={canEdit}
               onSetWounds={setWounds}
             />
-            <p className="text-[10px] text-stone-500 mt-1.5">
-              {character.wounds}/{character.maxWounds} wounds
-              {character.hp.current === 0 && " · DYING"}
-            </p>
+            {/* Max wounds is editable — not clamped to 6:
+                ancestry/background/Gritty Dying all shift the max, so it's
+                a free field the player/GM sets. A compact boxed input, same
+                treatment as the Hit Dice fields below (not InlineNumberField's
+                underline style, which — full-width, no visible box — reads
+                as a free text field here rather than a small stepper/box). */}
+            <div className="flex items-baseline gap-1 mt-1.5 text-[10px] text-stone-500">
+              <span>{character.wounds}/</span>
+              {canEdit ? (
+                <input
+                  type="number"
+                  value={character.maxWounds}
+                  min={1}
+                  onChange={(e) =>
+                    onUpdate({
+                      maxWounds: Math.max(1, parseInt(e.target.value) || 1),
+                    })
+                  }
+                  className="w-7 text-center text-sm font-bold bg-stone-900 border border-stone-700 rounded text-stone-200 outline-none py-0.5 focus:border-amber-600"
+                />
+              ) : (
+                <span className="text-stone-300 font-bold">
+                  {character.maxWounds}
+                </span>
+              )}
+              <span>
+                wounds{character.hp.current === 0 && " · DYING"}
+              </span>
+            </div>
 
             {/* Hit Dice */}
             <div className="mt-2">
@@ -408,8 +434,8 @@ export function SummaryTab({
                 )}
               </div>
               <p className="text-[10px] text-stone-600 mt-0.5 italic">
-                Roll = {character.hitDice.dice} + STR ({strSign}
-                {character.stats.str})
+                Roll = {character.hitDice.dice} + STR (
+                {formatModifier(character.stats.str)})
               </p>
             </div>
           </div>
@@ -467,8 +493,8 @@ export function SummaryTab({
                       <input
                         type="number"
                         value={val}
-                        min={-5}
-                        max={10}
+                        min={MIN_SKILL}
+                        max={MAX_SKILL}
                         onChange={(e) =>
                           onUpdate({
                             skills: {
@@ -481,7 +507,7 @@ export function SummaryTab({
                       />
                     ) : (
                       <span className="text-sm font-bold text-amber-200 w-6 text-right">
-                        {val >= 0 ? `+${val}` : val}
+                        {formatModifier(val)}
                       </span>
                     )}
                     {canEdit && (
@@ -489,7 +515,7 @@ export function SummaryTab({
                         onClick={() =>
                           setRollPending({
                             label: `${SKILL_LABELS[skillKey]} check`,
-                            formula: `1d20+${val}`,
+                            formula: `1d20${formatModifier(val)}`,
                             saveAdv: "none",
                           })
                         }

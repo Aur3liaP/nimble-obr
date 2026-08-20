@@ -32,6 +32,8 @@ import {
   CURRENT_SCHEMA_VERSION,
   type NimbleCharacter,
 } from "../types/character";
+import { BASIC_EQUIPMENTS } from "../data/equipment";
+import { BASE_SPELLS } from "../data/spells";
 
 /**
  * Transforms a character record one schema version forward: from the
@@ -57,7 +59,7 @@ function isPlainObject(value: unknown): value is Record<string, unknown> {
  * `null` survives this merge instead of being mistaken for "missing" and
  * overwritten by the default — and only a key genuinely absent from
  * `record` is filled in from `template`. Descends into matching
- * plain-object sub-trees on both sides (`hp`, `stats`, `skills`, `armor`,
+ * plain-object sub-trees on both sides (`hp`, `stats`, `skills`, `defense`,
  * `combat`, ...) so a sub-object missing just one field doesn't lose the
  * rest of its real data to the default. Arrays and primitives are never
  * merged piecewise: if the key is present at all, `record`'s value for it
@@ -96,6 +98,289 @@ function fillMissingFields(
 }
 
 /**
+ * `damage` values that mean "no formula", carried over verbatim from an old
+ * `CharacterAction.damage` field now removed from the schema (see
+ * `MIGRATIONS[1]` below): `""` (never set), `"0"` (no damage, e.g. True
+ * Strike, Ice Disk), `"Special"` (damage too situational to express as a
+ * formula, e.g. Dragonform before part 1b blanked it). None of these are
+ * real formula text — merging one into `formula` would make a
+ * non-rollable spell rollable and show a bogus 0, a direct regression.
+ */
+const PLACEHOLDER_DAMAGE = new Set(["", "0", "Special"]);
+
+/**
+ * Drops the old `damage` field from one `actions` array element, preferring
+ * the existing `formula` when present. Part of `MIGRATIONS[1]` — see its
+ * comment for the full rationale.
+ *
+ * A real character's `actions` are frozen copies of whatever spell/action
+ * data existed when they were added, not live references to
+ * `src/data/spells.ts` — so a character who added a spell before `damage`
+ * was removed from the schema still has both fields sitting in their
+ * persisted metadata, independent of what the current game data looks
+ * like. `damage` is only ever used here as a fallback, and only when
+ * `formula` is empty AND `damage` is not one of {@link PLACEHOLDER_DAMAGE}
+ * — the "game data guard" test in `formulaParser.test.ts` (removed
+ * alongside `damage` itself) already confirmed no entry in `spells.ts`
+ * ships in that shape, so this branch should never fire for official
+ * content; it exists only to not silently drop a real formula from a
+ * hand-edited or otherwise unusual character record, logging loudly if it
+ * ever does.
+ *
+ * @param action - One raw `actions` array element, of unknown shape.
+ */
+function migrateActionDamageField(action: unknown): unknown {
+  if (!isPlainObject(action)) return action; // not our problem — validateCharacterShape reports it
+  const { damage, ...rest } = action;
+  const existingFormula = typeof action.formula === "string" ? action.formula : "";
+  if (existingFormula) return { ...rest, formula: existingFormula };
+
+  const damageText = typeof damage === "string" ? damage : "";
+  if (damageText && !PLACEHOLDER_DAMAGE.has(damageText)) {
+    console.warn(
+      `[migrateCharacter] action "${String(action.name ?? "?")}" has an empty formula but a ` +
+        `non-placeholder damage ("${damageText}") — using damage as formula. This should not ` +
+        `happen for official content (see the removed "game data guard" test); if you see this ` +
+        `for real, the character's data is unusual and worth investigating.`,
+    );
+    return { ...rest, formula: damageText };
+  }
+  return { ...rest, formula: existingFormula }; // "" — genuinely not rollable
+}
+
+/**
+ * Re-applies `manualResolution` to one `inventory` array element by
+ * matching its `name` against {@link BASIC_EQUIPMENTS}, for non-custom
+ * items only. Part of `MIGRATIONS[1]` — see its comment for why this
+ * backfill is needed at all.
+ *
+ * Driven off `BASIC_EQUIPMENTS` itself, not a hardcoded name list — same
+ * reasoning as the reflective test in `formulaParser.test.ts` that
+ * verifies the flag is honored: a future equipment entry that sets
+ * `manualResolution` is covered automatically, nothing here needs updating
+ * when the data changes.
+ *
+ * @remarks Latent hazard, not yet a real bug: `name` is the only key this
+ * (and the item picker) matches on. This step only runs once per record,
+ * the moment it crosses from schemaVersion 1 to 2 — but that moment can
+ * happen long after this code shipped (a character claimed and migrated
+ * for the first time much later), against whatever `BASIC_EQUIPMENTS`
+ * looks like AT THAT TIME, not what it looked like when the item was
+ * originally added to the character. If a `BASIC_EQUIPMENTS` entry is
+ * renamed and the OLD name is reused for a mechanically different item —
+ * exactly what the 2nd-printing content batch does: "Spear" (1d10+STR)
+ * renamed to "Great Spear", then a new, unrelated "Spear" (1d6+STR)
+ * added — a character whose inventory has an old-shaped "Spear" (really a
+ * Great Spear) migrates through this step matching the NEW, unrelated
+ * "Spear" template instead. Harmless today only because neither template
+ * in that specific collision sets `manualResolution: true`; this WILL
+ * silently misapply the flag the day a rename or name-reuse collides with
+ * a `manualResolution: true` entry. If that happens, match on something
+ * more stable than `name`, or stop reusing a retired item name at all.
+ *
+ * @param item - One raw `inventory` array element, of unknown shape.
+ */
+function migrateInventoryManualResolution(item: unknown): unknown {
+  if (!isPlainObject(item)) return item;
+  if (item.isCustom === true) return item; // never touch custom items
+  const name = typeof item.name === "string" ? item.name : undefined;
+  const template = name !== undefined
+    ? BASIC_EQUIPMENTS.find((e) => e.name === name)
+    : undefined;
+  if (!template) return item; // no matching official entry — leave manualResolution as-is
+
+  const rest: Record<string, unknown> = { ...item };
+  delete rest.manualResolution;
+  return template.manualResolution === true
+    ? { ...rest, manualResolution: true }
+    : rest; // omit the key entirely, matching BASIC_EQUIPMENTS' own convention (unset, never false)
+}
+
+/**
+ * Renames the `armor` top-level field to `defense` (Nimble Core Rules 2nd
+ * printing renames the hero stat "Armor" to "Defense" — "Armor" now refers
+ * exclusively to worn equipment, unaffected by this rename). Part of
+ * `MIGRATIONS[1]` — see its comment for why this is folded into the same
+ * step as `initiativeAdvantage` rather than its own version bump.
+ *
+ * If `armor` is absent from the record entirely (a genuinely ancient
+ * record that never had the field at all — nothing shipped `defense` at
+ * any earlier version, so a record with `defense` already present but no
+ * `armor` isn't a real-world case), whatever `MIGRATIONS[0]` already
+ * backfilled onto `defense` (from the current, already-renamed
+ * `createDefaultCharacter()` template) is left untouched rather than
+ * overwritten with an empty object.
+ *
+ * @param character - The record being migrated, still keyed by `armor` if
+ * it has one at all.
+ */
+function migrateArmorToDefense(
+  character: Record<string, unknown>,
+): Record<string, unknown> {
+  const { armor, ...rest } = character;
+  if (armor === undefined) return character;
+
+  const armorObj: Record<string, unknown> = isPlainObject(armor) ? armor : {};
+  return {
+    ...rest,
+    defense: {
+      equippedItemId: armorObj.equippedItemId,
+      defenseBonus: typeof armorObj.defenseBonus === "number" ? armorObj.defenseBonus : 0,
+    },
+  };
+}
+
+/**
+ * Known rename-collisions where matching a persisted item purely by `name`
+ * against the CURRENT catalog would resolve to the WRONG entry, because
+ * the old name has been reused for a mechanically different item since the
+ * character's copy was made. Part of `MIGRATIONS[2]` (`sourceKey`
+ * backfill) — see {@link resolveEquipmentTemplate}.
+ *
+ * Each row: the `name` an existing item might still carry, the `formula`
+ * that confirms it's really the OLD, renamed entry (not the new item that
+ * now owns that name — a plain name match can't tell the two apart, but
+ * their formulas differ), and the `sourceKey` to resolve to instead of
+ * whatever currently owns that name.
+ *
+ * Currently one entry: the 2nd-printing equipment content batch renamed
+ * "Spear" (`1d10 + STR`, Reach 2) to "Great Spear" and introduced a new,
+ * unrelated, lighter "Spear" (`1d6 + STR`). An existing character's
+ * "Spear" item with the OLD formula is really a Great Spear.
+ *
+ * Append-only, like `sourceKey` itself: a future rename that reuses a
+ * retired name gets its own row here, never edits or removes this one.
+ */
+const KNOWN_EQUIPMENT_NAME_COLLISIONS: { name: string; formula: string; sourceKey: string }[] = [
+  { name: "Spear", formula: "1d10 + STR", sourceKey: "great-spear" },
+];
+
+/**
+ * Resolves a non-custom inventory item's catalog template for the
+ * `sourceKey`/`manualResolution` backfill in `MIGRATIONS[2]`: the known
+ * rename-collision table first (formula-verified, so a plain name match
+ * that would land on the wrong, name-reusing entry is caught), a plain
+ * name lookup otherwise.
+ *
+ * @returns The matching `BASIC_EQUIPMENTS` template, or `undefined` if
+ * nothing matches — a valid "cannot be traced to the catalog" outcome the
+ * caller must not paper over with a guess.
+ */
+function resolveEquipmentTemplate(
+  name: string,
+  formula: string | undefined,
+): (typeof BASIC_EQUIPMENTS)[number] | undefined {
+  const collision = KNOWN_EQUIPMENT_NAME_COLLISIONS.find(
+    (c) => c.name === name && c.formula === formula,
+  );
+  if (collision) {
+    console.warn(
+      `[migrateCharacter] inventory item "${name}" (formula "${formula}") matched a known ` +
+        `rename collision — resolving to sourceKey "${collision.sourceKey}" instead of ` +
+        `whichever catalog entry is currently named "${name}".`,
+    );
+    return BASIC_EQUIPMENTS.find((e) => e.sourceKey === collision.sourceKey);
+  }
+  return BASIC_EQUIPMENTS.find((e) => e.name === name);
+}
+
+/**
+ * Backfills `sourceKey` (see `equipment.ts`'s file header for what it is
+ * and why) on one non-custom `inventory` array element, using
+ * {@link resolveEquipmentTemplate}. Also re-applies `manualResolution`
+ * using that SAME, collision-safe resolution — superseding, for any
+ * record reaching this step, whatever `migrateInventoryManualResolution`
+ * (`MIGRATIONS[1]`, name-only, frozen and left untouched per this file's
+ * append-only rule) got wrong on a name collision it had no way to detect.
+ * Part of `MIGRATIONS[2]` — see its own comment for the full picture.
+ *
+ * @param item - One raw `inventory` array element, of unknown shape.
+ */
+function backfillInventorySourceKey(item: unknown): unknown {
+  if (!isPlainObject(item)) return item;
+  if (item.isCustom === true) return item; // never touch custom items
+  const name = typeof item.name === "string" ? item.name : undefined;
+  if (name === undefined) return item;
+  const formula = typeof item.formula === "string" ? item.formula : undefined;
+
+  const template = resolveEquipmentTemplate(name, formula);
+  if (!template) return item; // no match at all — sourceKey stays undefined, a valid state
+
+  const rest: Record<string, unknown> = { ...item };
+  delete rest.manualResolution;
+  return {
+    ...rest,
+    sourceKey: template.sourceKey,
+    ...(template.manualResolution === true ? { manualResolution: true } : {}),
+  };
+}
+
+/**
+ * Backfills `sourceKey` on one non-custom `actions` array element, by
+ * matching `name` against {@link BASE_SPELLS}. Part of `MIGRATIONS[2]`.
+ *
+ * No known rename-collision exists among spells today (unlike equipment's
+ * Spear/Great Spear) — a plain name match is enough for now. If a future
+ * printing renames a spell and reuses the old name, this needs the same
+ * collision-table treatment as {@link resolveEquipmentTemplate}.
+ *
+ * A non-custom `actions` entry that ISN'T a spell (melee/ranged/ability/
+ * item — always custom-authored via `CombatTab`'s `AddActionModal`, which
+ * has no catalog to copy from) never matches `BASE_SPELLS` by name and
+ * correctly keeps `sourceKey` undefined here — that's not a bug, it's
+ * "this action was never catalog-sourced to begin with."
+ *
+ * @param action - One raw `actions` array element, of unknown shape.
+ */
+function backfillActionSourceKey(action: unknown): unknown {
+  if (!isPlainObject(action)) return action;
+  if (action.isCustom === true) return action; // never touch custom actions
+  const name = typeof action.name === "string" ? action.name : undefined;
+  if (name === undefined) return action;
+
+  const template = BASE_SPELLS.find((s) => s.name === name);
+  if (!template) return action; // no match — sourceKey stays undefined, a valid state
+
+  return { ...action, sourceKey: template.sourceKey };
+}
+
+/**
+ * Backfills `catalogVersion` (see `equipment.ts`/`spells.ts` file headers
+ * for the contract) on one non-custom `inventory` array element, to `0` —
+ * deliberately lower than every real catalog entry's `1`, not "whatever
+ * the current catalog entry's version is" — see `MIGRATIONS[3]`'s own
+ * comment for why `0` is correct here, not a placeholder.
+ *
+ * Only backfills when `sourceKey` is already present (set either by this
+ * same pass's `MIGRATIONS[2]` immediately above, or by an earlier v2 -> v3
+ * migration already applied to this record) — an entry with no
+ * `sourceKey` can never be matched to a catalog entry, so it gets no
+ * `catalogVersion` either, same "nothing to compare against" reasoning as
+ * `isOutdated` in `catalogCopy.ts`.
+ *
+ * @param item - One raw `inventory` array element, of unknown shape.
+ */
+function backfillInventoryCatalogVersion(item: unknown): unknown {
+  if (!isPlainObject(item)) return item;
+  if (item.isCustom === true) return item; // never touch custom items
+  if (typeof item.sourceKey !== "string") return item; // untraceable — no catalogVersion either
+  return { ...item, catalogVersion: 0 };
+}
+
+/**
+ * Same contract as {@link backfillInventoryCatalogVersion}, for one raw
+ * `actions` array element.
+ *
+ * @param action - One raw `actions` array element, of unknown shape.
+ */
+function backfillActionCatalogVersion(action: unknown): unknown {
+  if (!isPlainObject(action)) return action;
+  if (action.isCustom === true) return action;
+  if (typeof action.sourceKey !== "string") return action;
+  return { ...action, catalogVersion: 0 };
+}
+
+/**
  * Ordered migrations, one function per schema version transition.
  * `MIGRATIONS[i]` moves a record from version `i` to version `i + 1`. See
  * the file header for the procedure to append to this list.
@@ -131,6 +416,122 @@ const MIGRATIONS: Migration[] = [
       character,
       createDefaultCharacter("", "") as unknown as Record<string, unknown>,
     ),
+
+  // v1 -> v2: FOUR changes folded into this single step, not one each —
+  // see the note at the end of this comment for why.
+  //
+  // 1. Adds `initiativeAdvantage`, the default roll mode pre-selected in
+  //    the initiative DiceRollModal (Nimble Core Rules 2nd printing, p.15).
+  //    A record from before this field existed has no opinion on it —
+  //    default to "none" (no advantage/disadvantage), matching
+  //    createDefaultCharacter. This was the original, sole content of this
+  //    migration step.
+  // 2. Renames `armor` -> `defense` (see migrateArmorToDefense above): the
+  //    2nd printing renames the hero stat "Armor" to "Defense".
+  // 3. Drops the old `damage` field from every `actions` entry (see
+  //    migrateActionDamageField above): `formula` is now the single source
+  //    of truth for what's rollable, and `damage` was display-only flavor
+  //    text kept in sync by hand across ~80 spells.
+  // 4. Re-applies `manualResolution` to every non-custom `inventory` entry
+  //    by matching its name against BASIC_EQUIPMENTS (see
+  //    migrateInventoryManualResolution above): items added to a
+  //    character's sheet before that flag existed carry
+  //    `manualResolution: undefined` in their frozen metadata even though
+  //    the current game data has it set, which otherwise leaves them
+  //    stuck showing a working-looking roll button that throws.
+  //
+  // Folded into ONE existing step, deliberately breaking this file's own
+  // "leave every earlier migration function alone, append a new one
+  // instead" rule (see the file header): this is safe ONLY because v1 -> v2
+  // has never shipped — no build in circulation has ever written
+  // schemaVersion 2, so there is no real persisted record anywhere whose
+  // correctness depends on this step's old, narrower behavior. Folding
+  // avoids bumping CURRENT_SCHEMA_VERSION to 3 for a version transition
+  // that would look, from outside this codebase, like it never existed.
+  // A local test scene may already hold an old v2 shape (armor unrenamed,
+  // damage/manualResolution untouched) from before this change — since it's
+  // already stamped schemaVersion 2, it will NOT be re-migrated (migration
+  // only runs for schemaVersion < CURRENT_SCHEMA_VERSION); reset it by hand.
+  // This exception does not generalize: the NEXT migration after this one
+  // must go back to appending a new step, never editing this one or any
+  // other again once it's shipped.
+  (character) => {
+    const withDefense = migrateArmorToDefense(character);
+    const actions = Array.isArray(withDefense.actions)
+      ? withDefense.actions.map(migrateActionDamageField)
+      : withDefense.actions;
+    const inventory = Array.isArray(withDefense.inventory)
+      ? withDefense.inventory.map(migrateInventoryManualResolution)
+      : withDefense.inventory;
+
+    return {
+      ...withDefense,
+      actions,
+      inventory,
+      initiativeAdvantage:
+        "initiativeAdvantage" in withDefense ? withDefense.initiativeAdvantage : "none",
+    };
+  },
+
+  // v2 -> v3: backfills `sourceKey` (see equipment.ts/spells.ts file
+  // headers for the append-only contract) onto every non-custom
+  // actions/inventory entry, by matching `name` against the current
+  // catalogs — see backfillActionSourceKey/backfillInventorySourceKey
+  // above. THE LAST TIME this codebase matches by name: sourceKey exists
+  // specifically so nothing has to again after this step. Also re-applies
+  // `manualResolution` on inventory items using the same, collision-safe
+  // resolution (see resolveEquipmentTemplate) — MIGRATIONS[1]'s own
+  // manualResolution backfill is name-only and stays exactly as it was
+  // (frozen, per this file's append-only rule); this step is what
+  // actually corrects it going forward for any record that reaches v3.
+  //
+  // A record whose name matches nothing in the relevant catalog keeps
+  // sourceKey undefined — a valid state ("cannot be traced to the
+  // catalog": renamed then hand-edited past recognition, or never
+  // catalog-sourced to begin with), never guessed at.
+  (character) => {
+    const actions = Array.isArray(character.actions)
+      ? character.actions.map(backfillActionSourceKey)
+      : character.actions;
+    const inventory = Array.isArray(character.inventory)
+      ? character.inventory.map(backfillInventorySourceKey)
+      : character.inventory;
+
+    return { ...character, actions, inventory };
+  },
+
+  // v3 -> v4: backfills `catalogVersion` (see equipment.ts/spells.ts file
+  // headers for the contract) onto every non-custom actions/inventory
+  // entry that has a sourceKey — see backfillActionCatalogVersion/
+  // backfillInventoryCatalogVersion above.
+  //
+  // Backfilled to 0, not to "whatever the catalog currently says" and not
+  // skipped: every copy that exists before this migration predates
+  // catalogVersion entirely, and 0 is deliberately LOWER than every real
+  // catalog entry's starting version of 1. That means every one of them
+  // is immediately flagged outdated (isOutdated in catalogCopy.ts) the
+  // moment this migration runs. This is correct, not a bug to "fix" by
+  // matching the current version instead: the 2nd-printing spells/
+  // equipment batches changed most of the catalog's mechanics and text,
+  // and this migration is the FIRST time any player is told their copy
+  // might be stale. Setting catalogVersion to the current value instead
+  // would silently hide exactly the staleness this whole system exists to
+  // surface.
+  //
+  // An entry with no sourceKey (custom, or untraceable even after
+  // MIGRATIONS[2]'s backfill) gets no catalogVersion either — it can never
+  // be matched to a catalog entry, so there is nothing to flag it against
+  // or reset it from.
+  (character) => {
+    const actions = Array.isArray(character.actions)
+      ? character.actions.map(backfillActionCatalogVersion)
+      : character.actions;
+    const inventory = Array.isArray(character.inventory)
+      ? character.inventory.map(backfillInventoryCatalogVersion)
+      : character.inventory;
+
+    return { ...character, actions, inventory };
+  },
 ];
 
 /**
@@ -211,8 +612,8 @@ function findShapeMismatch(value: unknown, template: unknown, path: string): str
  * separate schema could.
  *
  * @remarks Known gaps, accepted rather than solved here:
- * - Fields genuinely optional on `NimbleCharacter` (`Armor.equippedItemId`,
- *   `Armor.defenseBonus`) are only checked when `createDefaultCharacter`
+ * - Fields genuinely optional on `NimbleCharacter` (`Defense.equippedItemId`,
+ *   `Defense.defenseBonus`) are only checked when `createDefaultCharacter`
  *   happens to give them a concrete value; nothing forces the template to
  *   have an opinion about a field that's allowed to be absent, so this
  *   check cannot promise coverage of every field the interface declares.

@@ -48,7 +48,7 @@ function realSpellFormula(name: string): string {
     console.warn(`FormulaHelp: spell "${name}" not found in BASE_SPELLS.`);
     return "";
   }
-  return spell.formula || spell.damage;
+  return spell.formula;
 }
 
 /** Same as {@link realSpellFormula}, looking up an item in {@link BASIC_EQUIPMENTS} instead. */
@@ -64,8 +64,8 @@ function realItemFormula(name: string): string {
 /**
  * Worked examples pulled from real spell data, chosen to cover the
  * notations a GM is most likely to get wrong: a variable glued directly
- * to a die, an implicit dice count, and the two dynamic-dice helpers
- * (dice count growing with level, and dice size growing with level).
+ * to a die, positional dice, and the two dynamic-dice helpers (dice count
+ * growing with level, and dice size growing with level).
  */
 const EXAMPLES: { formula: string; note: string }[] = [
   {
@@ -74,7 +74,7 @@ const EXAMPLES: { formula: string; note: string }[] = [
   },
   {
     formula: realSpellFormula("Glacier Strike"),
-    note: "Implicit dice count: \"d66\" means one die with 66 faces, same as 1d66, not 6d6.",
+    note: "Positional dice: \"d66\" rolls 2d6 and reads them as tens/ones (e.g. 4 then 5 = 45), not 6d6 summed. \"d66a\" is the advantage variant: roll 3, drop the lowest. These never miss or crit.",
   },
   {
     formula: realSpellFormula("Shadow Blast"),
@@ -82,7 +82,7 @@ const EXAMPLES: { formula: string; note: string }[] = [
   },
   {
     formula: realSpellFormula("Entice"),
-    note: "Dynamic dice size: 1dstepdice(level, 4, 8, 10, 12) rolls a bigger single die at level 5, 10, and 15, not more dice.",
+    note: "Dynamic dice size: 1dstepdice(level, 4, 6, 8, 10, 12) rolls a bigger single die at level 5, 10, 15, and 20, not more dice.",
   },
 ];
 

@@ -26,3 +26,6 @@ coverage
 
 # Claude Code
 .claude/settings.local.json
+
+# Copyright Docs
+/docs/reference

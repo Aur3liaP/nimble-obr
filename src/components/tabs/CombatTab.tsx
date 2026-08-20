@@ -4,8 +4,10 @@
  * full action list.
  *
  * Defense is computed dynamically from whichever inventory item is
- * equipped as armor (see {@link computeDefense}), not from a static value,
- * so changing armor in the Inventory tab is immediately reflected here.
+ * equipped as armor (see `computeDefense` in `src/utils/computeDefense.ts`
+ * — extracted out of this file in part 1f so its breakdown string is unit-
+ * testable), not from a static value, so changing armor in the Inventory
+ * tab is immediately reflected here.
  */
 
 import { useState, useEffect, useRef } from "react";
@@ -17,7 +19,12 @@ import type {
   InventoryItem,
 } from "../../types/character";
 import { DiceRollModal } from "../ui/DiceRollModal";
-import { resolveFormulaDisplay, evalFormula } from "../../utils/formulaParser";
+import { resolveFormulaDisplay, isEngineRollableItem } from "../../utils/formulaParser";
+import { initiativeToActions } from "../../utils/initiative";
+import { formatModifier } from "../../utils/formatModifier";
+import { computeDefense } from "../../utils/computeDefense";
+import { isOutdated } from "../../utils/catalogCopy";
+import { BASE_SPELLS } from "../../data/spells";
 import { BentoSection } from "../ui/common/BentoSection";
 import { InlineNumberField } from "../ui/common/InlineEditField";
 import { FavoriteButton } from "../ui/common/FavoriteButton";
@@ -29,6 +36,7 @@ import { FormField, GridFields } from "../ui/common/FormField";
 import { DraggableBar } from "../ui/common/DraggableBar";
 import { ItemRowBase } from "../ui/common/ItemRowBase";
 import { FormulaField, FormulaDiscardNotice } from "../ui/common/FormulaField";
+import { OutdatedBadge } from "../ui/common/OutdatedBadge";
 import { useDraggableValue } from "../../hooks/useDraggableValue";
 import { useFormulaField } from "../../hooks/useFormulaField";
 import type { UndoableArrayKey } from "../../hooks/useDeleteUndo";
@@ -40,7 +48,10 @@ import type { UndoableArrayKey } from "../../hooks/useDeleteUndo";
  * @property isGM - Whether the current player is the GM.
  * @property onUpdate - Persists a partial character update.
  * @property onRoll - Triggers a dice roll request after modal confirmation.
- * @property onRollInitiative - Rolls initiative via the shared `useOBR` logic; resolves to the roll result (or void/null) so this tab can derive the resulting action count.
+ * @property onRollInitiative - Rolls initiative via the shared `useOBR` logic
+ * after {@link DiceRollModal} confirmation; resolves to the total AND the
+ * kept natural d20 (needed for the "natural 20 always grants 3 actions"
+ * rule — see `initiativeToActions`), or `null`/void on failure.
  * @property onDeleteEntry - Deletes an action (stored in `character.actions`,
  * `arrayKey: "actions"`) with undo support — see `useDeleteUndo`. Replaces
  * a plain `onUpdate({ actions: character.actions.filter(...) })` so the
@@ -53,8 +64,10 @@ interface Props {
   onUpdate: (u: Partial<NimbleCharacter>) => void;
   onRoll: (req: DiceRollRequest) => void;
   onRollInitiative: (
-    mode?: RollMode,
-  ) => Promise<{ total: number } | null> | void;
+    mode: RollMode,
+    advantageCount: number,
+    hidden: boolean,
+  ) => Promise<{ total: number; naturalRoll: number } | null> | void;
   onDeleteEntry: (arrayKey: UndoableArrayKey, id: string) => Promise<void>;
 }
 
@@ -81,52 +94,6 @@ const ACTION_ICONS = {
   item: "🎒",
 } as const;
 
-/**
- * Derives the character's current defense value.
- *
- * If an inventory item is equipped as armor (`character.armor.equippedItemId`
- * pointing at an item with `isArmor: true`), its formula is evaluated and
- * the flat `defenseBonus` is added on top. Otherwise, defense falls back to
- * DEX + the flat bonus (unarmored).
- *
- * @param character - The character to compute defense for.
- * @returns `value`: the resolved defense number. `error` is set when the
- * equipped armor's formula is broken — in that case `value` is *not* a
- * trustworthy defense number (just `defenseBonus` with no armor
- * contribution) and the caller must show that distinctly rather than
- * rendering it as if the character really has that little defense.
- */
-function computeDefense(character: NimbleCharacter): {
-  value: number;
-  error?: string;
-} {
-  const armorItem = character.inventory.find(
-    (i) => i.id === character.armor.equippedItemId && i.isArmor,
-  );
-  if (armorItem?.formula) {
-    const { value, error } = evalFormula(armorItem.formula, character);
-    return {
-      value: value + (character.armor.defenseBonus ?? 0),
-      error,
-    };
-  }
-  return { value: character.stats.dex + (character.armor.defenseBonus ?? 0) };
-}
-
-/**
- * Converts an initiative roll total into the number of actions available
- * on the first combat turn, per the Nimble rules: below 10 → 1 action,
- * 10–19 → 2 actions, 20+ → 3 actions.
- *
- * @param total - The resolved initiative roll total.
- * @returns The number of actions (1–3) granted for the first turn.
- */
-function initiativeToActions(total: number): number {
-  if (total < 10) return 1;
-  if (total < 20) return 2;
-  return 3;
-}
-
 // ── Main component ────────────────────────────────────────────────
 
 /**
@@ -148,6 +115,10 @@ export function CombatTab({
   const [rollPending, setRollPending] = useState<RollPending | null>(null);
   const [addingAction, setAddingAction] = useState(false);
   const [editingActionId, setEditingActionId] = useState<string | null>(null);
+  // Whether the initiative DiceRollModal is open — initiative now goes
+  // through the same standard/advantage/disadvantage confirmation as every
+  // other roll, instead of rolling immediately on click.
+  const [rollingInitiative, setRollingInitiative] = useState(false);
 
   // Latest character, read inside the initiative-result timeout below so
   // that write doesn't clobber an actionsRemaining change made during the
@@ -185,16 +156,21 @@ export function CombatTab({
     onUpdate({ hp: { ...character.hp, current: Math.max(0, v) } }),
   );
 
-  const { value: defenseValue, error: defenseError } =
-    computeDefense(character);
+  const {
+    value: defenseValue,
+    error: defenseError,
+    breakdown: defenseBreakdown,
+  } = computeDefense(character);
   const armorItems = character.inventory.filter((i) => i.isArmor);
   const equippedArmorItem = armorItems.find(
-    (i) => i.id === character.armor.equippedItemId,
+    (i) => i.id === character.defense.equippedItemId,
   );
   const combatActions = character.actions.filter((a) => a.type !== "spell");
   const favorites = [
     ...character.actions.filter((a) => a.isFavorite),
-    ...character.inventory.filter((i) => i.isFavorite && i.formula),
+    ...character.inventory.filter(
+      (i) => i.isFavorite && isEngineRollableItem(i),
+    ),
   ];
 
   /** Sets the action counter directly (no-op for non-editors). */
@@ -221,19 +197,31 @@ export function CombatTab({
   };
 
   /**
-   * Rolls initiative, then sets the turn tracker's counter to the number of
-   * actions the result grants (see {@link initiativeToActions}).
+   * Resolves the initiative roll on {@link DiceRollModal} confirmation, then
+   * sets the turn tracker's counter to the number of actions the result
+   * grants (see {@link initiativeToActions}).
    *
-   * @param mode - Roll mode, defaults to "standard".
+   * `character.initiativeAdvantage` is applied as the effective mode only if
+   * the player left the modal on "standard" — same pattern as
+   * `SummaryTab.confirmRoll`'s per-stat save advantage.
    */
-  const handleInitiativeRoll = async (mode: RollMode = "standard") => {
-    const result = await onRollInitiative(mode);
+  const confirmInitiativeRoll = async (
+    mode: RollMode,
+    advantageCount: number,
+    hidden: boolean,
+  ) => {
+    const finalMode =
+      character.initiativeAdvantage !== "none" && mode === "standard"
+        ? character.initiativeAdvantage
+        : mode;
+    const result = await onRollInitiative(finalMode, advantageCount, hidden);
     if (result && typeof result.total === "number") {
-      const ac = initiativeToActions(result.total);
+      const ac = initiativeToActions(result.total, result.naturalRoll);
       onUpdate({
         combat: { actionsRemaining: ac, initiativeResult: result.total },
       });
     }
+    setRollingInitiative(false);
   };
 
   /** Replaces the character's full actions array (shorthand for `onUpdate({ actions: ... })`). */
@@ -358,14 +346,15 @@ export function CombatTab({
                     Base
                   </span>
                   <span className="text-xl font-black text-amber-300">
-                    {character.stats.dex >= 0 ? "+" : ""}
-                    {character.stats.dex + character.initiativeBonus}
+                    {formatModifier(
+                      character.stats.dex + character.initiativeBonus,
+                    )}
                   </span>
                   <span className="text-[10px] text-stone-500">DEX</span>
                 </div>
                 <div className="flex flex-col gap-1.5 flex-1">
                   <button
-                    onClick={() => handleInitiativeRoll("standard")}
+                    onClick={() => setRollingInitiative(true)}
                     className="w-full py-2 rounded-lg border border-amber-700/60 bg-amber-950/40 text-amber-300 text-sm font-bold hover:bg-amber-900/50 transition-all active:scale-95"
                   >
                     🎲
@@ -425,17 +414,15 @@ export function CombatTab({
               })}
             </div>
             <p className="text-[10px] text-stone-600 mt-1.5 italic">
-              Initiative: &lt;10 = 1 action · 10–19 = 2 · 20+ = 3
+              Initiative: &lt;10 = 1 action · 10–19 = 2 · 20+ (or nat 20) = 3
             </p>
           </div>
         </div>
         {character.combat.initiativeResult !== null && (
           <p className="text-[10px] font-medium text-amber-400 text-center mt-1.5 -mb-1 ">
             Result: {character.combat.initiativeResult} →{" "}
-            {initiativeToActions(character.combat.initiativeResult)} action
-            {initiativeToActions(character.combat.initiativeResult) > 1
-              ? "s"
-              : ""}
+            {character.combat.actionsRemaining} action
+            {character.combat.actionsRemaining > 1 ? "s" : ""}
           </p>
         )}
       </BentoSection>
@@ -464,11 +451,11 @@ export function CombatTab({
             </span>
             {canEdit ? (
               <select
-                value={character.armor.equippedItemId ?? ""}
+                value={character.defense.equippedItemId ?? ""}
                 onChange={(e) =>
                   onUpdate({
-                    armor: {
-                      ...character.armor,
+                    defense: {
+                      ...character.defense,
                       equippedItemId: e.target.value || undefined,
                     },
                   })
@@ -476,11 +463,24 @@ export function CombatTab({
                 className="bg-stone-800 border border-stone-700 rounded px-2 py-1.5 text-xs text-stone-200 outline-none focus:border-sky-600"
               >
                 <option value="">— Unarmored (DEX only) —</option>
-                {armorItems.map((item) => (
-                  <option key={item.id} value={item.id}>
-                    {item.name} ({item.formula})
-                  </option>
-                ))}
+                {armorItems.map((item) => {
+                  // Unlike the "Add Item" picker (browsing BASIC_EQUIPMENTS
+                  // book content, where raw notation aids recognition),
+                  // this lists armor the character already owns — the same
+                  // case as an inventory row, not a picker. A native
+                  // <option> can't carry the formulaError styling
+                  // ItemRowBase uses elsewhere, but resolveFormulaDisplay
+                  // already falls back to the raw formula on error, so this
+                  // degrades sensibly without needing that styling.
+                  const armorLabel = item.manualResolution
+                    ? (item.formula ?? "")
+                    : resolveFormulaDisplay(item.formula ?? "", character).display;
+                  return (
+                    <option key={item.id} value={item.id}>
+                      {item.name} ({armorLabel})
+                    </option>
+                  );
+                })}
               </select>
             ) : (
               <span className="text-xs text-stone-300">
@@ -493,11 +493,11 @@ export function CombatTab({
               <span className="text-[10px] text-stone-500">Extra bonus:</span>
               <input
                 type="number"
-                value={character.armor.defenseBonus ?? 0}
+                value={character.defense.defenseBonus ?? 0}
                 onChange={(e) =>
                   onUpdate({
-                    armor: {
-                      ...character.armor,
+                    defense: {
+                      ...character.defense,
                       defenseBonus: parseInt(e.target.value) || 0,
                     },
                   })
@@ -509,10 +509,14 @@ export function CombatTab({
               </span>
             </div>
           )}
-          <p className="text-[10px] text-stone-600 italic">
-            {equippedArmorItem
-              ? `Formula: ${equippedArmorItem.formula} + ${character.armor.defenseBonus ?? 0} bonus`
-              : `DEX (${character.stats.dex}) + ${character.armor.defenseBonus ?? 0} bonus`}
+          <p
+            className={`text-[10px] italic ${
+              defenseError ? "text-rose-400" : "text-stone-600"
+            }`}
+          >
+            {defenseError
+              ? `Armor formula is broken, can't compute defense: ${defenseError}`
+              : defenseBreakdown}
           </p>
         </div>
       </BentoSection>
@@ -531,7 +535,7 @@ export function CombatTab({
                   canEdit={canEdit}
                   isGM={isGM}
                   isEditing={false}
-                  onRoll={() => setRoll(a.name, a.formula || a.damage)}
+                  onRoll={a.formula ? () => setRoll(a.name, a.formula) : undefined}
                   onToggleFavorite={() =>
                     updateActions(
                       character.actions.map((x) =>
@@ -543,11 +547,12 @@ export function CombatTab({
                 />
               ))}
             {character.inventory
-              .filter((i) => i.isFavorite && i.formula)
+              .filter((i) => i.isFavorite && isEngineRollableItem(i))
               .map((item) => (
                 <InventoryFavoriteRow
                   key={item.id}
                   item={item}
+                  character={character}
                   canEdit={canEdit}
                   onRoll={() => setRoll(item.name, item.formula!)}
                   onToggleFavorite={() =>
@@ -593,7 +598,7 @@ export function CombatTab({
               canEdit={canEdit}
               isGM={isGM}
               isEditing={editingActionId === a.id}
-              onRoll={() => setRoll(a.name, a.formula || a.damage)}
+              onRoll={a.formula ? () => setRoll(a.name, a.formula) : undefined}
               onToggleFavorite={() =>
                 updateActions(
                   character.actions.map((x) =>
@@ -648,6 +653,15 @@ export function CombatTab({
           onCancel={() => setAddingAction(false)}
         />
       )}
+      {rollingInitiative && (
+        <DiceRollModal
+          label="Initiative"
+          formula={`1d20${formatModifier(character.stats.dex + character.initiativeBonus)}`}
+          isGM={isGM}
+          onConfirm={confirmInitiativeRoll}
+          onCancel={() => setRollingInitiative(false)}
+        />
+      )}
       {rollPending && (
         <DiceRollModal
           label={rollPending.label}
@@ -680,25 +694,42 @@ export function CombatTab({
  * `InventoryTab.ItemRow` used to each hand-roll this same row shape,
  * which had started to drift slightly between the two. Now both build
  * on the same shared shell.
+ *
+ * @param character - Used to resolve the formula's display string, same as
+ * `InventoryTab.ItemRow`/`ActionRow`/`SpellRow` — this row used to show
+ * `item.formula` raw (e.g. "1d4 + DEX"), unlike every other formula display
+ * in the app.
  */
 function InventoryFavoriteRow({
   item,
+  character,
   canEdit,
   onRoll,
   onToggleFavorite,
 }: {
   item: InventoryItem;
+  character: NimbleCharacter;
   canEdit: boolean;
   onRoll?: () => void;
   onToggleFavorite?: () => void;
 }) {
   const [expanded, setExpanded] = useState(false);
 
+  // manualResolution items never reach this row today — the favorites
+  // filter upstream already excludes them via isEngineRollableItem — but
+  // this stays defensive rather than relying solely on that filter, same
+  // reasoning as InventoryTab.ItemRow: a flag documented as "not read by
+  // the engine" must not go unread again at a second call site.
+  const { display: resolvedFormula, error: formulaError } = item.manualResolution
+    ? { display: item.formula ?? "", error: undefined }
+    : resolveFormulaDisplay(item.formula ?? "", character);
+
   return (
     <ItemRowBase
       name={item.name}
       icon="🎒"
-      formula={item.formula}
+      formula={resolvedFormula}
+      formulaError={formulaError}
       description={item.description}
       isExpanded={expanded}
       onRowClick={() => setExpanded((e) => !e)}
@@ -756,16 +787,23 @@ function ActionRow({
   const typeStyle = ACTION_COLORS[action.type] ?? "";
   const icon = ACTION_ICONS[action.type] ?? "⚡";
   const { display: resolvedFormula, error: formulaError } =
-    resolveFormulaDisplay(action.formula || action.damage, character);
+    resolveFormulaDisplay(action.formula, character);
   // Called unconditionally (not only while isEditing) so a discard warning
   // from closeEdit() survives the edit panel unmounting. Rows rendered
   // without edit rights (e.g. favorited-action summaries) never get an
   // onUpdate at all, so onCommit is a no-op there — editPanel itself is
   // never rendered for those rows either.
-  const formulaField = useFormulaField(
-    action.formula ?? action.damage ?? "",
-    (v) => onUpdate?.({ formula: v, damage: v }),
+  const formulaField = useFormulaField(action.formula, (v) =>
+    onUpdate?.({ formula: v }),
   );
+
+  // Version comparison only, never text — see isOutdated's own doc. Only
+  // ever true for a favorited spell shown here as a read-only shortcut
+  // (see this row's own doc comment): non-spell actions rendered here are
+  // always custom, so they never carry a sourceKey to begin with. No
+  // reset button in this row's edit panel either way — this row's edit
+  // panel only ever renders for the custom, never-outdated case.
+  const outdated = isOutdated(action, BASE_SPELLS);
 
   const handleHeaderClick = () => {
     if (isEditing) {
@@ -799,6 +837,7 @@ function ActionRow({
             >
               {action.type}
             </span>
+            {outdated && <OutdatedBadge />}
           </div>
           <div className="flex items-center gap-3 mt-0.5">
             <RowMeta range={action.range} actionCost={action.actionCost} />
@@ -921,14 +960,14 @@ function AddActionModal({
     name: "",
     type: "melee" as CharacterAction["type"],
     range: "",
-    damage: "",
+    formula: "",
     description: "",
   });
   const set = (k: string, v: string) => setForm((p) => ({ ...p, [k]: v }));
 
   // Local form state, nothing here is persisted until "Add" is clicked —
   // onCommit just updates local form state.
-  const formulaField = useFormulaField(form.damage, (v) => set("damage", v));
+  const formulaField = useFormulaField(form.formula, (v) => set("formula", v));
 
   return (
     <div
@@ -997,7 +1036,6 @@ function AddActionModal({
               onAdd({
                 id: `a-${crypto.randomUUID()}`,
                 ...form,
-                formula: form.damage,
                 isFavorite: false,
                 isCustom: true,
               });

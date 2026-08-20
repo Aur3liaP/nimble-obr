@@ -7,7 +7,8 @@
  */
 
 import { useState } from "react";
-import type { Stats, SaveMods } from "../../types/character";
+import { MIN_STAT, MAX_STAT, type Stats, type SaveMods } from "../../types/character";
+import { formatModifier } from "../../utils/formatModifier";
 
 /**
  * Props for a single stat box.
@@ -75,11 +76,11 @@ export function StatBox({
 }: StatBoxProps) {
   const [isEditing, setIsEditing] = useState(false);
   const [inputVal, setInputVal] = useState(String(value));
-  const displayBonus = value >= 0 ? `+${value}` : String(value);
+  const displayBonus = formatModifier(value);
 
   const commitEdit = () => {
     const parsed = parseInt(inputVal, 10);
-    if (!isNaN(parsed) && parsed >= -5 && parsed <= 5)
+    if (!isNaN(parsed) && parsed >= MIN_STAT && parsed <= MAX_STAT)
       onChange?.(statKey, parsed);
     setIsEditing(false);
   };
@@ -105,8 +106,8 @@ export function StatBox({
         <input
           autoFocus
           type="number"
-          min={-5}
-          max={5}
+          min={MIN_STAT}
+          max={MAX_STAT}
           value={inputVal}
           onChange={(e) => setInputVal(e.target.value)}
           onBlur={commitEdit}
@@ -154,7 +155,7 @@ export function StatBox({
       {onRoll && (
         <button
           onClick={() =>
-            onRoll(`${STAT_FULL[statKey]} Save`, `1d20+${value}`, saveAdvantage)
+            onRoll(`${STAT_FULL[statKey]} Save`, `1d20${formatModifier(value)}`, saveAdvantage)
           }
           className="mt-0.5 px-2 py-0.5 rounded text-[10px] font-semibold tracking-wide bg-stone-700/60 hover:bg-amber-900/60 text-stone-300 hover:text-amber-200 border border-stone-600/40 hover:border-amber-700/60 transition-all active:scale-95"
         >

@@ -101,7 +101,7 @@ The only migration that exists today, `MIGRATIONS[0]` in
 record (checked with `in`, not truthiness, so a real `0`, `""`, `false`, or
 existing `null` is kept, not mistaken for "missing") is kept as-is, and only
 a key genuinely absent is filled in from the template, recursing into
-matching sub-objects (`hp`, `stats`, `armor`, `combat`, ...).
+matching sub-objects (`hp`, `stats`, `defense`, `combat`, ...).
 
 This blanket approach is legitimate for v0 specifically, and only for v0.
 "v0" does not name one fixed shape: it means "everything written before

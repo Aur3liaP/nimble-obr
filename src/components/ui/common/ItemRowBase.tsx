@@ -29,10 +29,25 @@ import { RowDescriptionPanel } from "./RowDescriptionPanel";
 interface ItemRowBaseProps {
   /** Item/action name shown in bold. */
   name: string;
+  /**
+   * Extra content rendered immediately after `name` on the same line —
+   * currently only used for `OutdatedBadge`. Kept generic (`ReactNode`,
+   * not a boolean flag) so this shell doesn't need to know what
+   * `isOutdated`/`catalogVersion` are; that decision is entirely the
+   * caller's.
+   */
+  nameExtra?: ReactNode;
   /** Small emoji/icon shown before the name (e.g. "🎒", "🛡"). */
   icon?: string;
-  /** Resolved or raw formula string shown in amber monospace, if any. */
+  /** Resolved formula string shown in amber monospace, if any. */
   formula?: string;
+  /**
+   * Set when `formula` couldn't be resolved (see `resolveFormulaDisplay`'s
+   * `error`) — renders `formula` in red with a warning icon and a tooltip
+   * instead of amber, the same treatment `ActionRow`/`SpellRow` give a
+   * broken formula. Ignored if `formula` is falsy (nothing to flag).
+   */
+  formulaError?: string;
   /** Description shown in the expanded panel. */
   description?: string;
   /** Whether the description panel is currently expanded. Omit to manage internally (uncontrolled). */
@@ -69,8 +84,10 @@ interface ItemRowBaseProps {
  */
 export function ItemRowBase({
   name,
+  nameExtra,
   icon,
   formula,
+  formulaError,
   description,
   isExpanded = false,
   onRowClick,
@@ -101,11 +118,24 @@ export function ItemRowBase({
         >
           {icon && <span className="shrink-0">{icon}</span>}
           <div className="flex-1 min-w-0">
-            <span className="text-xs font-semibold text-stone-200 truncate block">
-              {name}
-            </span>
+            <div className="flex items-center gap-1.5">
+              <span className="text-xs font-semibold text-stone-200 truncate">
+                {name}
+              </span>
+              {nameExtra}
+            </div>
             {formula && (
-              <span className="text-[10px] font-mono text-amber-300/80">
+              <span
+                className={`text-[10px] font-mono ${
+                  formulaError ? "text-rose-400" : "text-amber-300/80"
+                }`}
+                title={
+                  formulaError
+                    ? `Invalid formula, won't roll: ${formulaError}`
+                    : undefined
+                }
+              >
+                {formulaError ? "⚠ " : ""}
                 {formula}
               </span>
             )}

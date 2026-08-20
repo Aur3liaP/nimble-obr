@@ -18,11 +18,17 @@ import OBR, { type Item, type Player } from "@owlbear-rodeo/sdk";
 import {
   METADATA_KEY,
   MAX_LEVEL,
+  MIN_STAT,
+  MAX_STAT,
+  MIN_SKILL,
+  MAX_SKILL,
   createDefaultCharacter,
   type NimbleCharacter,
   type DiceRollRequest,
   type DiceRollResult,
   type RollMode,
+  type Stats,
+  type Skills,
 } from "../types/character";
 import {
   rollFormula,
@@ -30,6 +36,7 @@ import {
   type FormulaContext,
 } from "../utils/formulaParser";
 import { migrateCharacter } from "../utils/characterMigrations";
+import { formatModifier } from "../utils/formatModifier";
 
 /** OBR player role as reported by the SDK. */
 
@@ -196,7 +203,11 @@ export interface UseOBRReturn {
   updateCharacter: (updates: Partial<NimbleCharacter>) => Promise<boolean>;
   handleRoll: (req: DiceRollRequest) => Promise<DiceRollResult | null>;
   handleFreeRoll: (req: DiceRollRequest) => Promise<DiceRollResult | null>;
-  rollInitiative: (mode?: RollMode) => Promise<DiceRollResult | null>;
+  rollInitiative: (
+    mode?: RollMode,
+    advantageCount?: number,
+    hidden?: boolean,
+  ) => Promise<DiceRollResult | null>;
   recentRolls: DiceRollResult[];
   createSheetForToken: (item: Item) => Promise<void>;
   claimToken: () => Promise<void>;
@@ -291,6 +302,26 @@ const FREE_ROLL_CONTEXT: FormulaContext = {
  */
 function assertOnline(): void {
   if (!navigator.onLine) throw new Error(OFFLINE_ERROR_MESSAGE);
+}
+
+/**
+ * Clamps every value of a stats/skills-shaped record to `[min, max]`. Shared
+ * by the two clamps `updateCharacter` applies below (stats to
+ * `[MIN_STAT, MAX_STAT]`, skills to `[MIN_SKILL, MAX_SKILL]`) — same
+ * "clamp at the write choke point, not just as an input hint" reasoning
+ * already applied to `level`/`MAX_LEVEL`: an HTML input's `min`/`max`
+ * doesn't stop a typed value from being committed.
+ */
+function clampRecord<K extends string>(
+  record: Record<K, number>,
+  min: number,
+  max: number,
+): Record<K, number> {
+  const clamped = {} as Record<K, number>;
+  for (const key of Object.keys(record) as K[]) {
+    clamped[key] = Math.min(Math.max(record[key], min), max);
+  }
+  return clamped;
 }
 
 /**
@@ -953,12 +984,15 @@ export function useOBR(): UseOBRReturn {
    * stale UI (e.g. a button that should have been hidden/disabled but
    * briefly wasn't during a re-render).
    *
-   * Also clamps `level` to `[1, MAX_LEVEL]` when present in `updates` — an
+   * Also clamps `level` to `[1, MAX_LEVEL]`, `stats` to `[MIN_STAT, MAX_STAT]`,
+   * and `skills` to `[MIN_SKILL, MAX_SKILL]` when present in `updates` — an
    * unbounded level can push a legitimate dynamic-dice spell formula
    * (`incrementdice`/`stepdice`) past formulaParser's dice safety limits,
-   * turning it into one that always errors out. Clamped here, at the
-   * single write choke point, rather than only as an input hint, since an
-   * HTML `max` attribute doesn't stop a typed value from being committed.
+   * turning it into one that always errors out, and stats/skills have their
+   * own rulebook-defined ranges (see those constants' JSDoc). Clamped here,
+   * at the single write choke point, rather than only as an input hint,
+   * since an HTML `max` attribute doesn't stop a typed value from being
+   * committed.
    *
    * @param updates - Partial character fields to merge into the current state.
    * @returns `true` if the write went through, `false` if it was blocked
@@ -981,10 +1015,24 @@ export function useOBR(): UseOBRReturn {
       );
       return false;
     }
-    const clampedUpdates =
-      updates.level !== undefined
-        ? { ...updates, level: Math.min(Math.max(updates.level, 1), MAX_LEVEL) }
-        : updates;
+    const clampedUpdates: Partial<NimbleCharacter> = { ...updates };
+    if (clampedUpdates.level !== undefined) {
+      clampedUpdates.level = Math.min(Math.max(clampedUpdates.level, 1), MAX_LEVEL);
+    }
+    if (clampedUpdates.stats !== undefined) {
+      clampedUpdates.stats = clampRecord<keyof Stats>(
+        clampedUpdates.stats,
+        MIN_STAT,
+        MAX_STAT,
+      );
+    }
+    if (clampedUpdates.skills !== undefined) {
+      clampedUpdates.skills = clampRecord<keyof Skills>(
+        clampedUpdates.skills,
+        MIN_SKILL,
+        MAX_SKILL,
+      );
+    }
 
     return performWrite({
       // setCharacter below runs before the write is confirmed — see
@@ -1142,17 +1190,28 @@ export function useOBR(): UseOBRReturn {
 
   /**
    * Rolls initiative for the current character: `1d20 + DEX + initiativeBonus`.
+   * Now routed through {@link DiceRollModal} like every other roll (see
+   * CombatTab), so `mode`/`advantageCount`/`hidden` come from the same
+   * confirmation the player already sees for stat saves/skill checks.
    *
    * @param mode - Roll mode, defaults to "standard".
+   * @param advantageCount - Extra dice for advantage/disadvantage, see {@link DiceRollRequest.advantageCount}.
+   * @param hidden - GM-only hidden roll flag, see {@link DiceRollRequest.hidden}.
    * @returns The resolved {@link DiceRollResult}, or `null` if no character is loaded.
    */
-  const rollInitiative = async (mode: RollMode = "standard") => {
+  const rollInitiative = async (
+    mode: RollMode = "standard",
+    advantageCount = 0,
+    hidden = false,
+  ) => {
     const current = characterRef.current;
     if (!current) return null;
     return handleRoll({
       label: "Initiative",
-      formula: `1d20+${current.stats.dex + (current.initiativeBonus || 0)}`,
+      formula: `1d20${formatModifier(current.stats.dex + (current.initiativeBonus || 0))}`,
       mode,
+      advantageCount,
+      hidden,
     });
   };
 

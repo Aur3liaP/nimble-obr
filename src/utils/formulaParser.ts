@@ -11,12 +11,19 @@
  *    as "LVL" rather than "LEVEL" — both are genuine, supported notation,
  *    not a typo to "fix" by rewriting the data. Do not remove this as
  *    "redundant" with LEVEL.
- *  - Dice notation: NdX (e.g. 1d8, 2d6), or implicit-count dN (e.g. Nimble's
- *    single-die d44/d66/d88), normalized to 1dN — averaged for display/
- *    modifier math; actual random rolling is done separately by
- *    {@link rollFormula}
+ *  - Dice notation: NdX (e.g. 1d8, 2d6), or implicit-count dN (e.g. a bare
+ *    `d20`), normalized to 1dN — averaged for display/modifier math; actual
+ *    random rolling is done separately by {@link rollFormula}
+ *  - Positional dice (Nimble Core Rules 2nd printing, p.?): `d44`/`d66`/`d88`
+ *    each roll 2 dice of the single repeated digit's size (d66 → 2 d6 dice,
+ *    NOT one 66-sided die) and read them positionally (tens, ones) rather
+ *    than summing — see {@link rollPositionalDice}. An advantage variant
+ *    (`d44a`/`d66a`/`d88a`) rolls 3 of that same die size, drops the
+ *    lowest, and reads the remaining 2 positionally in their original roll
+ *    order. Per the glossary, these (and flat damage values) never miss or
+ *    crit — see {@link RollFormulaResult.canCritOrFumble}.
  *  - Math: + - * / floor() ceil() min() max()
- *  - Custom helpers: incrementdice(base, level), stepdice(level, d1, d2, d3, d4)
+ *  - Custom helpers: incrementdice(base, level), stepdice(level, d1, d2, d3, d4[, d5])
  *  - Parentheses
  *
  * Deliberately avoids eval() — uses a small hand-written recursive descent
@@ -25,6 +32,7 @@
  */
 
 import type { NimbleCharacter, Skills, Stats } from "../types/character";
+import { formatModifier } from "./formatModifier";
 
 // ─────────────────────────────────────────────────────────────────
 // Safety limits — prevent pathological input from a player/GM-typed
@@ -55,7 +63,7 @@ const MAX_DICE_COUNT = 100;
  *
  * @remarks Same caveat as {@link MAX_DICE_COUNT}: a legal level-20
  * character's dynamic-dice spells top out around d12 (e.g. Entice's
- * `1dstepdice(level,4,8,10,12)`), roughly 80x below this limit.
+ * `1dstepdice(level,4,6,8,10,12)`), roughly 80x below this limit.
  */
 const MAX_DICE_SIDES = 1000;
 
@@ -248,12 +256,50 @@ export function listFormulaVariables(): FormulaVariableInfo[] {
  * Also normalizes `Math.floor(`/`Math.ceil(`/`Math.min(`/`Math.max(` to the
  * lowercase tokens the parser understands.
  *
+ * Purely semantic: this is a substitution step, one stage of the pipeline
+ * every formula (rolled or merely displayed) passes through — it does NOT
+ * also clean up the resulting string for human display. A substituted
+ * negative value can legitimately produce a glued-together sign (`"3+DEX"`
+ * at DEX -2 → `"3+-2"`); that's expected output here, not a bug in this
+ * function. `Parser.parseUnary` already parses that correctly (the
+ * chained-sign fix from part 1c), so every caller that evaluates this
+ * output via `safeEval` — which is every caller in this file — gets the
+ * right VALUE regardless. A caller that instead DISPLAYS this string
+ * directly, without evaluating it first, is responsible for running it
+ * through {@link normalizeSubstitutedSignsForDisplay} itself — seePart 1e
+ * tried normalizing here, inside this function, which briefly worked but
+ * mixed a presentation concern into a semantic one; part 1f split it back
+ * out. Do not re-inline it — see that function's own doc for why the two
+ * are not redundant.
+ *
+ * Exported for one additional use beyond the internal pipeline: a caller
+ * that wants a substituted-but-NOT-arithmetically-collapsed formula string
+ * for display (e.g. `computeDefense`'s breakdown, showing armor "3+DEX"
+ * at DEX 2 as "3+2" rather than collapsing straight to "5" the way
+ * {@link resolveFormulaDisplay}'s no-dice branch does) — deliberately not
+ * duplicated as a second substitution implementation elsewhere, per the
+ * "VARIABLE_TABLE is the logic, not a description of it" rule this file
+ * already follows for every other consumer.
+ *
+ * @remarks HAS AN EXTERNAL CONSUMER outside this module (`computeDefense`
+ * in `src/utils/computeDefense.ts`, see above) — do not treat this as a
+ * private pipeline-internal helper and "clean it up" back to unexported,
+ * and do not change its output shape (lowercased, arithmetic-preserving,
+ * dice notation untouched, signs NOT normalized for display) without
+ * checking that call site too. Every other function in this file that
+ * external code relies on (`resolveFormulaDisplay`, `evalFormula`,
+ * `validateFormulaSyntax`, `buildContext`, `VARIABLE_TABLE` itself) is
+ * exported for the exact same reason: a hand-duplicated reimplementation
+ * elsewhere is exactly the "documented but not actually the source of
+ * truth" failure mode this file's own header warns about.
+ *
  * @param formula - Raw formula string as typed by the user (e.g. "1d8+STR").
  * @param ctx - Context built by {@link buildContext}.
  * @returns The formula with variables replaced, lowercased, ready for
- * dice/arithmetic parsing.
+ * dice/arithmetic parsing. May contain a glued `"+-"`/`"--"` sign pair —
+ * see the remarks above.
  */
-function substituteVariables(formula: string, ctx: FormulaContext): string {
+export function substituteVariables(formula: string, ctx: FormulaContext): string {
   if (formula.length > MAX_FORMULA_LENGTH) {
     throw new FormulaError(
       `Formula too long (${formula.length} chars, max ${MAX_FORMULA_LENGTH}).`,
@@ -274,6 +320,73 @@ function substituteVariables(formula: string, ctx: FormulaContext): string {
   f = f.toLowerCase(); // parser works in lowercase
 
   return f;
+}
+
+/**
+ * Collapses a sign glued directly onto a negative value into a single
+ * sign, for DISPLAY only: `"+-2"` → `"-2"`, `"--2"` → `"+2"`, and the same
+ * with arbitrary whitespace around either sign (`"+ -2"`, `"+  -2"`,
+ * `"- -2"` → `"-2"`, `"-2"`, `"+2"` respectively — see the part 1g note
+ * below for why whitespace tolerance is required). Not part of
+ * {@link substituteVariables}'s own pipeline — call this explicitly at
+ * whatever display call site shows a substituted-but-unevaluated formula
+ * string (currently `computeDefense`'s breakdown; any future one showing
+ * a substituted string directly needs the same call).
+ *
+ * @remarks TWO mechanisms handle a formula's chained/glued signs in this
+ * codebase, and neither is redundant with the other — they serve
+ * different needs at different pipeline stages:
+ * - `Parser.parseUnary` (part 1c) makes `"1d8+-1"` EVALUATE to the right
+ *   number. Mandatory, load-bearing: every roll and every resolved value
+ *   in this app depends on it. Do not touch it here.
+ * - This function makes a string that's shown WITHOUT evaluation (no
+ *   `safeEval` in between) READ correctly. Purely cosmetic — nothing
+ *   downstream depends on this function's output being further parsed or
+ *   evaluated, it exists only for a human reading the string.
+ *
+ * Part 1e put this same collapsing logic INSIDE `substituteVariables`
+ * itself, reasoning that a single choke point would cover every current
+ * and future consumer "for free." Two problems with that, not one: first,
+ * it mixed a presentation concern into a semantic pipeline stage that
+ * `evalFormula`/`rollFormula`/`resolveFormulaDisplay` depend on and should
+ * be able to trust stays purely semantic. Second — and this is what
+ * actually kept the bug alive — it wasn't even a complete fix:
+ * `computeDefense`'s breakdown builds its final string by concatenating
+ * `substituteVariables`'s (by-then-normalized) armor term with a
+ * SEPARATELY formatted bonus term (`formatModifier`), appended AFTER
+ * normalization already ran. The bonus's own sign, and the join between
+ * the two terms, were never covered — normalizing inside
+ * `substituteVariables` only ever normalized the armor term in isolation.
+ * Part 1f moved normalization out to here, applied explicitly to the
+ * FULLY ASSEMBLED breakdown string (armor term + bonus term + total) in
+ * `computeDefense`, which is what actually fixes it — see that function's
+ * own comment.
+ *
+ * Only these two sequences arise from substitution in practice: a literal
+ * `+`/`-` operator immediately followed by a substituted value that
+ * happens to be negative (contributing its own leading `-`). A substituted
+ * positive value never contributes a leading `+` (`String(3)` is `"3"`,
+ * not `"+3"`), so `"-+"`/`"++"` never arise this way and aren't handled
+ * here.
+ *
+ * Part 1g: part 1f's regex (`/\+-/`, `/--/`) matched only sign characters
+ * glued with zero whitespace between them, and its own test used an
+ * idealized armor formula (`"3+DEX"`, no space) as input. Real armor data
+ * in `equipment.ts` is written with spaces (`"3 + DEX"`), so
+ * `substituteVariables` actually produces `"3 + -2"` — a space between the
+ * literal `+` and the substituted `-2` — which the old regex never
+ * matched, leaving the bug reproducible in OBR despite the part 1f test
+ * suite being green. Fixed by swallowing arbitrary whitespace around both
+ * signs and re-emitting a tight, space-free join; every existing zero-
+ * whitespace case still collapses the same way. Always verify a
+ * regex-over-a-string fix like this against the actual data the app
+ * produces, not a hand-typed idealization of it.
+ *
+ * @param s - A substituted (and, for a fully-assembled display string like
+ * `computeDefense`'s breakdown, further composed) formula string.
+ */
+export function normalizeSubstitutedSignsForDisplay(s: string): string {
+  return s.replace(/\s*\+\s*-\s*/g, "-").replace(/\s*-\s*-\s*/g, "+");
 }
 
 // ─────────────────────────────────────────────────────────────────
@@ -356,21 +469,38 @@ function assertDiceWithinLimits(
  * {@link validateFormulaSyntax} passes `false`, deliberately, since it
  * validates syntax against a synthetic character and dice-count/sides
  * bounds are a roll-time concern against the real one. See
- * {@link validateFormulaSyntax}'s doc comment.
+ * {@link validateFormulaSyntax}'s doc comment. Positional dice
+ * (`d44`/`d66`/`d88`, see below) are never subject to this check either
+ * way — they're always exactly 2-3 fixed-size dice, well inside any limit.
  */
 export function diceToAverage(
   formula: string,
   rawFormula: string = formula,
   enforceLimits: boolean = true,
 ): string {
+  // Positional dice first — they resolve to an exact expected value, not a
+  // summed NdX, so they can't go through the generic replace below. Same
+  // preceded-char skip convention as normalizeImplicitDiceCount: only a
+  // bare (unprefixed) token is positional notation.
+  let result = formula.replace(
+    positionalDicePattern(),
+    (match, precedingChar: string, sides: string, advantageSuffix?: string) => {
+      if (precedingChar) return match;
+      return String(
+        positionalDiceAverage(positionalDieFaceSize(sides), !!advantageSuffix),
+      );
+    },
+  );
+
   // e.g.  2d6  →  7   (average of 2×(1+6)/2)
-  return formula.replace(/(\d+)d(\d+)/gi, (match, count, sides) => {
+  result = result.replace(/(\d+)d(\d+)/gi, (match, count, sides) => {
     const n = parseInt(count, 10);
     const s = parseInt(sides, 10);
     if (enforceLimits) assertDiceWithinLimits(n, s, match, rawFormula);
     const avg = Math.round(n * ((1 + s) / 2));
     return String(avg);
   });
+  return result;
 }
 
 /**
@@ -382,15 +512,40 @@ export function diceToAverage(
  * @param ctx - Context used to resolve variables before splitting.
  * @returns The dice part (e.g. "1d8") and the resolved numeric modifier.
  * If there is no leading dice notation, `diceNotation` is empty and the
- * whole formula is evaluated as the modifier.
+ * whole formula is evaluated as the modifier. `positional` is set instead
+ * of a plain `NdX` when the formula leads with positional dice notation
+ * (`d44`/`d66`/`d88`, optional `a` suffix) — see {@link rollPositionalDice}.
  */
 export function parseDamageFormula(
   formula: string,
   ctx: FormulaContext,
-): { diceNotation: string; modifier: number } {
+): { diceNotation: string; modifier: number; positional?: { sides: number; advantage: boolean } } {
   // Substitute variables first, then split dice from modifiers
   let subbed = substituteVariables(formula, ctx);
   subbed = resolveDynamicDice(subbed, formula);
+
+  // Positional dice (d44/d66/d88, optional advantage "a") — checked before
+  // the plain NdX match below, since normalizeImplicitDiceCount deliberately
+  // leaves a bare positional token untouched (see its doc comment) rather
+  // than normalizing it to "1dNN".
+  const positionalMatch = subbed.match(/^d(44|66|88)(a)?(?![a-z0-9])/i);
+  if (positionalMatch) {
+    const rest = subbed.slice(positionalMatch[0].length);
+    const modifier = rest.trim() ? safeEval(rest) : 0;
+    if (isNaN(modifier)) {
+      throw new FormulaError(
+        `Could not evaluate the modifier in formula: "${formula}" (resolved to "${subbed}").`,
+      );
+    }
+    return {
+      diceNotation: positionalMatch[0].toLowerCase(),
+      modifier,
+      positional: {
+        sides: positionalDieFaceSize(positionalMatch[1]),
+        advantage: !!positionalMatch[2],
+      },
+    };
+  }
 
   // Extract leading NdX
   const diceMatch = subbed.match(/^(\d+d\d+)/i);
@@ -486,6 +641,51 @@ export function listFormulaFunctions(): FormulaFunctionInfo[] {
 }
 
 /**
+ * Picks a step-dice size for `stepdice(level, ...)`/`1dstepdice(level,
+ * ...)`, given the caster's level and an ordered list of die sizes
+ * (smallest/lowest-level first). Shared by the two places that resolve
+ * this helper — {@link Parser}'s `parsePrimary` (bare `stepdice(...)`) and
+ * {@link resolveDynamicDice}'s regex path (`1dstepdice(...)`) — so a
+ * future change to the breakpoint scheme can't be applied to one and
+ * forgotten in the other. That exact failure mode (two hand-copied
+ * implementations of the same logic silently drifting apart) is why this
+ * project extracts shared tables/logic instead of duplicating it — see
+ * `VARIABLE_TABLE`/`MATH_FUNCTIONS`'s own reasoning elsewhere in this file.
+ *
+ * Two supported arities:
+ * - **4 sizes** (the original shape): 3 breakpoints (5/10/15) → 4 bands.
+ *   Kept working for backward compatibility — nothing in this codebase
+ *   currently calls it this way (`stepdice`'s only real caller, Entice,
+ *   now uses 5), but nothing stops a future formula from doing so.
+ * - **5 sizes** (added for Entice's 2nd-printing die progression — Core
+ *   Rules 2nd printing: base d4, "Increment the die size 1 step every 5
+ *   levels (d6 → d8 → d10 → d12)"): 4 breakpoints (5/10/15/20), the last
+ *   one matching {@link MAX_LEVEL} exactly, so the final size is reachable
+ *   at all. The original 4-size/3-breakpoint shape could never express
+ *   this 5-tier progression — it's one band short by construction, not a
+ *   bug in the breakpoint values themselves.
+ *
+ * @param level - Caster level.
+ * @param sizes - 4 or 5 die sizes, in ascending level-band order.
+ * @throws {FormulaError} If `sizes` isn't length 4 or 5 — a different
+ * count means the caller's formula is malformed, not that the breakpoint
+ * scheme should silently guess.
+ */
+function pickStepDiceSize(level: number, sizes: number[]): number {
+  if (sizes.length !== 4 && sizes.length !== 5) {
+    throw new FormulaError(
+      `stepdice expects 4 or 5 die sizes, got ${sizes.length}.`,
+    );
+  }
+  const breakpoints = sizes.length === 5 ? [5, 10, 15, 20] : [5, 10, 15];
+  let tier = 0;
+  for (const breakpoint of breakpoints) {
+    if (level >= breakpoint) tier++;
+  }
+  return sizes[tier];
+}
+
+/**
  * Minimal recursive-descent arithmetic parser (no `eval`).
  *
  * Grammar (informal):
@@ -495,7 +695,8 @@ export function listFormulaFunctions(): FormulaFunctionInfo[] {
  * unary   := '-' primary | primary
  * primary := number | '(' expr ')' | floor(expr) | ceil(expr)
  *          | min(expr, expr) | max(expr, expr)
- *          | incrementdice(base, level) | stepdice(level, d1, d2, d3, d4)
+ *          | incrementdice(base, level)
+ *          | stepdice(level, d1, d2, d3, d4[, d5])
  * ```
  *
  * Used internally by {@link safeEval}; not exported.
@@ -601,7 +802,7 @@ class Parser {
   }
 
   /**
-   * unary = ('-' | '+') primary | primary
+   * unary = ('-' | '+') unary | primary
    *
    * The explicit '+' branch matters now that {@link parsePrimary} throws
    * instead of returning 0 on an unrecognized token: a leading '+' in
@@ -611,17 +812,33 @@ class Parser {
    * 0, which parseExpr's own '+' handling then happened to add onto. That
    * accidental path is gone, so '+' needs real unary handling, symmetric
    * with '-', instead of relying on the unknown-token fallback.
+   *
+   * Both branches recurse into `parseUnary()`, not `parsePrimary()` — a
+   * negative stat substituted into a formula produces a CHAINED sign right
+   * after the formula's own operator: "1d8+STR" with STR=-1 substitutes to
+   * "1d8+-1", and once the dice part is split off, `safeEval` sees the
+   * remainder as a leading "+-1". The old `parsePrimary()`-only version
+   * consumed the outer sign and handed the *rest* straight to
+   * `parsePrimary`, which has no idea what to do with the second sign
+   * character still sitting at the front ("-1") and threw "Unrecognized
+   * token". Recursing into `parseUnary` lets each sign consume itself and
+   * hand off to the next, so any run of leading signs ("+-1", "--1",
+   * "-+1", ...) resolves correctly instead of only tolerating exactly one.
+   * This is not initiative-specific: any formula whose trailing modifier
+   * ends up glued to a negative substituted value hits the same case — the
+   * standard array (+2/+2/+0/-1) and Min-Max (+3/+1/-1/-1) both put a
+   * negative stat in play for most parties.
    */
   private parseUnary(): number {
     this.enterDepth();
     try {
       if (this.peek() === "-") {
         this.consume();
-        return -this.parsePrimary();
+        return -this.parseUnary();
       }
       if (this.peek() === "+") {
         this.consume();
-        return this.parsePrimary();
+        return this.parseUnary();
       }
       return this.parsePrimary();
     } finally {
@@ -740,29 +957,21 @@ class Parser {
         return baseSides + increments * 2;
       }
 
-      // stepdice(level, d1, d2, d3, d4)
+      // stepdice(level, d1, d2, d3, d4[, d5]) — see pickStepDiceSize for
+      // the 4-vs-5-size breakpoint scheme.
       if (this.input.startsWith("stepdice(", this.pos)) {
         this.pos += "stepdice(".length;
         const level = this.parseExpr();
 
-        if (this.peek() === ",") this.consume();
-        const d1 = this.parseExpr();
-
-        if (this.peek() === ",") this.consume();
-        const d2 = this.parseExpr();
-
-        if (this.peek() === ",") this.consume();
-        const d3 = this.parseExpr();
-
-        if (this.peek() === ",") this.consume();
-        const d4 = this.parseExpr();
+        const sizes: number[] = [];
+        while (this.peek() === ",") {
+          this.consume();
+          sizes.push(this.parseExpr());
+        }
 
         if (this.peek() === ")") this.consume();
 
-        if (level >= 15) return d4;
-        if (level >= 10) return d3;
-        if (level >= 5) return d2;
-        return d1;
+        return pickStepDiceSize(level, sizes);
       }
 
       // Unknown token — this used to `return 0` silently, which is exactly
@@ -808,10 +1017,18 @@ export function safeEval(expr: string): number {
 }
 
 /**
- * Normalizes implicit-count dice notation (`dN`, e.g. Nimble's `d66`/`d44`/
- * `d88` single dice) to explicit `1dN` so it reads as real dice notation
- * everywhere downstream (the safety-limit check right below, then
- * `parseDamageFormula`'s leading-dice match, then `rollDice`).
+ * Positional dice sizes recognized by the rulebook (Nimble Core Rules 2nd
+ * printing): `d44`, `d66`, `d88`. Rolled and read positionally by
+ * {@link rollPositionalDice}/{@link positionalDiceAverage}, never summed
+ * like a normal `NdX` — see the @file header.
+ */
+const POSITIONAL_DICE_SIDES = [44, 66, 88] as const;
+
+/**
+ * Normalizes implicit-count dice notation (`dN`, e.g. a bare `d20`) to
+ * explicit `1dN` so it reads as real dice notation everywhere downstream
+ * (the safety-limit check right below, then `parseDamageFormula`'s
+ * leading-dice match, then `rollDice`).
  *
  * Only a `d` with no digit or letter immediately before it qualifies — this
  * is what keeps the already-explicit count in "2d6" untouched, and keeps
@@ -822,23 +1039,135 @@ export function safeEval(expr: string): number {
  * the ")" and the trailing "d6" of "incrementdice(1,20)d6", breaking that
  * regex's own `\)d(\d+)` match.
  *
+ * Deliberately excludes {@link POSITIONAL_DICE_SIDES} (44/66/88): a bare
+ * `d66` is Nimble's positional-dice notation (2nd printing), not a literal
+ * 66-sided die, and is resolved separately — see
+ * {@link parseDamageFormula}/{@link diceToAverage}/{@link resolveFormulaDisplay}.
+ * Left untouched here (not rewritten to "1d66") so those callers can still
+ * recognize the bare form after this function runs.
+ *
  * @param formula - Formula with `incrementdice`/`stepdice` already expanded.
- * @returns The formula with every bare `dN` rewritten to `1dN`.
+ * @returns The formula with every bare `dN` (other than a positional size)
+ * rewritten to `1dN`.
  */
 function normalizeImplicitDiceCount(formula: string): string {
   return formula.replace(
     /([a-z0-9]?)d(\d+)/gi,
-    (match, precedingChar: string, sides: string) =>
-      precedingChar ? match : `1d${sides}`,
+    (match, precedingChar: string, sides: string) => {
+      if (precedingChar) return match;
+      if ((POSITIONAL_DICE_SIDES as readonly number[]).includes(Number(sides))) {
+        return match;
+      }
+      return `1d${sides}`;
+    },
   );
+}
+
+/**
+ * Extracts the individual die's face count from a positional-dice token's
+ * captured digits ("44", "66", or "88"). Each is the same digit written
+ * twice — d66 means "roll 2 (or 3, for advantage) d6 dice and read them
+ * positionally", NOT "roll a die with 66 faces" — so the actual die to roll
+ * is sized off a single digit of the token, not the token's numeric value
+ * as a whole.
+ */
+function positionalDieFaceSize(sidesToken: string): number {
+  return Number(sidesToken[0]);
+}
+
+/**
+ * Index of the (first, on a tie) lowest value in `values`. Shared by
+ * {@link rollPositionalDice} (drop the lowest of 3 rolled dice) and
+ * {@link positionalDiceAverage}'s exact enumeration, so the tie-break rule
+ * — drop the leftmost among equal lowest values — can't drift between the
+ * two. Strict `<` (not `<=`) is what makes this "leftmost on a tie": `idx`
+ * only moves to a later index when it's a strictly smaller value.
+ *
+ * @example indexOfLowestValue([4, 2, 5]) // → 1 (drops the 2)
+ * @example indexOfLowestValue([3, 3, 6]) // → 0 (drops the FIRST 3, not the second)
+ */
+function indexOfLowestValue(values: number[]): number {
+  let idx = 0;
+  for (let i = 1; i < values.length; i++) {
+    if (values[i] < values[idx]) idx = i;
+  }
+  return idx;
+}
+
+/**
+ * Reads a set of rolled positional dice into their two-digit value —
+ * `kept[0]` as the tens place, `kept[1]` as the ones place — without
+ * sorting. Position is preserved exactly as rolled: `[4, 5]` reads as 45,
+ * not resorted to the numerically larger 54. Shared by
+ * {@link rollPositionalDice} (real rolls) and {@link positionalDiceAverage}'s
+ * exact enumeration (hypothetical rolls), so both agree on what "reading
+ * positionally" means.
+ */
+function readPositionalValue(kept: [number, number]): number {
+  return kept[0] * 10 + kept[1];
+}
+
+/**
+ * Exact expected value of a positional-dice roll (`dNN` or `dNNa`), used by
+ * {@link diceToAverage} for display/modifier math (the same role
+ * {@link diceToAverage}'s plain-NdX branch plays for ordinary dice).
+ *
+ * Non-advantage: straightforward — the tens and ones dice are independent,
+ * so the average is just the average face value read into both positions.
+ *
+ * Advantage (roll 3, drop lowest — leftmost on a tie — keep the remaining 2
+ * positionally in original roll order): there's no simple closed form,
+ * because which of the 3 original positions survives depends on the values
+ * rolled, not just their ranks. `sides` is always small (4, 6, or 8 —
+ * {@link POSITIONAL_DICE_SIDES}), so this exhaustively enumerates all
+ * `sides^3` equally-likely outcomes (at most 512) and averages the exact
+ * result — cheap, and exact rather than approximated.
+ *
+ * @param sides - Size of each individual die (4, 6, or 8).
+ * @param advantage - Whether this is the "a" (roll-3-drop-lowest) variant.
+ */
+function positionalDiceAverage(sides: number, advantage: boolean): number {
+  const faceAverage = (sides + 1) / 2;
+  if (!advantage) return Math.round(readPositionalValue([faceAverage, faceAverage]));
+
+  let sum = 0;
+  let count = 0;
+  for (let a = 1; a <= sides; a++) {
+    for (let b = 1; b <= sides; b++) {
+      for (let c = 1; c <= sides; c++) {
+        const rolled = [a, b, c];
+        const dropIndex = indexOfLowestValue(rolled);
+        const kept = rolled.filter((_, i) => i !== dropIndex) as [number, number];
+        sum += readPositionalValue(kept);
+        count++;
+      }
+    }
+  }
+  return Math.round(sum / count);
+}
+
+/**
+ * Matches a bare positional-dice token (`d44`/`d66`/`d88`, optionally
+ * suffixed `a` for the advantage variant) not already prefixed with an
+ * explicit count or embedded in another identifier — same
+ * capture-and-skip-if-preceded convention as {@link normalizeImplicitDiceCount},
+ * and the same trailing exclusion so "d668" (not real notation) doesn't
+ * false-match "d66". Callers check `match[1]` (the optional preceding
+ * character) themselves; this is a plain, reusable pattern object, not a
+ * one-shot regex literal, since several functions below need their own
+ * `matchAll`/`match`/`replace` over it.
+ */
+function positionalDicePattern(): RegExp {
+  return /([a-z0-9]?)d(44|66|88)(a)?(?![a-z0-9])/gi;
 }
 
 /**
  * Resolves the project's two custom dynamic-dice helpers into plain NdX
  * notation before the rest of the pipeline (averaging / rolling) runs.
  *
- * - `1dstepdice(level, d1, d2, d3, d4)` → picks the die size based on level
- *   breakpoints (5/10/15).
+ * - `1dstepdice(level, d1, d2, d3, d4[, d5])` → picks the die size based on
+ *   level breakpoints; see {@link pickStepDiceSize} for the 4-vs-5-size
+ *   breakpoint scheme.
  * - `incrementdice(base, level)dSIDES` → increases dice count by
  *   `floor(level / 5)` on top of `base`.
  *
@@ -861,15 +1190,11 @@ function resolveDynamicDice(
   enforceLimits: boolean = true,
 ): string {
   formula = formula.replace(/1dstepdice\(([^)]+)\)/gi, (_match, args) => {
-    const [level, d1, d2, d3, d4] = args
+    const [level, ...sizes] = args
       .split(",")
       .map((v: string) => Number(v.trim()));
 
-    if (level >= 15) return `1d${d4}`;
-    if (level >= 10) return `1d${d3}`;
-    if (level >= 5) return `1d${d2}`;
-
-    return `1d${d1}`;
+    return `1d${pickStepDiceSize(level, sizes)}`;
   });
 
   formula = formula.replace(
@@ -1129,6 +1454,37 @@ export function formulaSyntaxError(formula: string): string | undefined {
 }
 
 /**
+ * Whether an inventory item's `formula` is meant to be evaluated or rolled
+ * by this engine at all.
+ *
+ * `false` for an item with no formula (nothing to roll), and `false` for
+ * `manualResolution: true` — the formula there is flavor-text shorthand
+ * for the GM to interpret by hand (e.g. "WeaponDamage + 1d4" on a magic
+ * weapon, referencing whatever weapon it's enchanting, a concept this
+ * parser has no variable for). That text is neither valid nor broken; it's
+ * simply not for the engine, so it must never reach `resolveFormulaDisplay`
+ * or a roll button.
+ *
+ * This is the single choke point a call site checks before offering a roll
+ * button or calling `resolveFormulaDisplay` on an `InventoryItem` — see the
+ * CLAUDE.md note on this being the fifth instance of a field documented in
+ * prose (`manualResolution`'s own JSDoc) that nothing actually read. A new
+ * call site that forgets to check this flag directly and instead only
+ * checks `formula` truthiness would silently regain the bug; route through
+ * here instead.
+ *
+ * @param item - An inventory item or item template — only `formula`/
+ * `manualResolution` are read, so this also accepts `BASIC_EQUIPMENTS`
+ * template entries directly.
+ */
+export function isEngineRollableItem(item: {
+  formula?: string;
+  manualResolution?: boolean;
+}): boolean {
+  return !!item.formula && !item.manualResolution;
+}
+
+/**
  * Resolves a formula to a human-readable display string for the UI,
  * substituting variables but *keeping* dice notation intact (e.g.
  * "1d8 + STR + 2" → "1d8+5"), so players see what they're about to roll.
@@ -1153,7 +1509,9 @@ export function resolveFormulaDisplay(
     f = resolveDynamicDice(f, formula);
     // Evaluate non-dice parts but keep dice notation
     // e.g. "1d8 + 2 + 1" → "1d8+3"
-    const diceMatch = f.match(/\d+d\d+/i);
+    // Positional dice (bare d44/d66/d88, optional "a") shown as-is too, same
+    // as plain NdX — never resolved to a number for display.
+    const diceMatch = f.match(/\d+d\d+|d(?:44|66|88)a?(?![a-z0-9])/i);
     if (!diceMatch) {
       const val = safeEval(f);
       // NaN here means safeEval's character whitelist rejected whatever's
@@ -1182,8 +1540,7 @@ export function resolveFormulaDisplay(
     }
 
     if (modifier === 0) return { display: dicePart };
-    if (modifier > 0) return { display: `${dicePart}+${modifier}` };
-    return { display: `${dicePart}${modifier}` }; // negative already has the sign
+    return { display: `${dicePart}${formatModifier(modifier)}` };
   } catch (err) {
     if (!(err instanceof FormulaError)) throw err;
     // A formula that violates a safety limit (dice count/sides, length)
@@ -1259,6 +1616,20 @@ export interface RollFormulaResult {
   total: number;
   isCritical: boolean;
   isFumble: boolean;
+  /**
+   * Whether the "1 = miss / max face = crit" rule can apply to this roll at
+   * all. `false` for a flat, dice-less formula (nothing to crit/fumble on)
+   * and for positional dice (`d44`/`d66`/`d88`, glossary: "these attacks do
+   * not miss or crit") — `true` for a genuine `NdX` roll. This is a property
+   * of the notation itself, not of any particular roll's outcome, which is
+   * why it lives on the result rather than being inferred by a caller from
+   * `kept` being empty (true for both "no dice" and "positional dice with
+   * their rolls collapsed", but only the former is coincidental).
+   * `isCritical`/`isFumble` are already forced `false` whenever this is
+   * `false`, so this exists to let a caller distinguish "didn't crit this
+   * roll" from "this notation can never crit", not to change that logic.
+   */
+  canCritOrFumble: boolean;
   error?: string;
 }
 
@@ -1291,6 +1662,15 @@ export function rollFormulaWithContext(
     diceNotation = parsed.diceNotation;
     modifier = parsed.modifier;
 
+    if (parsed.positional) {
+      // Positional dice roll their own fixed 2 (or 3, for the "a" variant)
+      // dice regardless of `mode`/`extraDice` — that's a property of the
+      // notation itself (see rollPositionalDice), not something the
+      // standard advantage/disadvantage-extra-dice mechanic below applies
+      // to.
+      return rollPositionalDice(parsed.positional, modifier, diceNotation);
+    }
+
     if (!diceNotation) {
       // No dice in formula, e.g. flat "+3" — return immediately,
       // there's nothing to roll.
@@ -1302,6 +1682,7 @@ export function rollFormulaWithContext(
         total: modifier,
         isCritical: false,
         isFumble: false,
+        canCritOrFumble: false,
       };
     }
 
@@ -1319,6 +1700,7 @@ export function rollFormulaWithContext(
       total: 0,
       isCritical: false,
       isFumble: false,
+      canCritOrFumble: false,
       error:
         err instanceof FormulaError
           ? err.message
@@ -1353,5 +1735,57 @@ export function rollFormulaWithContext(
   const isCritical = kept[0] === sides;
   const isFumble = kept[0] === 1;
 
-  return { diceNotation, rolls, kept, modifier, total, isCritical, isFumble };
+  return {
+    diceNotation,
+    rolls,
+    kept,
+    modifier,
+    total,
+    isCritical,
+    isFumble,
+    canCritOrFumble: true,
+  };
+}
+
+/**
+ * Rolls positional dice (`d44`/`d66`/`d88`, optional advantage variant) and
+ * reads them into a single two-digit value — see the @file header and
+ * {@link readPositionalValue}. Never critical or fumble (glossary: "these
+ * attacks do not miss or crit"), regardless of what individual faces come
+ * up, so `canCritOrFumble` is always `false` here.
+ *
+ * Non-advantage: rolls exactly 2 dice, both kept, read in roll order (first
+ * = tens, second = ones) — `[4, 5]` reads as 45, never resorted to 54.
+ *
+ * Advantage (`spec.advantage`): rolls 3, drops the single lowest (leftmost
+ * among ties — {@link indexOfLowestValue}), and reads the remaining 2
+ * *positionally in their original roll order*, not sorted. `[4, 2, 5]` drops
+ * the 2 and reads the remaining `[4, 5]` as 45, not 54.
+ *
+ * @param spec - Die size (4, 6, or 8) and whether this is the "a" variant.
+ * @param modifier - Flat modifier already resolved by {@link parseDamageFormula}.
+ * @param diceNotation - Display-ready notation (e.g. "d66a"), passed through unchanged.
+ */
+function rollPositionalDice(
+  spec: { sides: number; advantage: boolean },
+  modifier: number,
+  diceNotation: string,
+): RollFormulaResult {
+  const { sides, advantage } = spec;
+  const rolls = rollDice(advantage ? 3 : 2, sides);
+  const kept = advantage
+    ? rolls.filter((_, i) => i !== indexOfLowestValue(rolls))
+    : rolls;
+  const total = readPositionalValue(kept as [number, number]) + modifier;
+
+  return {
+    diceNotation,
+    rolls,
+    kept,
+    modifier,
+    total,
+    isCritical: false,
+    isFumble: false,
+    canCritOrFumble: false,
+  };
 }
