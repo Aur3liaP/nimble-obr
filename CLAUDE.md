@@ -693,6 +693,105 @@ below) went undetected.
     lives right next to the data it queries. Not migrated to `sourceKey`;
     would add a lookup indirection with no real problem behind it.
 
+- **Schema v4: `catalogVersion` — dev-declared staleness, never a text
+  diff.** Characters store FROZEN COPIES of catalog entries (same root
+  cause as `sourceKey` above); when the catalog is updated (as the 2nd-
+  printing batch did to ~50 spells), existing sheets keep the old text and
+  nobody is told. Comparing the copy's text against the catalog does not
+  work: descriptions are freely editable on non-custom entries, so a
+  player's own note would make an entry look "outdated" when nothing
+  actually changed — text comparison cannot tell "the book changed" apart
+  from "the player wrote something." Instead every `BASE_SPELLS`/
+  `BASIC_EQUIPMENTS` entry carries `catalogVersion: number` (contract
+  documented in both file headers, next to the `sourceKey` contract):
+  bump it by 1 whenever an entry's mechanics or text change in a way a
+  player should know about; purely cosmetic edits (typos, formatting)
+  don't require a bump, and that judgment call is the author's, made at
+  edit time — there is no mechanical test for "did this edit count" the
+  way there is for `sourceKey` presence/uniqueness. All entries started at
+  `1`. `CharacterAction.catalogVersion?`/`InventoryItem.catalogVersion?`
+  are optional copies of the template's version, set alongside `sourceKey`
+  in `catalogCopy.ts`'s `copySpellFromCatalog`/`copyItemFromCatalog` —
+  never set by `createCustomSpell`/`createCustomItem`, same invariant as
+  `sourceKey`, extended onto the same test.
+  - **`isOutdated` (`catalogCopy.ts`)** — one function, shared structurally
+    by both catalogs (no generics needed; it only reads two fields and
+    constructs nothing, so genericizing it doesn't risk the "hand-copied
+    logic drifts apart" failure mode a duplicated *construction* function
+    would). An entry is outdated only when it has BOTH a `sourceKey` and a
+    `catalogVersion`, AND the catalog entry currently matching that
+    `sourceKey` has a strictly higher `catalogVersion`. Returns `false`
+    (never throws) for: a custom entry (no `sourceKey`); a copy that
+    predates `sourceKey`/`catalogVersion` entirely and could never be
+    traced back to the catalog; and — explicitly, this is not an error
+    case — a `sourceKey` that no longer exists in the CURRENT catalog
+    (e.g. "Greater Shadow," removed in the 2nd-printing spells batch, see
+    below). There is no newer version to offer for something that's gone,
+    so it shows nothing rather than a false "outdated."
+  - **`OutdatedBadge` (`src/components/ui/common/OutdatedBadge.tsx`)** — a
+    small amber "Updated" pill, purely informational, no `onClick`; must
+    never block rolling or editing, so it's additive next to existing
+    school/tier/type badges, never a replacement or a gate. Wired into
+    `SpellsTab.SpellRow`'s existing badge row, `InventoryTab.ItemRow` (via
+    `ItemRowBase`'s new `nameExtra` prop — see below), and
+    `CombatTab.ActionRow`'s type-badge row — the three surfaces the batch
+    named. **Deliberately NOT wired into `CombatTab.InventoryFavoriteRow`**
+    (the Favorites section's minimal, explicitly read-only favorited-item
+    shortcut row — "full edit/delete lives in the Inventory tab's own
+    `ItemRow`," per its own doc comment): the task named "SpellsTab,
+    InventoryTab and CombatTab's action list," three surfaces, not
+    "everywhere an item can appear," and this row is a deliberately
+    minimal shortcut, not a fourth editable surface. `ItemRowBase` gained
+    a `nameExtra?: ReactNode` prop (rendered right after `name`, generic —
+    not a boolean flag — so the shared row shell doesn't need to know what
+    `isOutdated`/`catalogVersion` even are; that decision is entirely the
+    caller's) specifically so `InventoryTab.ItemRow` could pass the badge
+    through without `InventoryFavoriteRow` (which also builds on
+    `ItemRowBase`, but never passes `nameExtra`) picking it up for free.
+  - **`CombatTab.ActionRow` shows the badge but NEVER a reset button, by
+    construction, not by an extra guard.** `ActionRow` renders both the
+    main "Actions" list (`character.actions.filter(a => a.type !==
+    "spell")` — always non-spell, always custom, so `sourceKey` is never
+    set and `isOutdated` is always `false` there) and the Favorites
+    section's favorited spell-type actions (read-only shortcuts: rendered
+    with `isEditing={false}` and no `onUpdate`/`onEditToggle`, so no edit
+    panel — where a reset button would live — is ever rendered for them
+    regardless). The badge computation runs unconditionally in `ActionRow`
+    (harmless — `isOutdated` is cheap and just returns `false` for the
+    main list) rather than special-cased per call site.
+  - **"Reset to book version" (`resetSpellToCatalog`/`resetItemToCatalog`,
+    `catalogCopy.ts`)** — a plain overwrite from the current catalog entry,
+    as decided: no diff view, no attempt to preserve player edits.
+    Preserves only `id` and `isFavorite` (those belong to the copy, not
+    the template); everything else, including a fresh `catalogVersion`,
+    is rebuilt via `copySpellFromCatalog`/`copyItemFromCatalog` — for
+    `InventoryItem` this also means `isEquipped`/`quantity` reset to the
+    template's defaults (`false`/`1`), a deliberate reading of "everything
+    else comes from the catalog," not an oversight; the confirmation
+    dialog says so. Returns the entry UNCHANGED (never throws) if
+    `sourceKey` doesn't match anything in the catalog — defensive; the UI
+    only ever offers this action when `isOutdated` already confirmed a
+    match exists. Confirmation is a plain `window.confirm()` (no existing
+    confirm-dialog component in this codebase, and the task's own "keep it
+    simple, as decided" ruled out building one) stating plainly that edits
+    will be lost, wired into `SpellsTab.SpellRow` and `InventoryTab.ItemRow`'s
+    edit-panel footers as a `TextAction variant="neutral"`, shown only
+    when `outdated` — same `canEdit`-gated footer the delete button
+    already lives in, no separate permission check needed.
+  - **Migration (`MIGRATIONS[3]`, v3 -> v4): backfills `catalogVersion: 0`
+    on existing non-custom entries that already have a `sourceKey`.**
+    Deliberately `0`, not `1` — lower than every real catalog entry's `1`,
+    so every copy a player currently holds is immediately flagged
+    outdated. This is correct, not a bug: the 2nd-printing rewrite changed
+    most of the catalog, and this migration is the first time anyone is
+    told, for entries added before this system existed. Entries with no
+    `sourceKey` (custom, or untraceable after the v3 backfill) get no
+    `catalogVersion` either — they can never be reset, matching
+    `isOutdated`'s own "no sourceKey → false" rule. Runs after
+    `MIGRATIONS[2]` (the `sourceKey` backfill) in the same chained
+    `migrateCharacter` pass, so it correctly sees `sourceKey` values that
+    migration only just set, not ones already persisted from a prior load.
+
 - **`src/data/spells.ts` was fully rewritten against the Nimble Core Rules
   2nd printing, pp. 46-53** (the "second printing content, spells" batch),
   not just patched — every entry verified against the book, not only the
