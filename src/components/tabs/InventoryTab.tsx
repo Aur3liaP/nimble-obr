@@ -15,7 +15,7 @@ import type {
 } from "../../types/character";
 import { DiceRollModal } from "../ui/DiceRollModal";
 import { resolveFormulaDisplay, isEngineRollableItem } from "../../utils/formulaParser";
-import { copyItemFromCatalog, createCustomItem } from "../../utils/catalogCopy";
+import { copyItemFromCatalog, createCustomItem, isOutdated, resetItemToCatalog } from "../../utils/catalogCopy";
 import { BASIC_EQUIPMENTS } from "../../data/equipment";
 import { BentoSection } from "../ui/common/BentoSection";
 import { TextAction } from "../ui/common/RowActions";
@@ -25,6 +25,7 @@ import { NumericStepper } from "../ui/common/NumericStepper";
 import { ModalShell } from "../ui/common/ModalShell";
 import { FormulaField, FormulaDiscardNotice } from "../ui/common/FormulaField";
 import { ItemRowBase } from "../ui/common/ItemRowBase";
+import { OutdatedBadge } from "../ui/common/OutdatedBadge";
 import { useFormulaField } from "../../hooks/useFormulaField";
 import { useSearchFilter } from "../../hooks/useSearchFilter";
 import type { UndoableArrayKey } from "../../hooks/useDeleteUndo";
@@ -714,6 +715,29 @@ function ItemRow({
     ? { display: item.formula ?? "", error: undefined }
     : resolveFormulaDisplay(item.formula ?? "", character);
 
+  // Version comparison only, never text — see isOutdated's own doc for
+  // why a freely-editable description can't be diffed against the
+  // catalog to detect this.
+  const outdated = isOutdated(item, BASIC_EQUIPMENTS);
+
+  /**
+   * "Reset to book version": a plain overwrite from the current catalog
+   * entry, confirmed first since it discards any edits — no diff view, no
+   * attempt to preserve player notes, as decided. Preserves id/isFavorite
+   * only (see resetItemToCatalog); everything else, including
+   * isEquipped/quantity, resets to the template's defaults.
+   */
+  const handleResetToCatalog = () => {
+    if (
+      !window.confirm(
+        `Reset "${item.name}" to the current book version? Any edits you've made to this item (including quantity and equipped state) will be lost.`,
+      )
+    ) {
+      return;
+    }
+    onUpdate(resetItemToCatalog(item, BASIC_EQUIPMENTS));
+  };
+
   const editPanel = isEditing ? (
     <div className="px-3 pb-3 border-t border-emerald-800/30 pt-2 flex flex-col gap-2">
       <FormField
@@ -756,7 +780,16 @@ function ItemRow({
         </div>
       </GridFields>
       <div className="flex justify-between items-center mt-1">
-        <TextAction onClick={onDelete} label="Remove item" variant="danger" />
+        <div className="flex items-center gap-3">
+          <TextAction onClick={onDelete} label="Remove item" variant="danger" />
+          {outdated && (
+            <TextAction
+              onClick={handleResetToCatalog}
+              label="Reset to book version"
+              variant="neutral"
+            />
+          )}
+        </div>
         <TextAction
           onClick={() => {
             formulaField.closeEdit();
@@ -772,6 +805,7 @@ function ItemRow({
   return (
     <ItemRowBase
       name={item.name}
+      nameExtra={outdated ? <OutdatedBadge /> : undefined}
       icon={item.isArmor ? "🛡" : undefined}
       formula={resolvedFormula}
       formulaError={formulaError}

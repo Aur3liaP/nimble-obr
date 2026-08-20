@@ -29,6 +29,14 @@ import { RowDescriptionPanel } from "./RowDescriptionPanel";
 interface ItemRowBaseProps {
   /** Item/action name shown in bold. */
   name: string;
+  /**
+   * Extra content rendered immediately after `name` on the same line —
+   * currently only used for `OutdatedBadge`. Kept generic (`ReactNode`,
+   * not a boolean flag) so this shell doesn't need to know what
+   * `isOutdated`/`catalogVersion` are; that decision is entirely the
+   * caller's.
+   */
+  nameExtra?: ReactNode;
   /** Small emoji/icon shown before the name (e.g. "🎒", "🛡"). */
   icon?: string;
   /** Resolved formula string shown in amber monospace, if any. */
@@ -76,6 +84,7 @@ interface ItemRowBaseProps {
  */
 export function ItemRowBase({
   name,
+  nameExtra,
   icon,
   formula,
   formulaError,
@@ -109,9 +118,12 @@ export function ItemRowBase({
         >
           {icon && <span className="shrink-0">{icon}</span>}
           <div className="flex-1 min-w-0">
-            <span className="text-xs font-semibold text-stone-200 truncate block">
-              {name}
-            </span>
+            <div className="flex items-center gap-1.5">
+              <span className="text-xs font-semibold text-stone-200 truncate">
+                {name}
+              </span>
+              {nameExtra}
+            </div>
             {formula && (
               <span
                 className={`text-[10px] font-mono ${

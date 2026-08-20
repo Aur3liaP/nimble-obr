@@ -17,8 +17,9 @@ import type {
 } from "../../types/character";
 import { DiceRollModal } from "../ui/DiceRollModal";
 import { resolveFormulaDisplay } from "../../utils/formulaParser";
-import { copySpellFromCatalog, createCustomSpell } from "../../utils/catalogCopy";
+import { copySpellFromCatalog, createCustomSpell, isOutdated, resetSpellToCatalog } from "../../utils/catalogCopy";
 import { BASE_SPELLS } from "../../data/spells";
+import { OutdatedBadge } from "../ui/common/OutdatedBadge";
 import { BentoSection } from "../ui/common/BentoSection";
 import { FavoriteButton } from "../ui/common/FavoriteButton";
 import { RollButton } from "../ui/common/RollButton";
@@ -766,6 +767,29 @@ function SpellRow({
     onUpdate({ formula: v }),
   );
 
+  // Version comparison only, never text — see isOutdated's own doc for
+  // why a freely-editable description can't be diffed against the
+  // catalog to detect this.
+  const outdated = isOutdated(spell, BASE_SPELLS);
+
+  /**
+   * "Reset to book version": a plain overwrite from the current catalog
+   * entry, confirmed first since it discards any edits — no diff view, no
+   * attempt to preserve player notes, as decided. Preserves id/isFavorite
+   * only (see resetSpellToCatalog); everything else resets to the
+   * template's current text.
+   */
+  const handleResetToCatalog = () => {
+    if (
+      !window.confirm(
+        `Reset "${spell.name}" to the current book version? Any edits you've made to this spell will be lost.`,
+      )
+    ) {
+      return;
+    }
+    onUpdate(resetSpellToCatalog(spell, BASE_SPELLS));
+  };
+
   return (
     <div
       className={`rounded-lg border overflow-hidden transition-colors ${
@@ -801,6 +825,7 @@ function SpellRow({
                 ✦{spell.manaCost}
               </span>
             )}
+            {outdated && <OutdatedBadge />}
           </div>
           <div className="flex items-center gap-3 mt-0.5">
             <RowMeta range={spell.range} actionCost={spell.actionCost} />
@@ -919,11 +944,20 @@ function SpellRow({
             rows={3}
           />
           <div className="flex justify-between items-center mt-1">
-            <TextAction
-              onClick={onDelete}
-              label="Remove spell"
-              variant="danger"
-            />
+            <div className="flex items-center gap-3">
+              <TextAction
+                onClick={onDelete}
+                label="Remove spell"
+                variant="danger"
+              />
+              {outdated && (
+                <TextAction
+                  onClick={handleResetToCatalog}
+                  label="Reset to book version"
+                  variant="neutral"
+                />
+              )}
+            </div>
             <TextAction
               onClick={() => {
                 formulaField.closeEdit();

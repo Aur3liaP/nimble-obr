@@ -23,6 +23,8 @@ import { resolveFormulaDisplay, isEngineRollableItem } from "../../utils/formula
 import { initiativeToActions } from "../../utils/initiative";
 import { formatModifier } from "../../utils/formatModifier";
 import { computeDefense } from "../../utils/computeDefense";
+import { isOutdated } from "../../utils/catalogCopy";
+import { BASE_SPELLS } from "../../data/spells";
 import { BentoSection } from "../ui/common/BentoSection";
 import { InlineNumberField } from "../ui/common/InlineEditField";
 import { FavoriteButton } from "../ui/common/FavoriteButton";
@@ -34,6 +36,7 @@ import { FormField, GridFields } from "../ui/common/FormField";
 import { DraggableBar } from "../ui/common/DraggableBar";
 import { ItemRowBase } from "../ui/common/ItemRowBase";
 import { FormulaField, FormulaDiscardNotice } from "../ui/common/FormulaField";
+import { OutdatedBadge } from "../ui/common/OutdatedBadge";
 import { useDraggableValue } from "../../hooks/useDraggableValue";
 import { useFormulaField } from "../../hooks/useFormulaField";
 import type { UndoableArrayKey } from "../../hooks/useDeleteUndo";
@@ -794,6 +797,14 @@ function ActionRow({
     onUpdate?.({ formula: v }),
   );
 
+  // Version comparison only, never text — see isOutdated's own doc. Only
+  // ever true for a favorited spell shown here as a read-only shortcut
+  // (see this row's own doc comment): non-spell actions rendered here are
+  // always custom, so they never carry a sourceKey to begin with. No
+  // reset button in this row's edit panel either way — this row's edit
+  // panel only ever renders for the custom, never-outdated case.
+  const outdated = isOutdated(action, BASE_SPELLS);
+
   const handleHeaderClick = () => {
     if (isEditing) {
       onEditToggle?.();
@@ -826,6 +837,7 @@ function ActionRow({
             >
               {action.type}
             </span>
+            {outdated && <OutdatedBadge />}
           </div>
           <div className="flex items-center gap-3 mt-0.5">
             <RowMeta range={action.range} actionCost={action.actionCost} />
