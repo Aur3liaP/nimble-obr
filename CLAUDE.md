@@ -792,6 +792,58 @@ below) went undetected.
     `migrateCharacter` pass, so it correctly sees `sourceKey` values that
     migration only just set, not ones already persisted from a prior load.
 
+- **Schema v5: `InventoryItem.category` — authored, never guessed, and
+  required.** Replaces `guessCategory`, a UI-only heuristic that used to
+  live in `InventoryTab.tsx` and infer a display category (for the "Add
+  Item" filter pills and icon) from proxy signals: `isArmor`, `slots ===
+  0.5`, `"potion"` in the name, `actionCost && formula`. Two bugs came
+  from that: (1) a potion is shaped like both a weapon (`actionCost` +
+  `formula`) and a consumable (`slots === 0.5`) — `guessCategory` checked
+  consumable first so the category filter was right, but the "Add Item"
+  icon picker (a second, independently-ordered copy of the same checks)
+  checked the weapon shape first, so potions rendered a sword icon in the
+  consumables list; (2) a `slots: 1`, formula-less single-use item like
+  "Medical Kit (1 use)" or "Torch" matched none of the proxy signals at
+  all and fell through to "gear", with no way to fix that short of
+  changing what the item's `slots`/`formula` actually are. `EquipmentCategory`
+  (`"weapon" | "armor" | "consumable" | "gear"`, `types/character.ts`) is
+  now a required field on `InventoryItem`, authored per entry in
+  `BASIC_EQUIPMENTS` (see `equipment.ts`'s file header for the contract,
+  right next to `sourceKey`/`catalogVersion`) instead of derived at a read
+  site. `InventoryTab.tsx` now has a single `CATEGORY_ICON` map
+  (`Record<EquipmentCategory, string>`) read directly off `item.category`
+  for both the filter and the icon — same source, so the two can no
+  longer disagree with each other the way the two heuristics did.
+  `copyItemFromCatalog`/`createCustomItem` (`catalogCopy.ts`) carry
+  `category` through the same way they already carry `sourceKey`/
+  `catalogVersion`/`isArmor`, except `category` is also set on a CUSTOM
+  item (via a "Category" `<select>` on `AddItemModal`'s custom-item form,
+  defaulting to `"gear"`) — unlike `sourceKey`/`catalogVersion`, which are
+  catalog-exclusive, `category` is required on every `InventoryItem`
+  regardless of where it came from.
+  - **Migration (`MIGRATIONS[4]`, v4 -> v5): backfills `category` on every
+    `inventory` entry.** A non-custom entry with a `sourceKey` matching a
+    current `BASIC_EQUIPMENTS` entry takes that entry's current
+    `category` (matched by `sourceKey`, never by `name`, reusing the same
+    collision-safe identity the v2 -> v3 migration already established —
+    no new collision table needed). Everything else — a custom item, a
+    non-custom item with no `sourceKey`, or a `sourceKey` that no longer
+    matches anything (a retired catalog entry) — defaults to `"gear"`,
+    the same catch-all `guessCategory` used to fall back to, now made an
+    explicit, permanent decision instead of a guess recomputed on every
+    render. Only `inventory` needed this migration: `CharacterAction`
+    (spells/actions) has no equivalent display-category concept.
+  - **`catalogVersion` bumped on "Medical Kit (1 use)", "Torch", "Vial of
+    Pitch", and "Ball of Spiders"** (1 → 2) when this field was added —
+    the four entries whose authored `category` (`"consumable"`) differs
+    from what the OLD heuristic would have produced (`"gear"` for all
+    four, since none of them carry a `formula`, so neither the
+    `slots === 0.5`/potion-name check nor the `actionCost && formula`
+    weapon check ever matched). A player already holding one of these
+    sees the "outdated" badge once. No other entry's heuristic-guessed
+    category would have differed from its authored one, so no other
+    `catalogVersion` was bumped for this change.
+
 - **`src/data/spells.ts` was fully rewritten against the Nimble Core Rules
   2nd printing, pp. 46-53** (the "second printing content, spells" batch),
   not just patched — every entry verified against the book, not only the

@@ -131,12 +131,40 @@ describe("createCustomSpell", () => {
   });
 });
 
+describe("BASIC_EQUIPMENTS.category — catalog invariant", () => {
+  const VALID_CATEGORIES = ["weapon", "armor", "consumable", "gear"];
+
+  it("every BASIC_EQUIPMENTS entry has one of the four valid categories", () => {
+    const offenders = BASIC_EQUIPMENTS.filter(
+      (e) => !VALID_CATEGORIES.includes(e.category),
+    ).map((e) => `${e.name} :: category=${e.category}`);
+    expect(offenders).toEqual([]);
+  });
+
+  it("Medical Kit (1 use) and Torch are consumable, not gear (regression: the old heuristic missed both)", () => {
+    const medicalKit = BASIC_EQUIPMENTS.find((e) => e.sourceKey === "medical-kit-1-use");
+    const torch = BASIC_EQUIPMENTS.find((e) => e.sourceKey === "torch");
+    expect(medicalKit?.category).toBe("consumable");
+    expect(torch?.category).toBe("consumable");
+  });
+
+  it("a representative armor, weapon, and gear entry each carry the expected category", () => {
+    const garb = BASIC_EQUIPMENTS.find((e) => e.sourceKey === "adventurers-garb");
+    const dagger = BASIC_EQUIPMENTS.find((e) => e.sourceKey === "dagger");
+    const rope = BASIC_EQUIPMENTS.find((e) => e.sourceKey === "rope-50-ft");
+    expect(garb?.category).toBe("armor");
+    expect(dagger?.category).toBe("weapon");
+    expect(rope?.category).toBe("gear");
+  });
+});
+
 describe("copyItemFromCatalog", () => {
-  it("carries sourceKey and catalogVersion from the template for every real equipment entry", () => {
+  it("carries sourceKey, catalogVersion, and category from the template for every real equipment entry", () => {
     for (const template of BASIC_EQUIPMENTS) {
       const copy = copyItemFromCatalog(template);
       expect(copy.sourceKey).toBe(template.sourceKey);
       expect(copy.catalogVersion).toBe(template.catalogVersion);
+      expect(copy.category).toBe(template.category);
       expect(copy.isCustom).toBe(false);
     }
   });
@@ -163,6 +191,7 @@ describe("createCustomItem", () => {
     formula: "",
     isFavorite: false,
     isArmor: false,
+    category: "gear",
   };
 
   it("never sets sourceKey or catalogVersion, even though the shape allows both", () => {
@@ -186,6 +215,12 @@ describe("createCustomItem", () => {
 
   it("stores an empty formula as undefined, not an empty string", () => {
     expect(createCustomItem(form).formula).toBeUndefined();
+  });
+
+  it("carries category from the form, unlike sourceKey/catalogVersion which are never set on a custom item", () => {
+    expect(createCustomItem({ ...form, category: "consumable" }).category).toBe(
+      "consumable",
+    );
   });
 });
 
@@ -298,6 +333,7 @@ describe("resetItemToCatalog", () => {
       isEquipped: false,
       isFavorite: false,
       isCustom: false,
+      category: "gear",
       sourceKey: "does-not-exist",
       catalogVersion: 0,
     };

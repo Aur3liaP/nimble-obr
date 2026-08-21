@@ -104,6 +104,7 @@ describe("computeDefense — breakdown string with a negative stat and a negativ
           quantity: 1,
           isEquipped: true,
           isArmor: true,
+          category: "armor",
           formula: "3+NOTAREALVARIABLE",
         },
       ],
