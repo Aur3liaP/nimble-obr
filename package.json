@@ -11,7 +11,8 @@
     "type-check": "tsc --noEmit",
     "test": "vitest run",
     "test:watch": "vitest",
-    "test:coverage": "vitest run --coverage"
+    "test:coverage": "vitest run --coverage",
+    "measure:room-metadata": "node scripts/run-measure-room-metadata.mjs"
   },
   "dependencies": {
     "@owlbear-rodeo/sdk": "^3.1.0",
