@@ -1457,13 +1457,18 @@ export function formulaSyntaxError(formula: string): string | undefined {
  * Whether an inventory item's `formula` is meant to be evaluated or rolled
  * by this engine at all.
  *
- * `false` for an item with no formula (nothing to roll), and `false` for
+ * `false` for an item with no formula (nothing to roll), `false` for
  * `manualResolution: true` — the formula there is flavor-text shorthand
  * for the GM to interpret by hand (e.g. "WeaponDamage + 1d4" on a magic
  * weapon, referencing whatever weapon it's enchanting, a concept this
- * parser has no variable for). That text is neither valid nor broken; it's
- * simply not for the engine, so it must never reach `resolveFormulaDisplay`
- * or a roll button.
+ * parser has no variable for) — and `false` for `isArmor: true`. Armor's
+ * `formula` (e.g. "2 + DEX") isn't a rollable value at all, it's the input
+ * `computeDefense` (`computeDefense.ts`) evaluates to derive Defense; a
+ * roll button on an armor row invited rolling "damage" for a piece of
+ * clothing. `computeDefense` doesn't go through this function (it reads
+ * `armorItem.formula` directly via `evalFormula`/`substituteVariables`),
+ * so excluding armor here only removes the roll button/display path, not
+ * Defense computation.
  *
  * This is the single choke point a call site checks before offering a roll
  * button or calling `resolveFormulaDisplay` on an `InventoryItem` — see the
@@ -1474,14 +1479,15 @@ export function formulaSyntaxError(formula: string): string | undefined {
  * here instead.
  *
  * @param item - An inventory item or item template — only `formula`/
- * `manualResolution` are read, so this also accepts `BASIC_EQUIPMENTS`
- * template entries directly.
+ * `manualResolution`/`isArmor` are read, so this also accepts
+ * `BASIC_EQUIPMENTS` template entries directly.
  */
 export function isEngineRollableItem(item: {
   formula?: string;
   manualResolution?: boolean;
+  isArmor?: boolean;
 }): boolean {
-  return !!item.formula && !item.manualResolution;
+  return !!item.formula && !item.manualResolution && !item.isArmor;
 }
 
 /**

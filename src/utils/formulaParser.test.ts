@@ -1780,7 +1780,7 @@ describe("InventoryItem.manualResolution is honored by the roll path (isEngineRo
 
   it("a normal equipment entry with a real formula is still treated as rollable (sanity check the flag isn't over-broad)", () => {
     const normalRollable = BASIC_EQUIPMENTS.find(
-      (e) => !e.manualResolution && e.formula,
+      (e) => !e.manualResolution && !e.isArmor && e.formula,
     );
     expect(normalRollable).toBeDefined();
     expect(isEngineRollableItem(normalRollable!)).toBe(true);
@@ -1789,6 +1789,20 @@ describe("InventoryItem.manualResolution is honored by the roll path (isEngineRo
   it("an item with no formula at all is non-rollable regardless of manualResolution", () => {
     expect(isEngineRollableItem({ formula: "", manualResolution: false })).toBe(false);
     expect(isEngineRollableItem({ manualResolution: false })).toBe(false);
+  });
+
+  it("every isArmor equipment entry is treated as non-rollable, even though armor carries a real formula", () => {
+    const armorEntries = BASIC_EQUIPMENTS.filter((e) => e.isArmor);
+    expect(armorEntries.length).toBeGreaterThan(0);
+    // Sanity check: armor entries do carry a formula (it's what
+    // computeDefense evaluates) — the exclusion below must be driven by
+    // isArmor, not by these entries happening to have no formula.
+    expect(armorEntries.every((e) => !!e.formula)).toBe(true);
+
+    const offenders = armorEntries
+      .filter((e) => isEngineRollableItem(e))
+      .map((e) => e.name);
+    expect(offenders).toEqual([]);
   });
 });
 

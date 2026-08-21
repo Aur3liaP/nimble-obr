@@ -737,7 +737,7 @@ describe("migrateCharacter — v3 -> v4 (catalogVersion backfill)", () => {
     const result = migrateCharacter(v3);
     expect(result.status).toBe("ok");
     if (result.status !== "ok") return;
-    expect(result.character.schemaVersion).toBe(4);
+    expect(result.character.schemaVersion).toBe(CURRENT_SCHEMA_VERSION);
     for (const item of result.character.inventory) {
       expect((item as unknown as Record<string, unknown>).catalogVersion).toBe(0);
     }
@@ -795,6 +795,148 @@ describe("migrateCharacter — v3 -> v4 (catalogVersion backfill)", () => {
     expect(
       (result.character.inventory[0] as unknown as Record<string, unknown>).catalogVersion,
     ).toBeUndefined();
+  });
+});
+
+describe("migrateCharacter — v4 -> v5 (category backfill)", () => {
+  // Fixtures start at schemaVersion 4 to isolate MIGRATIONS[4], same
+  // reasoning as the v3 -> v4 block above.
+
+  function migrateOneItemV4(item: Record<string, unknown>): Record<string, unknown> {
+    const base = createDefaultCharacter("token-1", "owner-1") as unknown as Record<string, unknown>;
+    const v4 = { ...base, schemaVersion: 4, inventory: [item] };
+    const result = migrateCharacter(v4);
+    expect(result.status).toBe("ok");
+    if (result.status !== "ok") throw new Error("expected migration to succeed");
+    return (result.character.inventory as unknown as Record<string, unknown>[])[0];
+  }
+
+  it("a non-custom item with a sourceKey takes that catalog entry's current category", () => {
+    const migrated = migrateOneItemV4({
+      id: "i1",
+      name: "Longsword",
+      description: "",
+      slots: 1,
+      quantity: 1,
+      isEquipped: false,
+      isCustom: false,
+      sourceKey: "longsword",
+      catalogVersion: 0,
+    });
+    expect(migrated.category).toBe("weapon");
+  });
+
+  it("a custom item defaults to gear, regardless of any other field", () => {
+    const migrated = migrateOneItemV4({
+      id: "i1",
+      name: "Homebrew Trinket",
+      description: "",
+      slots: 1,
+      quantity: 1,
+      isEquipped: false,
+      isCustom: true,
+    });
+    expect(migrated.category).toBe("gear");
+  });
+
+  it("a non-custom item with no sourceKey (untraceable to the catalog) defaults to gear", () => {
+    const migrated = migrateOneItemV4({
+      id: "i1",
+      name: "Old Rusty Blade",
+      description: "",
+      slots: 1,
+      quantity: 1,
+      isEquipped: false,
+      isCustom: false,
+      // no sourceKey — predates sourceKey and could never be traced
+    });
+    expect(migrated.category).toBe("gear");
+  });
+
+  it("a non-custom item whose sourceKey no longer matches any catalog entry defaults to gear, same as an untraceable one", () => {
+    const migrated = migrateOneItemV4({
+      id: "i1",
+      name: "Grandpa's Locket",
+      description: "",
+      slots: 1,
+      quantity: 1,
+      isEquipped: false,
+      isCustom: false,
+      sourceKey: "does-not-exist-in-catalog",
+    });
+    expect(migrated.category).toBe("gear");
+  });
+
+  it("regression fixture: Medical Kit (1 use) and Torch — both miscategorized as gear by the old heuristic — backfill to consumable via sourceKey", () => {
+    const medicalKit = migrateOneItemV4({
+      id: "i1",
+      name: "Medical Kit (1 use)",
+      description: "Recover 1 Wound during a Field Rest.",
+      slots: 1,
+      quantity: 1,
+      isEquipped: false,
+      isCustom: false,
+      sourceKey: "medical-kit-1-use",
+    });
+    const torch = migrateOneItemV4({
+      id: "i2",
+      name: "Torch",
+      description: "Range 6. Lasts for 1 dungeon. Needs 1 free hand.",
+      slots: 0.5,
+      quantity: 1,
+      isEquipped: false,
+      isCustom: false,
+      sourceKey: "torch",
+    });
+    expect(medicalKit.category).toBe("consumable");
+    expect(torch.category).toBe("consumable");
+  });
+
+  it("a character holding a mix — catalog-matched, untraceable, and custom — resolves each independently", () => {
+    const base = createDefaultCharacter("token-1", "owner-1") as unknown as Record<string, unknown>;
+    const v4 = {
+      ...base,
+      schemaVersion: 4,
+      inventory: [
+        {
+          id: "i1",
+          name: "Longsword",
+          description: "",
+          slots: 1,
+          quantity: 1,
+          isEquipped: false,
+          isCustom: false,
+          sourceKey: "longsword",
+        },
+        {
+          id: "i2",
+          name: "Old Rusty Blade",
+          description: "",
+          slots: 1,
+          quantity: 1,
+          isEquipped: false,
+          isCustom: false,
+          // no sourceKey
+        },
+        {
+          id: "i3",
+          name: "Grandpa's Locket",
+          description: "",
+          slots: 1,
+          quantity: 1,
+          isEquipped: false,
+          isCustom: true,
+        },
+      ],
+    };
+    const result = migrateCharacter(v4);
+    expect(result.status).toBe("ok");
+    if (result.status !== "ok") return;
+
+    const [longsword, oldBlade, locket] = result.character.inventory;
+    expect(longsword.category).toBe("weapon");
+    expect(oldBlade.category).toBe("gear");
+    expect(locket.category).toBe("gear");
   });
 });
 
