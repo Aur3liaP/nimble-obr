@@ -164,6 +164,31 @@ export interface CharacterAction {
   catalogVersion?: number;
 }
 
+/**
+ * Coarse display category for an inventory item — which "Add Item" filter
+ * pill it belongs under, and which icon it renders with. Purely a display
+ * concern, unrelated to `isArmor` (which is what actually drives Defense
+ * eligibility and roll-button gating; see `computeDefense.ts` and
+ * `isEngineRollableItem` in `formulaParser.ts`) — an item can be
+ * `category: "armor"` and `isArmor: true` at the same time (every real
+ * armor entry is both), but nothing reads `category` to decide either of
+ * those behaviors.
+ *
+ * Authored per entry in {@link InventoryItem.category}'s catalog source,
+ * `BASIC_EQUIPMENTS` (`equipment.ts`) — never guessed from other fields.
+ * An earlier version of this app inferred category from proxy signals
+ * (slots === 0.5, "potion" in the name, actionCost + formula) via a
+ * `guessCategory` heuristic in `InventoryTab.tsx`; that heuristic and a
+ * second, independently-ordered copy of the same checks in the icon
+ * picker disagreed with each other (a potion has both a formula+actionCost,
+ * which looks like a weapon, AND slots === 0.5, which looks like a
+ * consumable — whichever check ran first won), and it had no way to
+ * classify a slots=1, formula-less single-use item like "Medical Kit
+ * (1 use)" at all. Explicit, authored data can't drift out of sync with
+ * itself the way two hand-written heuristics did.
+ */
+export type EquipmentCategory = "weapon" | "armor" | "consumable" | "gear";
+
 export interface InventoryItem {
   id: string;
   name: string;
@@ -176,6 +201,15 @@ export interface InventoryItem {
   isCustom?: boolean;
   /** If true, this item can be selected as worn armor in the defense calculation */
   isArmor?: boolean;
+  /**
+   * Display category — see {@link EquipmentCategory}'s own doc. Required:
+   * every item must have an opinion here, backfilled to `"gear"` on
+   * migration for anything that can't be traced back to a catalog entry
+   * (custom items, or a catalog copy predating this field). Never guess
+   * this from other fields at a read site — if a future item shape needs
+   * a category, add it here at construction time.
+   */
+  category: EquipmentCategory;
   actionCost?: number;
   /**
    * If true, `formula` is flavor-text shorthand for the GM to interpret
@@ -289,7 +323,7 @@ export const METADATA_KEY = "com.nimble-obr.nimble/character_sheet";
  * needs transforming to match. See that file's header for the full
  * procedure.
  */
-export const CURRENT_SCHEMA_VERSION = 4;
+export const CURRENT_SCHEMA_VERSION = 5;
 
 /**
  * Highest level a character can be set to.

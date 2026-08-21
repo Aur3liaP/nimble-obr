@@ -381,6 +381,37 @@ function backfillActionCatalogVersion(action: unknown): unknown {
 }
 
 /**
+ * Backfills `category` ({@link EquipmentCategory}, `types/character.ts`)
+ * on one raw `inventory` array element. Part of `MIGRATIONS[4]` (v4 -> v5).
+ *
+ * Unlike `sourceKey`/`catalogVersion`, `category` is REQUIRED on
+ * `InventoryItem` — every item must end up with one, not just
+ * catalog-traceable ones:
+ * - A non-custom entry with a `sourceKey` matching a current
+ *   `BASIC_EQUIPMENTS` entry takes THAT entry's current `category`
+ *   (matched by `sourceKey`, never by `name` — same reasoning as
+ *   `resolveEquipmentTemplate`, and the reason this doesn't need its own
+ *   collision table: it reuses `sourceKey`, which the v2 -> v3 migration
+ *   already resolved collision-safely).
+ * - Everything else (a custom item, a non-custom item with no `sourceKey`,
+ *   or a `sourceKey` that no longer matches anything — e.g. a retired
+ *   catalog entry) defaults to `"gear"`, the same catch-all the old
+ *   `guessCategory` UI heuristic fell back to for anything it couldn't
+ *   otherwise classify — now made an explicit, permanent decision instead
+ *   of a guess re-computed on every render.
+ *
+ * @param item - One raw `inventory` array element, of unknown shape.
+ */
+function backfillInventoryCategory(item: unknown): unknown {
+  if (!isPlainObject(item)) return item;
+  const sourceKey = typeof item.sourceKey === "string" ? item.sourceKey : undefined;
+  const template = sourceKey
+    ? BASIC_EQUIPMENTS.find((e) => e.sourceKey === sourceKey)
+    : undefined;
+  return { ...item, category: template?.category ?? "gear" };
+}
+
+/**
  * Ordered migrations, one function per schema version transition.
  * `MIGRATIONS[i]` moves a record from version `i` to version `i + 1`. See
  * the file header for the procedure to append to this list.
@@ -531,6 +562,39 @@ const MIGRATIONS: Migration[] = [
       : character.inventory;
 
     return { ...character, actions, inventory };
+  },
+
+  // v4 -> v5: backfills `category` (EquipmentCategory — types/character.ts)
+  // onto every `inventory` entry — see backfillInventoryCategory above for
+  // the full contract (catalog-matched by sourceKey for a traceable
+  // non-custom item, "gear" for everything else).
+  //
+  // This replaces a UI-only heuristic (`guessCategory`, formerly in
+  // `InventoryTab.tsx`) that inferred a display category from proxy
+  // signals (isArmor, slots === 0.5, "potion" in the name, actionCost +
+  // formula) instead of storing one. That heuristic, and a second,
+  // independently-ordered copy of the same checks in the "Add Item" icon
+  // picker, disagreed with each other: a potion is shaped like both a
+  // weapon (actionCost + formula) and a consumable (slots === 0.5), so
+  // whichever check happened to run first won — the icon picker checked
+  // the weapon shape first, so potions rendered a sword icon in the
+  // consumables list. The heuristic also had no way to classify a
+  // slots=1, formula-less single-use item like "Medical Kit (1 use)" at
+  // all, so it fell through to "gear". `category` is now authored per
+  // catalog entry instead (see equipment.ts's file header), so an
+  // existing character's frozen inventory copies need this migration to
+  // catch up — same "frozen copy, catalog moved on" situation as every
+  // other backfill in this file.
+  //
+  // Only `inventory` needed this: `CharacterAction` (spells/actions) has
+  // no equivalent display-category concept and was never affected by the
+  // heuristic this replaces.
+  (character) => {
+    const inventory = Array.isArray(character.inventory)
+      ? character.inventory.map(backfillInventoryCategory)
+      : character.inventory;
+
+    return { ...character, inventory };
   },
 ];
 

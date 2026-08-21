@@ -12,6 +12,7 @@ import type {
   NimbleCharacter,
   InventoryItem,
   DiceRollRequest,
+  EquipmentCategory,
 } from "../../types/character";
 import { DiceRollModal } from "../ui/DiceRollModal";
 import { resolveFormulaDisplay, isEngineRollableItem } from "../../utils/formulaParser";
@@ -51,8 +52,8 @@ interface Props {
   onDeleteEntry: (arrayKey: UndoableArrayKey, id: string) => Promise<void>;
 }
 
-/** Coarse category used only for filtering the "Add Item" list view (not persisted on the item itself). */
-type ItemCategory = "all" | "armor" | "weapon" | "consumable" | "gear";
+/** The "Add Item" list view's category filter: every {@link EquipmentCategory}, plus "all". */
+type ItemCategory = "all" | EquipmentCategory;
 
 /** Which sub-view the "Add Item" modal is showing: browsing the official list, or filling a custom-item form. */
 type AddMode = "list" | "custom";
@@ -83,27 +84,6 @@ function slotLabel(slots: number): string {
 }
 
 /**
- * Heuristically infers a display category for an official equipment
- * template, since {@link BASIC_EQUIPMENTS} doesn't store one explicitly.
- * Used only to populate the category filter in the "Add Item" list view.
- *
- * @param item - An equipment template from {@link BASIC_EQUIPMENTS}.
- * @returns "armor" if flagged as armor, "consumable" for potion-like/half-slot
- * items, "weapon" if it has both an action cost and a damage formula,
- * otherwise "gear".
- */
-function guessCategory(item: (typeof BASIC_EQUIPMENTS)[0]): ItemCategory {
-  if (item.isArmor) return "armor";
-  if (
-    item.formula &&
-    (item.name.toLowerCase().includes("potion") || item.slots === 0.5)
-  )
-    return "consumable";
-  if (item.actionCost && item.formula) return "weapon";
-  return "gear";
-}
-
-/**
  * Text fields {@link useSearchFilter} searches for both the equipment
  * picker ({@link BASIC_EQUIPMENTS}) and the character's own inventory list.
  * Declared at module scope so it has a stable identity across renders
@@ -114,18 +94,20 @@ const ITEM_SEARCH_FIELDS = (item: { name: string; description?: string }) => [
   item.description,
 ];
 
-/** Returns an emoji icon for an item based on its armor/weapon/consumable/gear shape. */
-function itemIcon(item: {
-  isArmor?: boolean;
-  actionCost?: number;
-  formula?: string;
-  slots: number;
-}): string {
-  if (item.isArmor) return "🛡";
-  if (item.actionCost && item.formula) return "⚔️";
-  if (item.slots === 0.5) return "🧪";
-  return "🎒";
-}
+/**
+ * Emoji icon per {@link EquipmentCategory} — same source of truth as
+ * {@link CATEGORY_LABELS}'s emoji, kept as a single map so the "Add Item"
+ * list's icon always matches the category filter pill an item is actually
+ * listed under. Previously an independently-ordered set of shape checks
+ * (weapon-shaped before consumable-shaped), which is why a potion — shaped
+ * like both — rendered the weapon icon.
+ */
+const CATEGORY_ICON: Record<EquipmentCategory, string> = {
+  armor: "🛡",
+  weapon: "⚔️",
+  consumable: "🧪",
+  gear: "🎒",
+};
 
 // ── AddItemModal ──────────────────────────────────────────────────
 /**
@@ -156,6 +138,7 @@ function AddItemModal({
     formula: "",
     isFavorite: false,
     isArmor: false,
+    category: "gear" as EquipmentCategory,
   });
   const setF = (k: string, v: string | number | boolean) =>
     setForm((p) => ({ ...p, [k]: v }));
@@ -173,7 +156,7 @@ function AddItemModal({
   const filteredBase = useMemo(
     () =>
       searchedBase.filter(
-        (item) => filterCat === "all" || guessCategory(item) === filterCat,
+        (item) => filterCat === "all" || item.category === filterCat,
       ),
     [searchedBase, filterCat],
   );
@@ -296,7 +279,7 @@ function AddItemModal({
                 className="flex items-start gap-2 px-2.5 py-2 rounded-lg border border-stone-700/40 bg-stone-900/40 hover:bg-emerald-950/30 hover:border-emerald-700/40 transition-all text-left w-full group"
               >
                 <span className="mt-0.5 text-sm shrink-0">
-                  {itemIcon(item)}
+                  {CATEGORY_ICON[item.category]}
                 </span>
                 <div className="flex-1 min-w-0">
                   <div className="flex items-center gap-1.5 flex-wrap">

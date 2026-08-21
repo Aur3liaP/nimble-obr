@@ -32,7 +32,7 @@
  *   catalog, since each has to call its own type-specific copy function.
  */
 
-import type { CharacterAction, InventoryItem, SpellSchool } from "../types/character";
+import type { CharacterAction, EquipmentCategory, InventoryItem, SpellSchool } from "../types/character";
 import type { BASE_SPELLS } from "../data/spells";
 import type { BASIC_EQUIPMENTS } from "../data/equipment";
 
@@ -122,6 +122,7 @@ export function copyItemFromCatalog(template: ItemTemplate): InventoryItem {
     isFavorite: false,
     isCustom: false,
     isArmor: template.isArmor ?? false,
+    category: template.category,
     formula: template.formula,
     manualResolution: template.manualResolution,
     sourceKey: template.sourceKey,
@@ -138,12 +139,17 @@ export interface CustomItemForm {
   formula: string;
   isFavorite: boolean;
   isArmor: boolean;
+  category: EquipmentCategory;
 }
 
 /**
  * Builds a fully custom, player-authored {@link InventoryItem} from
  * `AddItemModal`'s custom-form state. Never references a catalog template
- * — `sourceKey` is never set here, by construction.
+ * — `sourceKey` is never set here, by construction. `category` still comes
+ * from the form (defaulted to `"gear"` there — see `InventoryTab.tsx`'s
+ * initial form state), same as every other custom-item field; unlike
+ * `sourceKey`/`catalogVersion` it is not catalog-exclusive, since
+ * `InventoryItem.category` is required on every item, custom or not.
  */
 export function createCustomItem(form: CustomItemForm): InventoryItem {
   return {
@@ -156,6 +162,7 @@ export function createCustomItem(form: CustomItemForm): InventoryItem {
     isFavorite: form.isFavorite,
     isCustom: true,
     isArmor: form.isArmor,
+    category: form.category,
     formula: form.formula || undefined,
   };
 }
