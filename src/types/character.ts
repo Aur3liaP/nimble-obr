@@ -13,6 +13,21 @@
 export type DiceType = "d4" | "d6" | "d8" | "d10" | "d12" | "d20" | "d100";
 export type ActionType = "melee" | "ranged" | "spell" | "ability" | "item";
 export type SaveAdvantage = "advantage" | "disadvantage" | "none";
+
+/**
+ * Whether a {@link NimbleCharacter} is a persistent player character or a
+ * disposable monster/NPC. Drives vault cleanup: a `"monster"` record with no
+ * token pointing to it is deleted (see `cleanupOrphanedMonsters` in
+ * `useOBR.ts`); a `"player"` record survives token deletion and can be
+ * recovered (see `findOrphanedCharacters` in `characterVault.ts`).
+ *
+ * Defaults to `"player"`. There is no UI to set `"monster"` yet, nor a
+ * simplified view for players looking at a monster's sheet — both are out of
+ * scope for the vault-decoupling batch that introduced this field. The field
+ * exists now specifically so those can be added later without another schema
+ * bump.
+ */
+export type CharacterKind = "player" | "monster";
 export type SpellSchool =
   | "fire"
   | "ice"
@@ -293,9 +308,33 @@ export interface NimbleCharacter {
   gold: number;
   silver: number;
 
-  tokenId: string;
+  /**
+   * Stable identity of this character, independent of any token. Generated
+   * once with `crypto.randomUUID()` and never changed again — this is the
+   * key the character is stored under in the scene-metadata vault (see
+   * `characterStore.ts`) and the value every token's {@link CharacterLink}
+   * points at.
+   *
+   * Replaces the old `tokenId` field (removed in the schema v5 -> v6
+   * migration, see `characterMigrations.ts`): a character no longer knows,
+   * or needs to know, which token(s) currently display it. `tokenId`'s
+   * removal is also what fixed a real copy-paste write-targeting bug (see
+   * `selectedTokenIdRef` in `useOBR.ts`) — do not reintroduce a
+   * token-pointing field on the character itself.
+   */
+  id: string;
+  /**
+   * Who may edit this sheet. Read entirely from this field, a plain
+   * application-level convention — leaving item metadata (schema v5 -> v6)
+   * means this app no longer rides on OBR's own item-ownership system for
+   * anything permission-related. `useOBR.ts`'s `canEdit` is computed by
+   * comparing this to the current player's id; a determined player could
+   * still bypass it from devtools, exactly as before.
+   */
   ownerId: string;
   updatedAt: number;
+  /** See {@link CharacterKind}. Defaults to `"player"`. */
+  kind: CharacterKind;
 
   /**
    * Schema version this record was written at. Used by `migrateCharacter`
@@ -309,9 +348,50 @@ export interface NimbleCharacter {
 }
 
 /**
- * Namespaced metadata key under which the character sheet is stored on
- * an OBR scene item. Using a reverse-domain-style namespace avoids
- * collisions with metadata written by other OBR extensions.
+ * The pointer stored on an OBR token (item metadata, key {@link LINK_KEY})
+ * that connects it to a {@link NimbleCharacter} living in the scene-metadata
+ * vault (`characterStore.ts`).
+ *
+ * @property characterId - The vault key ({@link NimbleCharacter.id}) this
+ * token displays.
+ * @property snapshot - A copy of the character, for TRANSPORT ONLY. It is
+ * never read during normal operation while the vault already holds this
+ * `characterId` — see `resolveCharacterRead` in `characterVault.ts`, whose
+ * whole job is picking the vault over this snapshot whenever the vault has
+ * an answer. Its only purpose is surviving a copy-paste to a scene whose
+ * vault has never seen this `characterId`: OBR copies token metadata
+ * verbatim on paste, so the pasted token still carries a full copy of the
+ * character even though the destination scene's vault starts out empty for
+ * it. Two copies of the same data existing here looks like a bug on a first
+ * read of this file without that context — it is deliberate.
+ * @property updatedAt - Mirrors `snapshot.updatedAt` at the moment this link
+ * was last written. Compared against the vault character's own `updatedAt`
+ * (never against `snapshot.updatedAt` after the fact, which could require
+ * migrating `snapshot` first) to detect a stale snapshot cheaply and repair
+ * it in the background — see `resolveCharacterRead`'s `needsSnapshotRepair`.
+ */
+export interface CharacterLink {
+  characterId: string;
+  snapshot: NimbleCharacter;
+  updatedAt: number;
+}
+
+/**
+ * Namespaced metadata key under which a token's {@link CharacterLink} is
+ * stored. Sibling of {@link METADATA_KEY} (the old, pre-vault single-key
+ * storage format, still read by the v5 -> v6 migration path for a token
+ * that hasn't been migrated yet).
+ */
+export const LINK_KEY = "com.nimble-obr.nimble/link";
+
+/**
+ * Namespaced metadata key under which a character sheet used to be stored,
+ * in full, directly on the owning OBR token — the sole storage location
+ * before the schema v5 -> v6 vault-decoupling migration. Kept only so that
+ * migration can still find and convert a token that hasn't been touched
+ * since before that change; nothing in current code writes a full character
+ * under this key anymore. See {@link LINK_KEY} for the current pointer, and
+ * `characterStore.ts` for the vault itself.
  */
 export const METADATA_KEY = "com.nimble-obr.nimble/character_sheet";
 
@@ -323,7 +403,7 @@ export const METADATA_KEY = "com.nimble-obr.nimble/character_sheet";
  * needs transforming to match. See that file's header for the full
  * procedure.
  */
-export const CURRENT_SCHEMA_VERSION = 5;
+export const CURRENT_SCHEMA_VERSION = 6;
 
 /**
  * Highest level a character can be set to.
@@ -424,13 +504,15 @@ export const SKILL_STAT_MAP: Record<keyof Skills, keyof Stats> = {
  * used when a player or GM attaches a sheet to a token that doesn't have
  * one yet.
  *
- * @param tokenId - ID of the OBR scene item this sheet is attached to.
  * @param ownerId - OBR player ID who will own (and be able to edit) this sheet.
- * @returns A fresh character at level 1 with zeroed stats and empty inventory.
+ * @param kind - See {@link CharacterKind}. Defaults to `"player"` — there is
+ * no UI to create a `"monster"` record yet (see that type's doc).
+ * @returns A fresh character at level 1 with zeroed stats and empty
+ * inventory, with a freshly generated {@link NimbleCharacter.id}.
  */
 export function createDefaultCharacter(
-  tokenId: string,
   ownerId: string,
+  kind: CharacterKind = "player",
 ): NimbleCharacter {
   return {
     name: "New Hero",
@@ -479,9 +561,10 @@ export function createDefaultCharacter(
     inventorySlots: 10,
     gold: 0,
     silver: 0,
-    tokenId,
+    id: crypto.randomUUID(),
     ownerId,
     updatedAt: Date.now(),
+    kind,
     schemaVersion: CURRENT_SCHEMA_VERSION,
   };
 }

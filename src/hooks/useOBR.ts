@@ -3,13 +3,33 @@
  *
  * Wraps the entire `@owlbear-rodeo/sdk` surface used by this extension:
  * reading the current player/role, tracking scene selection, loading and
- * persisting character data from/to item metadata, broadcasting dice rolls
- * to the shared roll log, and exposing permission state (`permissions`)
- * to every tab component.
+ * persisting character data, broadcasting dice rolls to the shared roll
+ * log, and exposing permission state (`permissions`) to every tab
+ * component.
  *
  * This is the single source of truth for "what can the current player do
  * right now" — all UI components receive `permissions` from here rather
  * than computing it themselves.
+ *
+ * ## Storage model (schema v6, the vault-decoupling batch)
+ *
+ * A character's data lives in the scene-metadata VAULT (`characterStore.ts`),
+ * keyed by its own stable {@link NimbleCharacter.id} — never inside a
+ * token's item metadata. A token only carries a {@link CharacterLink}
+ * (`item.metadata[LINK_KEY]`): `characterId` (which vault entry this token
+ * displays) plus a `snapshot` copy for cross-scene copy-paste transport
+ * only (see that type's own doc for why a second copy of the data existing
+ * there is deliberate, not a bug). Deleting a `"player"`-kind character's
+ * token does NOT delete the character — it survives in the vault,
+ * recoverable. Deleting a `"monster"`-kind character's token DOES delete
+ * it, via {@link cleanupOrphanedMonsters}'s scene-load sweep, since a
+ * monster has no existence independent of a token.
+ *
+ * This replaces the pre-v6 model, where the entire character record lived
+ * directly under `item.metadata[METADATA_KEY]` and died with its token. A
+ * token still carrying that old key is migrated on first load — see
+ * `prepareLegacySheetMigration` in `characterVault.ts` and this file's own
+ * {@link loadCharacterForToken}.
  */
 
 import { useCallback, useEffect, useRef, useState } from "react";
@@ -17,6 +37,7 @@ import OBR, { type Item, type Player } from "@owlbear-rodeo/sdk";
 
 import {
   METADATA_KEY,
+  LINK_KEY,
   MAX_LEVEL,
   MIN_STAT,
   MAX_STAT,
@@ -24,6 +45,7 @@ import {
   MAX_SKILL,
   createDefaultCharacter,
   type NimbleCharacter,
+  type CharacterLink,
   type DiceRollRequest,
   type DiceRollResult,
   type RollMode,
@@ -35,7 +57,19 @@ import {
   rollFormulaWithContext,
   type FormulaContext,
 } from "../utils/formulaParser";
-import { migrateCharacter } from "../utils/characterMigrations";
+import {
+  findOrphanedCharacters,
+  linkedCharacterIdsSignature,
+  prepareLegacySheetMigration,
+  resolveCharacterRead,
+  visibleRecoverableCharacters,
+} from "../utils/characterVault";
+import {
+  deleteCharacter,
+  loadCharacter,
+  listCharacters,
+  saveCharacter,
+} from "../utils/characterStore";
 import { formatModifier } from "../utils/formatModifier";
 
 /** OBR player role as reported by the SDK. */
@@ -132,6 +166,25 @@ export interface CharacterPermissions {
  *   successful retry of that same failure does. Takes priority over
  *   `"pending"` and `"offline"`: going offline, or a new write starting,
  *   never hides an error already on screen.
+ *
+ *   As of schema v6 (vault decoupling), this branch is reached only by a
+ *   failure of the WRITE THAT MATTERS: saving the character to the vault
+ *   (the source of truth), creating a sheet, or claiming/taking over one —
+ *   all real, consequential writes where showing nothing would hide actual
+ *   data risk. It is deliberately NOT reached by a failed snapshot fan-out
+ *   (copying the just-saved character onto every token that displays it)
+ *   or a failed background rehydration/repair: both are retried for free
+ *   the next time the affected token is read (see `resolveCharacterRead` in
+ *   `characterVault.ts`), so a transient failure there is a non-event, not
+ *   something worth interrupting the player over. This is also why there is
+ *   no "token no longer exists" error anymore (see the removed
+ *   `scheduleExistenceCheck` in git history): that check existed only
+ *   because a token vanishing used to mean the character's data vanished
+ *   with it. Since the vault is now the source of truth, a `"player"`-kind
+ *   character survives its token's deletion, and losing the currently
+ *   selected token is already handled by the normal selection flow (the
+ *   panel falls back to `"none"`/the no-sheet recovery UI), not by an error
+ *   banner.
  */
 export type SyncStatus =
   | { state: "idle" }
@@ -142,39 +195,35 @@ export type SyncStatus =
 /**
  * The `"error"` branch of {@link SyncStatus}.
  *
- * @property canRetry - `false` for the "token no longer exists" case
- * (detected by the debounced post-write existence check): resending the
- * same write would just silently no-op again — `OBR.scene.items.updateItems`
- * re-resolves its target by ID before writing and quietly does nothing, with
- * no rejection, if that lookup comes back empty (verified in the SDK's own
- * `SceneItemsApi.updateItems` source). The UI should hide the retry action
- * whenever this is `false`, not just leave it a no-op.
+ * @property canRetry - Always `true` as of schema v6: every write that can
+ * still reach this branch (vault save, sheet creation, claim) is retried
+ * against the same, still-meaningful target — there is no more "resending
+ * this would just silently no-op" case (that was specifically the
+ * now-removed "token no longer exists" outcome; see {@link SyncStatus}'s
+ * doc). Kept as a field rather than hardcoded `true` at each call site so a
+ * future write path can still opt out without changing this interface.
  * @property retry - Re-attempts the write, recomputing against
  * `characterRef.current` as it stands at retry time rather than a snapshot
  * frozen at the original failure, and merging in only the field(s) that
  * actually failed to save. This reduces the risk to *other* fields but does
  * NOT eliminate it: `characterRef.current` only picks up a remote client's
  * change once this client has received and processed the corresponding
- * `OBR.scene.items.onChange` event. If retry fires before that event
- * arrives — a race this client cannot detect, and the window can be
- * arbitrarily long since a user decides when to click Retry — the write
- * still sends the whole merged object and can silently overwrite that other
- * field too. This isn't a risk retry introduces; it's the same "local
+ * vault change (see the `onMetadataChange` listener below). If retry fires
+ * before that arrives — a race this client cannot detect, and the window
+ * can be arbitrarily long since a user decides when to click Retry — the
+ * write still sends the whole merged object and can silently overwrite that
+ * other field too. This isn't a risk retry introduces; it's the same "local
  * snapshot, not server-fresh state" property every write in this hook has
  * always had, just with a larger window than a single ordinary write gets.
  * Nor is retry safe from a conflict on the *same* field: if the field this
  * write touches was itself changed elsewhere since the failure, retrying
  * overwrites that change, silently. There is no reliable way to detect that
- * from this client — comparing the field's value at failure time against
- * its value at retry time would miss a change that was made and then
- * reverted, and can't see a write that races the retry itself (that would
- * need a compare-and-swap on the OBR side, which the SDK doesn't expose).
- * `message` (see {@link describeWriteError}) doesn't name the field at all —
- * raw property names like `hitDice` aren't something a player should have to
- * parse mid-game — and it never claims other fields, or this field against a
- * same-field conflict, are safe. It says only the one thing actually known:
- * retry now or the change is gone. No hedging with "may" or "probably", and
- * no false reassurance either.
+ * from this client. `message` (see {@link describeWriteError}) doesn't name
+ * the field at all — raw property names like `hitDice` aren't something a
+ * player should have to parse mid-game — and it never claims other fields,
+ * or this field against a same-field conflict, are safe. It says only the
+ * one thing actually known: retry now or the change is gone. No hedging
+ * with "may" or "probably", and no false reassurance either.
  * @property dismiss - Clears the error without retrying.
  */
 export interface SyncErrorStatus {
@@ -211,6 +260,21 @@ export interface UseOBRReturn {
   recentRolls: DiceRollResult[];
   createSheetForToken: (item: Item) => Promise<void>;
   claimToken: () => Promise<void>;
+  /**
+   * `"player"`-kind vault characters with no token currently linking to
+   * them — the "Recover a lost soul" candidate list, refreshed whenever
+   * the selected token has no sheet (see `refreshOrphanedCharacters` in
+   * the hook body). Empty in every other selection state, and empty (not
+   * stale) for a
+   * moment right after landing on a new no-sheet token while the fresh
+   * list loads.
+   */
+  orphanedCharacters: NimbleCharacter[];
+  /**
+   * Links the currently selected token to an existing vault character by
+   * id — what selecting an entry from the recovery list above does.
+   */
+  recoverCharacter: (characterId: string) => Promise<void>;
 }
 
 /** Scene metadata key under which the shared, table-wide roll log is stored. */
@@ -226,14 +290,18 @@ const MAX_ROLL_HISTORY = 20;
 const PENDING_DELAY_MS = 700;
 
 /**
- * How long to wait, after the most recent write to a given token, before
- * confirming that token still exists in the scene. Debounced per token (a
- * fresh write restarts the timer) rather than checked before or
- * immediately after every single write, so a burst of once-per-keystroke
- * writes to the same field costs one confirmation call after the burst
- * settles, not one per keystroke.
+ * Quiet period after the last `updateCharacter` call before its snapshot
+ * fan-out actually runs — see `scheduleFanOut` in the hook body.
  */
-const EXISTENCE_CHECK_DEBOUNCE_MS = 600;
+const FAN_OUT_DEBOUNCE_MS = 1000;
+
+/**
+ * Backoff schedule for `maybeRunRepair` (hook body): base delay after the
+ * first failed repair attempt for a token, doubled per additional
+ * consecutive failure, capped at `REPAIR_MAX_BACKOFF_MS`.
+ */
+const REPAIR_BASE_BACKOFF_MS = 3000;
+const REPAIR_MAX_BACKOFF_MS = 60000;
 
 /**
  * Sentinel `Error` message {@link assertOnline} throws with, so
@@ -285,7 +353,7 @@ const FREE_ROLL_CONTEXT: FormulaContext = {
 /**
  * Called from inside each write's `execute`, right before the actual SDK
  * call — and, for `updateCharacter` specifically, *after* its optimistic
- * `setCharacter`, never before. `OBR.scene.items.updateItems`/`setMetadata`
+ * `setCharacter`, never before. `OBR.scene.setMetadata`/`items.updateItems`
  * resolve successfully even with no network interface at all (see the big
  * note on `SyncStatus`'s `"idle"` case), so waiting for one of them to
  * reject would never catch this; checking `navigator.onLine` first is the
@@ -354,10 +422,8 @@ function clampRecord<K extends string>(
  * screen right now shows something nobody else at the table has: worth
  * saying plainly, since it's the one fact a player can't infer just from
  * seeing an error banner. `claimToken`/`createSheetForToken` only touch
- * local state *after* a successful write, and `pushRollToLog` never
- * updates local state itself at all (see its `execute`'s comment) — for
- * all three, the screen already matches reality on failure, so this
- * doesn't apply.
+ * local state *after* a successful write — for both, the screen already
+ * matches reality on failure, so this doesn't apply.
  */
 function describeWriteError(err: unknown, isOptimistic: boolean): string {
   const raw = err instanceof Error ? err.message : String(err);
@@ -383,21 +449,345 @@ function describeWriteFailure(isOptimistic: boolean, hint: string): string {
 }
 
 /**
+ * Builds the {@link CharacterLink} a token should carry for `character`.
+ * Small, but centralizing it means the three fields (`characterId`,
+ * `snapshot`, `updatedAt`) can never drift out of sync with each other at
+ * one call site but not another.
+ */
+function linkFor(character: NimbleCharacter): CharacterLink {
+  return { characterId: character.id, snapshot: character, updatedAt: character.updatedAt };
+}
+
+/**
+ * Copies `character`'s current state onto the {@link CharacterLink} of
+ * every token in the scene that displays it.
+ *
+ * Called (debounced — see `scheduleFanOut` in the hook body) after a vault
+ * save ({@link saveCharacter} having already run) so a future copy-paste of
+ * any of those tokens carries current data — but deliberately NOT part of
+ * that write's own {@link performWrite} tracking, and never lets a failure
+ * here become a user-facing error: the vault is the source of truth, so a
+ * token that misses this fan-out just carries a stale `snapshot`/`updatedAt`
+ * until either a later fan-out succeeds or its own next read notices the
+ * vault is newer and repairs it in the background (see `maybeRunRepair` in
+ * the hook body). Nothing is lost either way — only logged, so a persistent
+ * failure is still visible in the console rather than completely silent.
+ *
+ * @remarks Targets a freshly-fetched, explicit list of ids, never a
+ * predicate handed straight to `updateItems` — confirmed directly (not
+ * assumed) against the real SDK: `updateItems` no-ops its ENTIRE batch, not
+ * just the one bad id, the moment even one targeted id no longer resolves
+ * to a live item (writing `[alive]` succeeds; writing `[alive, alreadyGone]`
+ * resolves without error but writes NEITHER — the same silent-no-op shape
+ * that motivated the item's own existence check before the vault existed,
+ * now in list form). A token can be deleted between one fan-out and the
+ * next at any time, so the live-token list is never assumed current from a
+ * previous call — it is always re-fetched here, immediately before writing.
+ * This narrows, but cannot fully close, the race: a token could still
+ * vanish in the gap between this `getItems` and the `updateItems` right
+ * after it — and if one does, the consequence is NOT a partial write. It is
+ * a NULL write, for every id in the batch, including the other tokens that
+ * are still perfectly alive: confirmed directly in console testing, not
+ * inferred, that `updateItems` resolves its promise normally while writing
+ * NOTHING AT ALL the moment even one targeted id fails to resolve — there
+ * is no per-id fallback, no "skip the dead one and write the rest". A fan-out
+ * to three live tokens and one just-deleted one silently saves none of the
+ * three, not two out of three. That residual window is accepted, not
+ * solved — closing it would need an atomic "check existence and write" the
+ * SDK doesn't expose — but it is accepted with this cost fully in view: the
+ * few-millisecond gap doesn't just risk losing the vanished token's own
+ * update, it risks losing every OTHER live token's update in the same call,
+ * silently, with the promise reporting success either way. Recoverable
+ * regardless (the next fan-out, or that token's own next read-time repair,
+ * catches it — see the paragraph above), which is what makes the gap
+ * acceptable rather than something to build a workaround for.
+ */
+async function fanOutSnapshot(character: NimbleCharacter): Promise<void> {
+  try {
+    const liveTokens = await OBR.scene.items.getItems(
+      (item) =>
+        item.layer === "CHARACTER" &&
+        (item.metadata[LINK_KEY] as CharacterLink | undefined)?.characterId === character.id,
+    );
+    if (liveTokens.length === 0) return;
+    await OBR.scene.items.updateItems(
+      liveTokens.map((item) => item.id),
+      (items) => {
+        for (const item of items) {
+          item.metadata[LINK_KEY] = linkFor(character);
+        }
+      },
+    );
+  } catch (err) {
+    console.warn(
+      `[Nimble] snapshot fan-out for character ${character.id} failed — affected tokens' ` +
+        `snapshots will be retried, with backoff, the next time each is read (see maybeRunRepair).`,
+      err,
+    );
+  }
+}
+
+/**
+ * Rewrites `tokenId`'s {@link CharacterLink} to match `character` — the
+ * actual write behind a snapshot repair. Deliberately has NO try/catch of
+ * its own: {@link maybeRunRepair} (hook body) is the single place that
+ * catches, logs, and decides what happens next (in-flight tracking,
+ * backoff) — duplicating that here would let this function's own generic
+ * failure log paper over the more specific, actionable one the caller can
+ * produce.
+ */
+async function repairStaleSnapshot(tokenId: string, character: NimbleCharacter): Promise<void> {
+  await OBR.scene.items.updateItems([tokenId], (items) => {
+    for (const item of items) {
+      item.metadata[LINK_KEY] = linkFor(character);
+    }
+  });
+}
+
+/**
+ * The one-time write {@link loadCharacterForToken} decided a token needs,
+ * tagged by kind so the caller (`applyTokenLoadResult` in the hook body)
+ * knows which handling policy applies:
+ *
+ * - `"legacy-migration"` — routed through `performWrite` (visible failure
+ *   handling): this is the record's one-time, real move out of the old
+ *   storage location, and deserves the same treatment as any other
+ *   consequential write.
+ * - `"rehydrate"` — fired immediately, failure only logged: safe to lose,
+ *   retried for free the next time this token is read (see
+ *   `resolveCharacterRead` in `characterVault.ts`), and writes to the vault
+ *   by `character.id`, not any one token's metadata, so it has no feedback
+ *   loop to guard against.
+ * - `"repair"` — routed through `maybeRunRepair` (in-flight cap + backoff),
+ *   NOT fired directly: this is the one write in this file that targets a
+ *   token's own metadata from inside the very `items.onChange` listener
+ *   that write itself triggers. Firing it unconditionally on every match
+ *   turned a single stale snapshot, during a sustained burst of edits (the
+ *   vault moving to a new `updatedAt` faster than a single repair
+ *   round-trip could land), into a repair attempt on every subsequent
+ *   `onChange` tick for as long as the burst lasted — this is what actually
+ *   tripped OBR's rate limit in testing, not the repair mechanism's
+ *   existence. See `maybeRunRepair`'s own doc for the guard.
+ */
+type BackgroundWrite =
+  | { kind: "legacy-migration"; run: () => Promise<void> }
+  | { kind: "rehydrate"; run: () => Promise<void> }
+  | { kind: "repair"; character: NimbleCharacter };
+
+/**
+ * Outcome of {@link loadCharacterForToken}.
+ *
+ * - `"none"` — the token has neither a {@link CharacterLink} nor a legacy
+ *   `METADATA_KEY` payload: no sheet has ever been attached.
+ * - `"ready"` — a usable character was resolved. `backgroundWrite`, if
+ *   present, must be handled per its `kind` — see {@link BackgroundWrite}.
+ * - `"unsupported"` / `"invalid"` — mirrors `MigrationResult`, see that
+ *   type's own doc.
+ */
+type TokenLoadResult =
+  | { status: "none" }
+  | {
+      status: "ready";
+      character: NimbleCharacter;
+      backgroundWrite?: BackgroundWrite;
+    }
+  | { status: "unsupported"; foundVersion: number }
+  | { status: "invalid"; reason: string };
+
+/**
+ * Resolves what `item` should display: reads its {@link CharacterLink} (or
+ * legacy `METADATA_KEY` payload) and, for a link, looks the character up in
+ * the vault — the "coffre puis snapshot" read order the vault-decoupling
+ * design specifies. See {@link TokenLoadResult}/{@link BackgroundWrite} for
+ * the shape this returns and `resolveCharacterRead`/
+ * `prepareLegacySheetMigration` in `characterVault.ts` for the pure
+ * decision logic this wraps with the actual OBR reads.
+ */
+async function loadCharacterForToken(item: Item): Promise<TokenLoadResult> {
+  const link = item.metadata?.[LINK_KEY] as CharacterLink | undefined;
+
+  if (link === undefined) {
+    const legacyRaw = item.metadata?.[METADATA_KEY];
+    if (legacyRaw === undefined) return { status: "none" };
+
+    const outcome = prepareLegacySheetMigration(legacyRaw, item.createdUserId ?? "");
+    if (outcome.status === "invalid") {
+      console.error(
+        `[Nimble] Legacy sheet on token ${item.id} failed validation: ${outcome.reason}`,
+      );
+      return outcome;
+    }
+    if (outcome.status === "unsupported") return outcome;
+
+    const { character, link: newLink } = outcome;
+    return {
+      status: "ready",
+      character,
+      backgroundWrite: {
+        kind: "legacy-migration",
+        // Token link written BEFORE the vault entry, deliberately: this is
+        // what guarantees a character can never appear in the vault without
+        // a token already pointing at it, which is what makes
+        // cleanupOrphanedMonsters safe to run at any time (see that
+        // function's own comment). If the vault write below fails after
+        // this one succeeds, the token is left pointing at a characterId
+        // the vault doesn't have yet — the very next selection of this
+        // token takes the "rehydrate" branch further down and writes it
+        // in, self-healing with no special-case code needed.
+        run: async () => {
+          await OBR.scene.items.updateItems([item.id], (items) => {
+            for (const it of items) {
+              it.metadata[LINK_KEY] = newLink;
+              delete it.metadata[METADATA_KEY];
+            }
+          });
+          await saveCharacter(character);
+        },
+      },
+    };
+  }
+
+  const vaultCharacter = await loadCharacter(link.characterId);
+  const resolution = resolveCharacterRead(link, vaultCharacter);
+
+  if (resolution.action === "use-vault") {
+    return {
+      status: "ready",
+      character: resolution.character,
+      backgroundWrite: resolution.needsSnapshotRepair
+        ? { kind: "repair", character: resolution.character }
+        : undefined,
+    };
+  }
+
+  // "rehydrate": the vault has never seen this characterId — cross-scene
+  // copy-paste is the expected cause. The token's own snapshot is promoted
+  // as-is (already run through migrateCharacter by resolveCharacterRead).
+  const migration = resolution.migration;
+  if (migration.status !== "ok") return migration;
+  return {
+    status: "ready",
+    character: migration.character,
+    backgroundWrite: { kind: "rehydrate", run: () => saveCharacter(migration.character) },
+  };
+}
+
+/**
+ * Extracts every `characterId` linked from a list of scene items — pure,
+ * no OBR call of its own. Two callers, deliberately kept separate rather
+ * than each re-fetching:
+ * - {@link fetchLinkedCharacterIds}, which supplies the items via its own
+ *   `getItems` call, for callers with no item list already in hand
+ *   (`cleanupOrphanedMonsters`, `fetchOrphanRefreshInputs`).
+ * - `maybeRefreshOrphanedCharactersOnLinkChange` (hook body), which is
+ *   handed the scene's full, current item list directly by
+ *   `items.onChange` and must NOT re-fetch it — see that function's own
+ *   doc for why a redundant `getItems` there would defeat the entire
+ *   point of that guard on this extension's hottest code path.
+ *
+ * @param items - Confirmed (not assumed) to need no further filtering by
+ * layer at either call site beyond what's applied here: `getItems`'s own
+ * predicate already narrows to `CHARACTER` for the first caller, and
+ * `items.onChange` hands the SECOND caller the scene's full, unfiltered
+ * item list — this function's own `layer` filter is what narrows that one.
+ */
+function linkedCharacterIdsFromItems(items: Item[]): string[] {
+  return items
+    .filter((item) => item.layer === "CHARACTER")
+    .map((item) => (item.metadata[LINK_KEY] as CharacterLink | undefined)?.characterId)
+    .filter((id): id is string => typeof id === "string");
+}
+
+/**
+ * Every `characterId` currently linked to a live CHARACTER-layer token in
+ * the scene — a fresh `getItems` call plus {@link linkedCharacterIdsFromItems}.
+ * Shared by {@link cleanupOrphanedMonsters} and
+ * {@link fetchOrphanRefreshInputs} — both need the exact same computation
+ * (which characters currently have no token pointing to them), just
+ * filtered by a different `kind` afterward. Same "share the computation,
+ * let each caller filter" reasoning as `findOrphanedCharacters` itself
+ * (`characterVault.ts`) — see that function's own doc.
+ */
+async function fetchLinkedCharacterIds(): Promise<string[]> {
+  const tokens = await OBR.scene.items.getItems((item) => item.layer === "CHARACTER");
+  return linkedCharacterIdsFromItems(tokens);
+}
+
+/**
+ * Deletes every `"monster"`-kind vault character that no token in the
+ * current scene links to. Monsters have no existence independent of a
+ * token (see {@link CharacterKind}'s doc) — this is what actually enforces
+ * that, since a token deletion event isn't reliably observable from every
+ * client (see the `items.onChange` listener's own long-standing "sheet
+ * removed mid-session — leave state as-is" comment below). Idempotent:
+ * deleting an already-gone vault entry is a no-op, so running this
+ * redundantly (every client does, on every scene load) is harmless.
+ *
+ * @remarks Safe to run at ANY time, including immediately on scene load,
+ * with no race against a monster still being created: every creation path
+ * in this file (`loadCharacterForToken`'s legacy-migration branch,
+ * `createSheetForToken`) writes the token's link BEFORE the vault entry —
+ * so a monster's vault entry never becomes visible to any client (this one
+ * included) before its owning token already points at it. There is
+ * therefore no window in which this function could observe "exists in the
+ * vault, no token points to it yet" for a character that's still being
+ * created rather than genuinely orphaned. (Today's UI can only create
+ * `kind: "player"` characters, so this race is moot in practice either
+ * way — but the ordering is applied uniformly, not conditionally on kind,
+ * so it stays correct once a `"monster"`-creating UI exists.)
+ */
+async function cleanupOrphanedMonsters(): Promise<void> {
+  try {
+    const [characters, linkedIds] = await Promise.all([
+      listCharacters(),
+      fetchLinkedCharacterIds(),
+    ]);
+
+    const orphans = findOrphanedCharacters(characters, linkedIds).filter(
+      (character) => character.kind === "monster",
+    );
+    for (const monster of orphans) {
+      await deleteCharacter(monster.id);
+    }
+  } catch (err) {
+    console.warn("[Nimble] orphaned-monster cleanup pass failed — will retry on next scene load.", err);
+  }
+}
+
+/**
+ * Raw inputs behind the "Retrieve a lost soul" list: every vault character,
+ * and every characterId currently linked to a token in the scene. Returned
+ * un-filtered, separately, rather than pre-combined into the final visible
+ * list — the hook body needs `linkedIds` on its own too, as a cheap
+ * comparison key deciding whether a live-update recompute is even worth
+ * doing (see `linkedCharacterIdsSignature` in `characterVault.ts` and
+ * `maybeRefreshOrphanedCharactersOnLinkChange` below), not just as an input
+ * to the filter.
+ */
+async function fetchOrphanRefreshInputs(): Promise<{
+  characters: NimbleCharacter[];
+  linkedIds: string[];
+}> {
+  const [characters, linkedIds] = await Promise.all([listCharacters(), fetchLinkedCharacterIds()]);
+  return { characters, linkedIds };
+}
+
+/**
  * Connects this extension instance to the active OBR scene and player,
  * and exposes everything needed to render and edit a Nimble character sheet.
  *
  * Responsibilities:
  * - Resolves the current player's ID, name, and role (GM/PLAYER) on ready.
  * - Tracks scene selection changes and loads the corresponding character
- *   from item metadata (see {@link SelectionState}).
+ *   via its token's {@link CharacterLink} (see {@link SelectionState}).
  * - Computes {@link CharacterPermissions} for permission gating.
- * - Persists character updates via `OBR.scene.items.updateItems`, but
- *   only when the caller currently holds edit rights (see
- *   {@link updateCharacter} — this is a client-side guard, not a real
- *   security boundary, since OBR has no server-side ACL on metadata
- *   writes; a determined player could still bypass it from devtools.
- *   It does, however, prevent accidental writes from stale UI state and
- *   keeps `canEdit` meaningful as the single gate everywhere).
+ * - Persists character updates to the scene-metadata vault
+ *   (`characterStore.ts`), but only when the caller currently holds edit
+ *   rights (see {@link updateCharacter} — this is a client-side guard, not
+ *   a real security boundary, since OBR has no server-side ACL on
+ *   metadata; a determined player could still bypass it from devtools. It
+ *   does, however, prevent accidental writes from stale UI state and keeps
+ *   `canEdit` meaningful as the single gate everywhere).
  * - Pushes dice roll results to shared scene metadata so all clients see
  *   them, except hidden rolls (GM-only, kept in local state only).
  *
@@ -412,6 +802,7 @@ export function useOBR(): UseOBRReturn {
   const [playerName, setPlayerName] = useState("");
   const [role, setRole] = useState<OBRRole>("PLAYER");
   const [recentRolls, setRecentRolls] = useState<DiceRollResult[]>([]);
+  const [orphanedCharacters, setOrphanedCharacters] = useState<NimbleCharacter[]>([]);
 
   const characterRef = useRef<NimbleCharacter | null>(null);
   const playerIdRef = useRef<string>("");
@@ -423,23 +814,23 @@ export function useOBR(): UseOBRReturn {
   /**
    * The OBR item id of the currently selected single character token —
    * refreshed synchronously inside {@link handleSelectionChange} on every
-   * selection change, and the ONLY id every write in this hook may target.
+   * selection change.
    *
-   * @remarks `character.tokenId` (the id stored inside the sheet's own
-   * metadata payload) must never be used to target an OBR operation.
-   * `NimbleCharacter.tokenId` is part of the metadata payload itself, and
-   * OBR copies that payload verbatim when a token is copy-pasted while
-   * assigning the *copy* a brand-new item id — so the payload's `tokenId`
-   * silently drifts out of sync with the item it actually lives on. Two
-   * confirmed failure modes result: editing a copy pasted into the SAME
-   * scene writes to the original token (both copies' payloads name the
-   * original's id, so both target it), and editing a copy pasted into a
-   * DIFFERENT scene fails with "this token no longer exists" (the
-   * payload's id belongs to a token that doesn't exist in the new scene at
-   * all). Reading the write target from this ref instead — the real,
-   * live-selected item id — fixes both: a copy is retargeted at itself the
-   * moment it's edited (see the `tokenId: targetId` fixups at each write
-   * site below, which also repair the stored payload going forward).
+   * @remarks This is the only id `createSheetForToken`/`claimToken`/the
+   * legacy-migration write-back may target when writing a
+   * {@link CharacterLink} onto "the selected token" specifically. It is
+   * NOT how `updateCharacter`'s own save targets tokens at all — that write
+   * goes to the vault by `character.id`, and the matching
+   * {@link CharacterLink} fan-out (`fanOutSnapshot`) finds its targets by
+   * filtering the scene for `link.characterId === character.id`, never by
+   * this ref. A single character can legitimately be displayed by more than
+   * one token (two tokens for the same PC, or a copy-pasted duplicate)
+   * since schema v6, so there is no longer one "the" token a character
+   * could even be said to point back to. Before v6, `character.tokenId`
+   * lived inside the payload itself and drifted out of sync on copy-paste
+   * (OBR copies metadata verbatim, assigning the copy a new item id) —
+   * removing that field entirely is what closed that bug, not just working
+   * around it here.
    *
    * Set to `null` whenever there isn't exactly one character-layer token
    * selected (no selection, multiple selection, or a non-character item),
@@ -469,6 +860,25 @@ export function useOBR(): UseOBRReturn {
   useEffect(() => {
     canEditRef.current = canEdit;
   }, [canEdit]);
+  // Latest-value refs for use inside callbacks registered once (the SDK
+  // listeners in the main effect below) rather than recreated on every
+  // render — same "ref for latest closure" pattern as canEditRef/
+  // playerIdRef above. Needed by refreshOrphanedCharacters (isGMRef) and
+  // the onMetadataChange listener's own guard (selectionStateRef).
+  const isGMRef = useRef(false);
+  useEffect(() => {
+    isGMRef.current = isGM;
+  }, [isGM]);
+  const selectionStateRef = useRef<SelectionState>("none");
+  useEffect(() => {
+    selectionStateRef.current = selectionState;
+  }, [selectionState]);
+  /**
+   * Comparison baseline for `maybeRefreshOrphanedCharactersOnLinkChange`:
+   * the `linkedCharacterIdsSignature` recorded by the last
+   * `applyOrphanRefresh` call. `null` until the first refresh ever runs.
+   */
+  const linkedCharacterIdsSignatureRef = useRef<string | null>(null);
 
   const [syncStatus, setSyncStatus] = useState<SyncStatus>({ state: "idle" });
   // Count of writes currently in flight — decides when to promote
@@ -476,20 +886,72 @@ export function useOBR(): UseOBRReturn {
   // See performWrite.
   const pendingWritesRef = useRef(0);
   const pendingTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  // Debounced per-token "does this item still exist" check. See
-  // scheduleExistenceCheck.
-  const existenceCheckTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   // Identifies the currently-displayed error so a retry's async success
   // handler can tell whether it's still retrying the error being shown, or
   // whether a newer, unrelated failure has already replaced it — see
   // performWrite.
   const currentErrorIdRef = useRef(0);
-  // Set to a token id right after loading a character whose stored
-  // schemaVersion was behind CURRENT_SCHEMA_VERSION (migrateCharacter's
-  // `migrated: true`), cleared once the write-back effect below has
-  // consumed it. Not touched for the "multiple selection" branch, which
-  // never triggers a write-back — see that branch's comment.
-  const pendingMigrationTokenIdRef = useRef<string | null>(null);
+  /**
+   * Set right after loading a token whose stored sheet still lived under
+   * the legacy `METADATA_KEY` (see `loadCharacterForToken`'s legacy
+   * branch), cleared once the write-back effect below has consumed it.
+   * Not touched for the "multiple selection" branch, which never triggers
+   * a write-back — see that branch's comment. This is the ONE background
+   * write from `loadCharacterForToken` routed through `performWrite`
+   * rather than fired directly — see that function's own doc for why.
+   */
+  const pendingLegacyMigrationRef = useRef<{
+    tokenId: string;
+    run: () => Promise<void>;
+  } | null>(null);
+
+  /**
+   * Per-token bookkeeping for {@link maybeRunRepair}'s guard: at most one
+   * repair in flight per token, plus an exponential backoff after a
+   * failure. See that function's own doc for why this exists.
+   */
+  const repairGuardRef = useRef<
+    Map<string, { inFlight: boolean; failureCount: number; nextAttemptAllowedAt: number }>
+  >(new Map());
+  /**
+   * The `updatedAt` this client itself last successfully wrote via a
+   * repair, per token — lets the `items.onChange` listener recognize the
+   * `onChange` event that repair's own write produces and skip reprocessing
+   * it as a new external change. Purely an efficiency measure (the
+   * in-flight/backoff guard in {@link maybeRunRepair} is what actually
+   * bounds the write rate); harmless if a stale entry lingers after being
+   * superseded by a genuinely new value, since a real subsequent change
+   * simply won't match it anymore.
+   */
+  const lastRepairedUpdatedAtRef = useRef<Map<string, number>>(new Map());
+  /**
+   * The {@link CharacterLink} last actually PROCESSED (read, resolved, and
+   * applied to state) for the currently selected token — `null` if that
+   * token has no link at all (never had a sheet, or is still on the legacy
+   * per-token storage location). Updated by `applyTokenLoadResult` every
+   * time it runs, for whichever token it just ran for.
+   *
+   * The sole purpose of this ref: letting the `items.onChange` listener,
+   * this extension's hottest code path, tell "this token's link is
+   * IDENTICAL to what I already loaded" apart from "something about this
+   * token's link actually changed" — WITHOUT re-fetching or re-resolving
+   * anything, using only data the listener is already handed. Before v6,
+   * this same distinction didn't need a dedicated mechanism: the character
+   * WAS the item's metadata, so `items.onChange`'s own delivered item data
+   * already contained everything needed to know whether anything relevant
+   * changed, with no separate vault round trip possible. See the
+   * `items.onChange` listener's own comment for the comparison this drives.
+   */
+  const selectedTokenLinkRef = useRef<{
+    tokenId: string;
+    characterId: string;
+    updatedAt: number;
+  } | null>(null);
+  /**
+   * Debounce timers for {@link scheduleFanOut}, one per `characterId` — see
+   * that function's doc for why per-character, not a single shared timer.
+   */
+  const fanOutTimersRef = useRef<Map<string, ReturnType<typeof setTimeout>>>(new Map());
 
   const permissions: CharacterPermissions = {
     canEdit,
@@ -499,28 +961,258 @@ export function useOBR(): UseOBRReturn {
   };
 
   /**
-   * Reads an OBR item's metadata and runs it through {@link migrateCharacter},
-   * or returns `null` if the item has no sheet attached at all (a distinct
-   * case from a sheet whose data is unreadable, see {@link MigrationResult}).
+   * Guarded entry point for a `"repair"` {@link BackgroundWrite} — the only
+   * one of the three kinds not fired unconditionally, because it is the
+   * only one whose own write can retrigger the exact `items.onChange`
+   * listener that calls it.
    *
-   * @remarks Single choke point for both entry points that read a character
-   * off an item: {@link handleSelectionChange} and the `scene.items.onChange`
-   * resync listener registered in the main effect below. Logs `"invalid"`
-   * reasons to the console: they're a technical detail (a thrown error
-   * message, a field path), not something to show a player mid-game — the
-   * UI only ever gets the generic `"invalid-sheet"` selection state.
+   * Two protections, both required (confirmed in testing: neither alone was
+   * enough to stop the observed failure):
+   * - **At most one repair in flight per token.** A second call for a
+   *   token already being repaired is dropped outright, not queued.
+   * - **Exponential backoff after a failure**, per token, capped at
+   *   {@link REPAIR_MAX_BACKOFF_MS}. Without this, a token whose repair
+   *   keeps failing (rate limit, offline, ...) would retry on every single
+   *   subsequent `onChange` tick for that token — and during a sustained
+   *   burst of unrelated edits elsewhere (which also fire `onChange`), that
+   *   is not a rare event.
+   *
+   * A successful repair resets both the failure count and the backoff, and
+   * records `character.updatedAt` in {@link lastRepairedUpdatedAtRef} so the
+   * `items.onChange` listener can recognize this write's own echo.
    */
-  const loadCharacterFromItem = useCallback((item: Item) => {
-    const raw = item.metadata?.[METADATA_KEY];
-    if (raw === undefined) return null;
-    const result = migrateCharacter(raw);
-    if (result.status === "invalid") {
-      console.error(
-        `[Nimble] Character sheet on token ${item.id} failed validation: ${result.reason}`,
-      );
-    }
-    return result;
+  const maybeRunRepair = useCallback((tokenId: string, character: NimbleCharacter) => {
+    const guards = repairGuardRef.current;
+    const state = guards.get(tokenId) ?? {
+      inFlight: false,
+      failureCount: 0,
+      nextAttemptAllowedAt: 0,
+    };
+    if (state.inFlight || Date.now() < state.nextAttemptAllowedAt) return;
+
+    state.inFlight = true;
+    guards.set(tokenId, state);
+
+    void repairStaleSnapshot(tokenId, character)
+      .then(() => {
+        state.failureCount = 0;
+        state.nextAttemptAllowedAt = 0;
+        lastRepairedUpdatedAtRef.current.set(tokenId, character.updatedAt);
+      })
+      .catch((err) => {
+        state.failureCount += 1;
+        const backoffMs = Math.min(
+          REPAIR_MAX_BACKOFF_MS,
+          REPAIR_BASE_BACKOFF_MS * 2 ** (state.failureCount - 1),
+        );
+        state.nextAttemptAllowedAt = Date.now() + backoffMs;
+        console.warn(
+          `[Nimble] snapshot repair for token ${tokenId} failed (attempt ${state.failureCount}) — ` +
+            `will not retry for at least ${Math.round(backoffMs / 1000)}s, and only if this token is read again.`,
+          err,
+        );
+      })
+      .finally(() => {
+        state.inFlight = false;
+        guards.set(tokenId, state);
+      });
   }, []);
+
+  /**
+   * Debounces {@link fanOutSnapshot} so it runs once after a burst of
+   * `updateCharacter` calls settles, rather than once per call. The
+   * snapshot is transport only (see {@link CharacterLink}'s doc) — nothing
+   * reads it while the vault already has an answer — so there is no
+   * correctness reason to fan it out on the same cadence as the vault save
+   * itself. Before this, a continuous edit (a value dragged/scrolled/typed
+   * across many small commits) doubled its write volume on every single
+   * commit (vault save + fan-out), which is what actually tripped OBR's
+   * rate limit in testing — see `useDebouncedCommit` for the complementary
+   * fix on the commit side itself.
+   *
+   * Coalesces to the LATEST state PER CHARACTER only (one timer per
+   * `character.id` in {@link fanOutTimersRef}, not one shared timer): an
+   * earlier call's pending fan-out for that SAME character is replaced,
+   * never queued, since only the final state after a burst on one
+   * character is worth broadcasting. A single shared timer would have
+   * meant editing character A and then character B within the debounce
+   * window cancels A's pending fan-out outright — A's tokens would never
+   * receive that fan-out at all (not merely delayed), left to whatever
+   * stale `snapshot`/`updatedAt` they already had until each is
+   * individually repaired at its own next read. Not a correctness bug
+   * either way (the vault stays the source of truth, and a stale snapshot
+   * self-heals on read — see `maybeRunRepair`), but a single shared timer
+   * would have made that self-heal path do work a plain per-character
+   * timer avoids needing at all.
+   */
+  const scheduleFanOut = useCallback((character: NimbleCharacter) => {
+    const timers = fanOutTimersRef.current;
+    const existing = timers.get(character.id);
+    if (existing !== undefined) clearTimeout(existing);
+    timers.set(
+      character.id,
+      setTimeout(() => {
+        timers.delete(character.id);
+        void fanOutSnapshot(character);
+      }, FAN_OUT_DEBOUNCE_MS),
+    );
+  }, []);
+
+  /**
+   * Applies fetched vault/link data to `orphanedCharacters` state, and
+   * records the linked-id set's signature as the new baseline for
+   * {@link maybeRefreshOrphanedCharactersOnLinkChange}'s comparison. The
+   * one place both `refreshOrphanedCharacters` (always fetches) and that
+   * function (fetches only after confirming the set actually changed)
+   * converge, so the "compute visible list + update the comparison
+   * baseline" step can't drift between the two call sites.
+   */
+  const applyOrphanRefresh = useCallback(
+    (characters: NimbleCharacter[], linkedIds: string[]) => {
+      linkedCharacterIdsSignatureRef.current = linkedCharacterIdsSignature(linkedIds);
+      setOrphanedCharacters(
+        visibleRecoverableCharacters(characters, linkedIds, playerIdRef.current, isGMRef.current),
+      );
+    },
+    [],
+  );
+
+  /**
+   * Unconditionally refreshes `orphanedCharacters` — used the moment the
+   * no-sheet screen first appears (`applyTokenLoadResult`'s `"none"`
+   * branch), where there is no previous linked-id signature to compare
+   * against yet, so a full fetch is the only option anyway.
+   *
+   * Reads `playerIdRef`/`isGMRef` (via `applyOrphanRefresh`) rather than
+   * the plain `playerId`/`isGM` values so this stays correct even if ever
+   * called from a callback registered once inside `OBR.onReady`, which
+   * would otherwise close over whatever those values were at that first
+   * render.
+   */
+  const refreshOrphanedCharacters = useCallback(() => {
+    void fetchOrphanRefreshInputs()
+      .then(({ characters, linkedIds }) => applyOrphanRefresh(characters, linkedIds))
+      .catch((err) => {
+        console.warn("[Nimble] failed to list characters eligible for recovery.", err);
+      });
+  }, [applyOrphanRefresh]);
+
+  /**
+   * Live-update path for `orphanedCharacters` while the no-sheet screen is
+   * already showing — reacts to a token being deleted/relinked by ANOTHER
+   * client, which (unlike an edit to a character's own fields) never
+   * touches scene metadata and so never reaches `onMetadataChange` at all
+   * (see that listener's own comment for the gap this specifically closes).
+   *
+   * Wired into the `items.onChange` listener below, which is this
+   * extension's hottest code path — it fires on every token move on the
+   * table, the single most frequent gesture on a virtual tabletop, not an
+   * edge case. Two hard requirements follow directly from that, both
+   * enforced here:
+   *
+   * 1. **The no-sheet guard is the very first thing checked, synchronously,
+   *    before any `await` or OBR call of any kind.** A token drag fires
+   *    this on every frame; if nobody is even looking at the no-sheet
+   *    screen, this function must return having done nothing measurable at
+   *    all, not "having started a cheap read". The check is duplicated
+   *    (also present in `applyOrphanRefresh`'s caller context via
+   *    `selectionStateRef`) rather than assumed — see the call site.
+   * 2. **No OBR call at all before the comparison — not even a "cheap"
+   *    one.** `items.onChange`'s own callback parameter IS already the
+   *    scene's full, current item list (confirmed, not assumed: it's what
+   *    makes `items.find(i => i.id === targetId)` below work at all) — so
+   *    `linkedCharacterIdsFromItems(items)` computes the comparison key
+   *    from data already in hand, with zero SDK round trips. An earlier
+   *    version of this function called `fetchLinkedCharacterIds` here
+   *    instead, re-fetching via `getItems` the exact list this callback
+   *    had ALREADY been handed — asking OBR again for what it had just
+   *    given us, on every single frame of every drag. Only once the
+   *    resulting signature (`linkedCharacterIdsSignature`) actually
+   *    differs from the baseline recorded by the last `applyOrphanRefresh`
+   *    call does a REAL OBR call happen: `listCharacters`, the full vault
+   *    read. Without this, every frame of every drag, for anyone parked on
+   *    the no-sheet screen, would cost at least one OBR round trip — trading
+   *    a display bug (point 2 of the earlier fix) for guaranteed, continuous
+   *    load on the hottest path in this extension.
+   *
+   * @param items - The scene's full current item list, exactly as handed
+   * to the `items.onChange` callback — never re-fetched.
+   */
+  const maybeRefreshOrphanedCharactersOnLinkChange = useCallback((items: Item[]) => {
+    if (selectionStateRef.current !== "no-sheet") return;
+    const linkedIds = linkedCharacterIdsFromItems(items);
+    const signature = linkedCharacterIdsSignature(linkedIds);
+    if (signature === linkedCharacterIdsSignatureRef.current) return; // unchanged — nothing to do
+    void listCharacters()
+      .then((characters) => applyOrphanRefresh(characters, linkedIds))
+      .catch((err) => {
+        console.warn("[Nimble] failed to refresh characters eligible for recovery.", err);
+      });
+  }, [applyOrphanRefresh]);
+
+  /**
+   * Applies the result of {@link loadCharacterForToken} to local state:
+   * sets `selectionState`/`character`, dispatches any
+   * {@link BackgroundWrite} per its `kind` (see that type's own doc for
+   * why each kind is handled differently), and records `item`'s own
+   * {@link CharacterLink} in `selectedTokenLinkRef` — the baseline the
+   * `items.onChange` listener compares against to decide whether a future
+   * event even needs to reach this function again (see that listener's own
+   * comment).
+   *
+   * @param item - The token this result was loaded for — the actual item,
+   * not just its id, since this needs to read `item.metadata[LINK_KEY]`
+   * itself to update `selectedTokenLinkRef`.
+   * @param result - What `loadCharacterForToken` resolved.
+   */
+  const applyTokenLoadResult = useCallback(
+    (item: Item, result: TokenLoadResult) => {
+      const tokenId = item.id;
+      const link = item.metadata?.[LINK_KEY] as CharacterLink | undefined;
+      selectedTokenLinkRef.current = link
+        ? { tokenId, characterId: link.characterId, updatedAt: link.updatedAt }
+        : null;
+
+      if (result.status === "none") {
+        setSelectionState("no-sheet");
+        setCharacter(null);
+        // Cleared, not left stale, while the fresh list loads — otherwise
+        // a token with no orphans to offer would briefly show the previous
+        // no-sheet token's list until this fetch resolves.
+        setOrphanedCharacters([]);
+        refreshOrphanedCharacters();
+        return;
+      }
+      if (result.status === "unsupported") {
+        setSelectionState("unsupported-version");
+        setCharacter(null);
+        return;
+      }
+      if (result.status === "invalid") {
+        setSelectionState("invalid-sheet");
+        setCharacter(null);
+        return;
+      }
+
+      const bw = result.backgroundWrite;
+      if (bw?.kind === "legacy-migration") {
+        pendingLegacyMigrationRef.current = { tokenId, run: bw.run };
+      } else if (bw?.kind === "rehydrate") {
+        bw.run().catch((err) => {
+          console.warn(
+            `[Nimble] rehydration of character into the vault failed for token ${tokenId} — ` +
+              `will retry the next time this token is read.`,
+            err,
+          );
+        });
+      } else if (bw?.kind === "repair") {
+        maybeRunRepair(tokenId, bw.character);
+      }
+      setCharacter(result.character);
+      setSelectionState("ready");
+    },
+    [maybeRunRepair, refreshOrphanedCharacters],
+  );
 
   /**
    * Recomputes `selectionState`, `selectedItems`, and `character` whenever
@@ -531,6 +1223,7 @@ export function useOBR(): UseOBRReturn {
     async (selectedIds: string[]) => {
       if (!selectedIds || selectedIds.length === 0) {
         selectedTokenIdRef.current = null;
+        selectedTokenLinkRef.current = null;
         setSelectedItems([]);
         setSelectionState("none");
         setCharacter(null);
@@ -542,43 +1235,30 @@ export function useOBR(): UseOBRReturn {
 
       if (tokens.length === 0) {
         selectedTokenIdRef.current = null;
+        selectedTokenLinkRef.current = null;
         setSelectionState("none");
         setCharacter(null);
       } else if (tokens.length > 1) {
         // No single write target while multiple tokens are selected — see
         // selectedTokenIdRef's doc. `App.tsx` never renders edit controls
         // in this state (selectionState "multiple" is display-only), and
-        // clearing the ref here backs that up: a write attempted from a
+        // clearing the refs here backs that up: a write attempted from a
         // stale closure would find no target rather than guessing one.
         selectedTokenIdRef.current = null;
+        selectedTokenLinkRef.current = null;
         setSelectionState("multiple");
         // Display (and free-roll stat source) only — never triggers a
-        // migration write-back. A bulk selection isn't a deliberate "open
-        // this sheet" action on any one token, and writing to every stale
-        // token a multi-select happens to sweep over is not something the
-        // player asked for.
-        const loaded = loadCharacterFromItem(tokens[0]);
-        setCharacter(loaded && loaded.status === "ok" ? loaded.character : null);
+        // background write of any kind. A bulk selection isn't a
+        // deliberate "open this sheet" action on any one token.
+        const result = await loadCharacterForToken(tokens[0]);
+        setCharacter(result.status === "ready" ? result.character : null);
       } else {
         selectedTokenIdRef.current = tokens[0].id;
-        const loaded = loadCharacterFromItem(tokens[0]);
-        if (!loaded) {
-          setSelectionState("no-sheet");
-          setCharacter(null);
-        } else if (loaded.status === "unsupported") {
-          setSelectionState("unsupported-version");
-          setCharacter(null);
-        } else if (loaded.status === "invalid") {
-          setSelectionState("invalid-sheet");
-          setCharacter(null);
-        } else {
-          if (loaded.migrated) pendingMigrationTokenIdRef.current = tokens[0].id;
-          setCharacter(loaded.character);
-          setSelectionState("ready");
-        }
+        const result = await loadCharacterForToken(tokens[0]);
+        applyTokenLoadResult(tokens[0], result);
       }
     },
-    [loadCharacterFromItem],
+    [applyTokenLoadResult],
   );
 
   useEffect(() => {
@@ -609,6 +1289,7 @@ export function useOBR(): UseOBRReturn {
       setRole(prole as OBRRole);
       setIsReady(true);
       await handleSelectionChange(initialSelection || []);
+      void cleanupOrphanedMonsters();
       await OBR.action.setWidth(400);
       await OBR.action.setHeight(800);
       await OBR.action.setTitle("Nimble Sheet");
@@ -623,36 +1304,122 @@ export function useOBR(): UseOBRReturn {
 
       unsubscribers.push(
         OBR.scene.items.onChange(async (items) => {
-          const currentChar = characterRef.current;
-          if (!currentChar) return;
-          // Match against the real selected item id, not `currentChar.tokenId`
-          // — see selectedTokenIdRef's doc for why the payload id can't be
-          // trusted here either.
+          // This fires on every token move on the table — the hottest path
+          // in this extension, not an edge case. Called FIRST, before the
+          // selected-token logic below (which is scoped to "does this
+          // change concern MY selected token" and would often return
+          // before ever reaching a later call — moving some OTHER token
+          // wouldn't touch the currently selected one at all): its own
+          // first action is a synchronous, no-sheet-only check that
+          // returns immediately, before any OBR call, for the overwhelming
+          // majority of events where nobody is even looking at the
+          // recovery list. `items` is passed straight through — see its
+          // own doc for why it must never re-fetch what this callback was
+          // already handed.
+          maybeRefreshOrphanedCharactersOnLinkChange(items);
+
+          // Match against the real selected item id, never a value read out
+          // of stored character data — see selectedTokenIdRef's doc.
           const targetId = selectedTokenIdRef.current;
           if (!targetId) return;
           const updatedItem = items.find((i) => i.id === targetId);
-          if (!updatedItem) return;
-          const fresh = loadCharacterFromItem(updatedItem);
-          if (!fresh) return; // sheet removed mid-session — leave state as-is
-          if (fresh.status === "ok") {
-            if (fresh.migrated) pendingMigrationTokenIdRef.current = updatedItem.id;
-            setCharacter(fresh.character);
-          } else if (fresh.status === "unsupported") {
-            setSelectionState("unsupported-version");
-            setCharacter(null);
-          } else {
-            setSelectionState("invalid-sheet");
-            setCharacter(null);
+          // Reachable, confirmed (not assumed): `items` here is the scene's
+          // FULL current item list (proven by the `.find` above actually
+          // working at all — a delta-only list couldn't reliably resolve
+          // `targetId` this way). A deleted item is simply absent from that
+          // full list on the very `onChange` call the deletion itself
+          // triggers, so this genuinely fires for "the selected token was
+          // just deleted", not a case that can never happen.
+          if (!updatedItem) return; // sheet's token removed mid-session — leave state as-is
+
+          // THE guard for this hot path: does this token's own link even
+          // differ from what was last loaded? A drag/rotate/etc. touches
+          // position/rotation/etc, never `item.metadata[LINK_KEY]`, so the
+          // overwhelming majority of events reaching this point (anything
+          // concerning the selected token that isn't a link change) stop
+          // here — before `loadCharacterForToken`'s vault read, migration,
+          // and `setCharacter` (a new object, so a full sheet re-render)
+          // ever run. Before schema v6, this exact case needed no dedicated
+          // check: the character WAS the item's own metadata, so a plain
+          // position change never touched the field this hook actually
+          // read. Comparing `selectedTokenLinkRef` (what was last actually
+          // processed) restores that same property now that a link
+          // indirects to the vault instead.
+          const currentLink = updatedItem.metadata?.[LINK_KEY] as CharacterLink | undefined;
+          const lastProcessed = selectedTokenLinkRef.current;
+          if (
+            currentLink &&
+            lastProcessed &&
+            lastProcessed.tokenId === targetId &&
+            lastProcessed.characterId === currentLink.characterId &&
+            lastProcessed.updatedAt === currentLink.updatedAt
+          ) {
+            return; // token's own link is unchanged — nothing to reload
           }
+
+          // Recognizes this listener's own repair write echoing back and
+          // skips reprocessing it — see lastRepairedUpdatedAtRef's doc.
+          // Catches specifically the one case the check above cannot: right
+          // after a successful repair, `currentLink.updatedAt` is NEWER
+          // than `selectedTokenLinkRef` (which is only updated once
+          // `applyTokenLoadResult` runs again), so the check above does not
+          // short-circuit on that first echo — this one still does, via the
+          // separate value `maybeRunRepair` itself recorded on success.
+          // Purely an efficiency measure: `maybeRunRepair`'s in-flight/
+          // backoff guard is what actually bounds the write rate; without
+          // this check, the repair's own echo would still just cost one
+          // extra (correct, convergent, non-looping) reprocessing pass, not
+          // a correctness bug.
+          if (currentLink && lastRepairedUpdatedAtRef.current.get(updatedItem.id) === currentLink.updatedAt) {
+            return;
+          }
+
+          const result = await loadCharacterForToken(updatedItem);
+          applyTokenLoadResult(updatedItem, result);
         }),
       );
 
       // Single source of truth for the roll log — only update from metadata,
-      // never from local setRecentRolls after a push (avoids double-update re-mounts)
+      // never from local setRecentRolls after a push (avoids double-update re-mounts).
+      // Also the resync path for the currently loaded character's VAULT
+      // entry: the vault, not any one token, is what changes when another
+      // client edits this character, so this listener (not items.onChange
+      // above) is what a remote character edit actually arrives through.
       unsubscribers.push(
-        OBR.scene.onMetadataChange((meta) => {
+        OBR.scene.onMetadataChange(async (meta) => {
           const log = meta[ROLL_LOG_KEY] as DiceRollResult[] | undefined;
           if (log) setRecentRolls(log.slice(-MAX_ROLL_HISTORY));
+
+          const current = characterRef.current;
+          if (current) {
+            // Re-reads through loadCharacter (its own round trip) rather
+            // than picking `character.id`'s key out of `meta` directly, so
+            // this stays behind the same validate/migrate choke point as
+            // every other vault read instead of a second, hand-rolled one
+            // here.
+            const fresh = await loadCharacter(current.id);
+            if (fresh) setCharacter(fresh);
+          }
+
+          // Keeps the "Retrieve a lost soul" list live while the no-sheet
+          // screen is showing, rather than frozen at whatever it was the
+          // moment that screen first appeared — guarded on
+          // selectionStateRef (not the plain `selectionState` closure,
+          // stale here — see refreshOrphanedCharacters' own doc) so this
+          // doesn't run an extra vault read on every single scene-metadata
+          // change table-wide when nobody's even looking at that screen.
+          //
+          // Known gap: this fires on VAULT changes, never on a pure token
+          // deletion with no accompanying vault write — item metadata and
+          // scene metadata are separate OBR channels, and today nothing
+          // touches the vault when a `"player"`-kind token alone is
+          // deleted (only `"monster"`-kind does, via
+          // cleanupOrphanedMonsters, and only at scene load). A token
+          // deleted elsewhere while this screen is open is not guaranteed
+          // to appear here until something else changes the vault too.
+          if (selectionStateRef.current === "no-sheet") {
+            refreshOrphanedCharacters();
+          }
         }),
       );
 
@@ -662,17 +1429,20 @@ export function useOBR(): UseOBRReturn {
       // showing the old scene's sheet (wrong data presented as current,
       // not an empty state) until the player happens to change selection.
       // `ready` goes false during the switch and back to true once the new
-      // scene has loaded; only the false transition needs handling here,
-      // since the new scene's own selection change (if any) re-populates
-      // everything through the normal `player.onChange`/`handleSelectionChange`
-      // path.
+      // scene has loaded; the false transition resets local state, and the
+      // true transition re-runs the orphaned-monster sweep for the newly
+      // entered scene (selection itself is repopulated separately, through
+      // the normal `player.onChange`/`handleSelectionChange` path).
       unsubscribers.push(
         OBR.scene.onReadyChange((ready) => {
-          if (ready) return;
-          selectedTokenIdRef.current = null;
-          setSelectedItems([]);
-          setSelectionState("none");
-          setCharacter(null);
+          if (!ready) {
+            selectedTokenIdRef.current = null;
+            setSelectedItems([]);
+            setSelectionState("none");
+            setCharacter(null);
+            return;
+          }
+          void cleanupOrphanedMonsters();
         }),
       );
     });
@@ -681,17 +1451,25 @@ export function useOBR(): UseOBRReturn {
       cancelled = true;
       unsubscribers.forEach((unsubscribe) => unsubscribe());
     };
-  }, [handleSelectionChange, loadCharacterFromItem]);
+  }, [
+    handleSelectionChange,
+    applyTokenLoadResult,
+    refreshOrphanedCharacters,
+    maybeRefreshOrphanedCharactersOnLinkChange,
+  ]);
 
-  // Timers above are refs, not effect-scoped state, so they need their own
-  // cleanup — same discipline as the SDK listener unsubscribes above,
-  // applied to setTimeout instead.
+  // Cleanup for the pending-write and fan-out debounce timers — same
+  // discipline as the SDK listener unsubscribes above, applied to
+  // setTimeout instead.
   useEffect(() => {
+    // Captured once here, not read as `fanOutTimersRef.current` inside the
+    // cleanup itself: same Map object either way (never replaced, only
+    // mutated — see scheduleFanOut), but this satisfies the lint rule
+    // about reading a ref's `.current` inside a cleanup closure.
+    const fanOutTimers = fanOutTimersRef.current;
     return () => {
       if (pendingTimerRef.current !== null) clearTimeout(pendingTimerRef.current);
-      if (existenceCheckTimerRef.current !== null) {
-        clearTimeout(existenceCheckTimerRef.current);
-      }
+      for (const timer of fanOutTimers.values()) clearTimeout(timer);
     };
   }, []);
 
@@ -739,63 +1517,6 @@ export function useOBR(): UseOBRReturn {
   }, []);
 
   /**
-   * Confirms, after a debounced quiet period, that `tokenId` still exists
-   * in the scene. Catches the one write failure mode that resolves
-   * successfully instead of rejecting: `OBR.scene.items.updateItems`
-   * re-resolves its target by ID before writing, and silently does
-   * nothing — no error, no rejection — if that lookup comes back empty
-   * (verified in the SDK's `SceneItemsApi.updateItems` source: it
-   * early-returns once the computed patch set is empty). A `.then`/`.catch`
-   * around the write itself can never see this; the promise resolves
-   * normally either way.
-   *
-   * Deliberately debounced rather than checked before, or synchronously
-   * after, every write: some fields write to OBR on every keystroke by
-   * design (see CLAUDE.md), and checking existence on that same cadence
-   * would double the SDK calls on the common, successful path to catch a
-   * rare case (a token deleted mid-edit). Debouncing moves that cost onto
-   * the failure path instead — one confirmation call after a burst of
-   * writes settles, not one per keystroke.
-   *
-   * The resulting error has `canRetry: false`: resending the same write
-   * would just re-trigger the same silent no-op.
-   *
-   * NOT extended into a general "read the value back and compare it to what
-   * we sent" persistence check, on purpose — don't add that. `getItems`
-   * here is itself an SDK call, resolved the exact same way as the write it
-   * would be verifying: both are answered by the OBR host from its own
-   * local scene state over `postMessage`, not by asking the multiplayer
-   * server. A write that "succeeded" only locally (see the big note on
-   * `SyncStatus`'s `"idle"` case) would read back as matching, every time,
-   * because the read and the write hit the same local state. Comparing
-   * values here would look more thorough while detecting nothing more than
-   * the existence check already does — false confidence, not real
-   * coverage. This check stays scoped to what it can actually verify: item
-   * existence.
-   */
-  const scheduleExistenceCheck = (tokenId: string) => {
-    if (existenceCheckTimerRef.current !== null) {
-      clearTimeout(existenceCheckTimerRef.current);
-    }
-    existenceCheckTimerRef.current = setTimeout(() => {
-      existenceCheckTimerRef.current = null;
-      void OBR.scene.items.getItems([tokenId]).then((items) => {
-        if (items.length === 0) {
-          currentErrorIdRef.current += 1;
-          setSyncStatus({
-            state: "error",
-            message:
-              "This token no longer exists in the scene. Your last change may not have been saved.",
-            canRetry: false,
-            retry: () => {},
-            dismiss: () => setSyncStatus({ state: "idle" }),
-          });
-        }
-      });
-    }, EXISTENCE_CHECK_DEBOUNCE_MS);
-  };
-
-  /**
    * Central choke point for every OBR SDK write this hook performs
    * (character sheet edits, roll log, sheet creation, claiming) — wraps
    * `execute` with {@link SyncStatus} tracking so a failure is visible
@@ -804,13 +1525,7 @@ export function useOBR(): UseOBRReturn {
    * @param options.execute - Performs the actual SDK call(s). Must re-read
    * any character state it needs from `characterRef.current` at call time
    * rather than closing over a value captured earlier: this same function
-   * runs again, unchanged, on retry. If it targets a single item, it must
-   * likewise read the target id from `selectedTokenIdRef.current` at call
-   * time (never from `character.tokenId` — see that ref's doc) and return
-   * the id it actually wrote to, so {@link scheduleExistenceCheck} verifies
-   * the exact item just written rather than a value computed separately
-   * that could drift from it. Return nothing for writes not tied to a
-   * single item (the roll log, which lives in scene metadata).
+   * runs again, unchanged, on retry.
    * @param options.isOptimistic - Passed straight through to
    * {@link describeWriteError}; see its doc. Defaults to `false`; only
    * `updateCharacter` sets it.
@@ -838,9 +1553,18 @@ export function useOBR(): UseOBRReturn {
    * `deleteWithUndo` makes one, so it doesn't undermine that hook's use of
    * this return value to decide whether a delete is worth offering an
    * undo for.
+   *
+   * @remarks As of schema v6, `execute` no longer returns a token id for a
+   * post-write existence check: the write that matters now targets the
+   * vault (by `character.id`, immune to any one token's existence), and
+   * every write that still touches a specific token (sheet creation,
+   * claiming) is a token the player is actively looking at, not one this
+   * hook needs to double-check survived the round trip. See the removed
+   * "token no longer exists" outcome in `SyncStatus`'s own doc for the
+   * full reasoning.
    */
   const performWrite = async (options: {
-    execute: () => Promise<string | undefined | void>;
+    execute: () => Promise<void>;
     isOptimistic?: boolean;
     isRetry?: boolean;
     retryOfErrorId?: number;
@@ -871,7 +1595,7 @@ export function useOBR(): UseOBRReturn {
     };
 
     try {
-      const writtenTokenId = await execute();
+      await execute();
       settle();
       if (isRetry) {
         setSyncStatus((prev) =>
@@ -882,7 +1606,6 @@ export function useOBR(): UseOBRReturn {
       } else {
         setSyncStatus((prev) => (prev.state === "error" ? prev : { state: "idle" }));
       }
-      if (writtenTokenId) scheduleExistenceCheck(writtenTokenId);
       return true;
     } catch (err) {
       settle();
@@ -915,19 +1638,17 @@ export function useOBR(): UseOBRReturn {
   });
 
   /**
-   * Writes back a character that was just migrated on read (see
-   * {@link loadCharacterFromItem}), so the persisted `schemaVersion` catches
-   * up and other clients stop re-migrating the same old data on every load.
+   * Writes back a token whose sheet was just migrated off the legacy
+   * `METADATA_KEY` storage location (see `loadCharacterForToken`'s legacy
+   * branch and `pendingLegacyMigrationRef`'s own doc), so the token stops
+   * re-migrating the same old data on every future load.
    *
-   * Runs as its own effect, keyed off `pendingMigrationTokenIdRef`, rather
+   * Runs as its own effect, keyed off `pendingLegacyMigrationRef`, rather
    * than inline in `handleSelectionChange`: by the time this effect runs,
    * `character` (and therefore `canEdit`/`isOwner`, both derived from it
    * above) already reflects the just-loaded record, so this reuses the same
    * `canEdit` every other write in this hook is gated on instead of
-   * re-deriving permission from `ownerId` a second way. `pendingMigrationTokenIdRef`
-   * only exists because `NimbleCharacter` itself can't carry an ephemeral
-   * "this copy was just migrated" flag — `character.schemaVersion` is
-   * always `CURRENT_SCHEMA_VERSION` once loaded, migrated or not.
+   * re-deriving permission from `ownerId` a second way.
    *
    * A read-only viewer (not GM, not owner) never reaches the write: `canEdit`
    * is `false` for them, so the ref is cleared and nothing is sent. Two
@@ -937,43 +1658,35 @@ export function useOBR(): UseOBRReturn {
    * so whichever lands last simply repeats the same result — no different
    * from any other pair of near-simultaneous writes this hook already
    * doesn't defend against (there is no compare-and-swap on the OBR side).
-   * A sheet nobody with edit rights ever selects stays at its old
-   * `schemaVersion` in storage indefinitely, migrated only in memory for
-   * whoever views it — accepted, not solved here.
+   * A token nobody with edit rights ever selects stays on the legacy
+   * storage location indefinitely, migrated only in memory for whoever
+   * views it — accepted, not solved here, same as the pre-v6 equivalent of
+   * this effect always was for a plain schema-version bump.
    */
   useEffect(() => {
     if (!character) return;
-    // Compared against the live selection (selectedTokenIdRef), never
-    // `character.tokenId` — see that ref's doc. `pendingMigrationTokenIdRef`
-    // itself already holds a real item id (set from `tokens[0].id`/
-    // `updatedItem.id` in handleSelectionChange/the resync listener, never
-    // from the payload), so once it matches the current selection it IS
-    // the correct write target.
-    const tokenId = pendingMigrationTokenIdRef.current;
-    if (!tokenId || tokenId !== selectedTokenIdRef.current) return;
-    pendingMigrationTokenIdRef.current = null;
+    const pending = pendingLegacyMigrationRef.current;
+    // Compared against the live selection (selectedTokenIdRef), never any
+    // value derived from stored character data — see that ref's doc.
+    if (!pending || pending.tokenId !== selectedTokenIdRef.current) return;
+    pendingLegacyMigrationRef.current = null;
     if (!canEdit) return;
     void performWriteRef.current({
       execute: async () => {
         assertOnline();
-        // Repairs the payload's own `tokenId` to the real target as part
-        // of this write, same as every other write site below — see
-        // selectedTokenIdRef's doc.
-        const migrated = { ...character, tokenId };
-        await OBR.scene.items.updateItems([tokenId], (items) => {
-          for (const item of items) {
-            item.metadata[METADATA_KEY] = migrated;
-          }
-        });
-        return tokenId;
+        await pending.run();
       },
     });
   }, [character, canEdit]);
 
   /**
    * Applies a partial update to the currently loaded character and persists
-   * it to the owning item's metadata via `OBR.scene.items.updateItems`,
-   * which propagates the change to every connected client.
+   * it to the vault (`characterStore.ts`'s `saveCharacter`), then schedules
+   * a debounced fan-out of the new state to every token's
+   * {@link CharacterLink} (see `scheduleFanOut`/`fanOutSnapshot`) — not
+   * immediate, since the vault save above is what actually makes this
+   * write visible to every other client; the fan-out only refreshes the
+   * cross-scene-copy-paste transport copy.
    *
    * Guarded by `canEditRef`: if the caller doesn't currently hold edit
    * rights (not GM, not the sheet's owner), the update is silently
@@ -1042,32 +1755,21 @@ export function useOBR(): UseOBRReturn {
       execute: async () => {
         // Re-read at call time, not the `current` captured above: this
         // same closure runs again, unchanged, on retry, potentially after
-        // other fields changed remotely — see performWrite's JSDoc. The
-        // write target is read fresh here too, from selectedTokenIdRef,
-        // never from `latest.tokenId` — see that ref's doc for why the
-        // payload id can't be trusted as a write target.
+        // other fields changed remotely — see performWrite's JSDoc.
         const latest = characterRef.current;
         if (!latest || !canEditRef.current) return;
-        const targetId = selectedTokenIdRef.current;
-        if (!targetId) return;
-        const updated = {
-          ...latest,
-          ...clampedUpdates,
-          tokenId: targetId,
-          updatedAt: Date.now(),
-        };
+        const updated = { ...latest, ...clampedUpdates, updatedAt: Date.now() };
         // setCharacter first, offline check second: the field must still
         // show what was typed even if we already know the write will fail
         // (see assertOnline's doc) — checking before setCharacter would
         // revert the keystroke instead.
         setCharacter(updated);
         assertOnline();
-        await OBR.scene.items.updateItems([targetId], (items) => {
-          for (const item of items) {
-            item.metadata[METADATA_KEY] = updated;
-          }
-        });
-        return targetId;
+        await saveCharacter(updated);
+        // Debounced, not immediate — see scheduleFanOut's doc for why the
+        // fan-out doesn't need to run on the same cadence as the vault
+        // save that's actually the source of truth.
+        scheduleFanOut(updated);
       },
     });
   };
@@ -1080,7 +1782,7 @@ export function useOBR(): UseOBRReturn {
    * sees them. Visible rolls are written to `OBR.scene.setMetadata`; the
    * `onMetadataChange` listener registered in the main effect is the only
    * place that calls `setRecentRolls` for visible rolls, to avoid a double
-   * state update that would otherwise remount conditional branches in `App`.
+   * state update that would otherwise remount conditional UI in `App`.
    *
    * @param result - The roll result to log.
    */
@@ -1094,10 +1796,7 @@ export function useOBR(): UseOBRReturn {
       // Unlike the other 3 call sites, retry here can't overwrite a
       // concurrent change: execute re-fetches the log fresh (below) and
       // appends to it, on both the original attempt and any retry, rather
-      // than replacing a whole stored object with a locally-held copy. Not
-      // wired into the banner text (no room in a two-line message for a
-      // distinction this narrow) — it stays true only as an implementation
-      // note here.
+      // than replacing a whole stored object with a locally-held copy.
       execute: async () => {
         assertOnline();
         // Re-fetched fresh on every call, including retry, so a retry
@@ -1190,7 +1889,7 @@ export function useOBR(): UseOBRReturn {
 
   /**
    * Rolls initiative for the current character: `1d20 + DEX + initiativeBonus`.
-   * Now routed through {@link DiceRollModal} like every other roll (see
+   * Routed through {@link DiceRollModal} like every other roll (see
    * CombatTab), so `mode`/`advantageCount`/`hidden` come from the same
    * confirmation the player already sees for stat saves/skill checks.
    *
@@ -1216,34 +1915,33 @@ export function useOBR(): UseOBRReturn {
   };
 
   /**
-   * Attaches a brand-new default character sheet to the given token and
-   * makes the calling player its owner.
+   * Creates a brand-new default character, saves it to the vault, and links
+   * the given token to it, making the calling player its owner.
    *
    * @param item - The OBR scene item (token) to attach a sheet to.
    */
   const createSheetForToken = async (item: Item) => {
-    // Safe to target `item.id` directly here, unlike every other write
-    // site in this hook: `item` is the actual selected token passed in by
-    // the caller (`App.tsx`'s `firstItem`, itself sourced from the live
-    // selection), not an id read back out of a stored payload.
-    const newChar = createDefaultCharacter(item.id, playerIdRef.current);
+    const newChar = createDefaultCharacter(playerIdRef.current);
     await performWrite({
       execute: async () => {
         assertOnline();
+        // Token link written before the vault entry — see
+        // cleanupOrphanedMonsters' comment for why this ordering is always
+        // used for character creation, not only when kind is "monster".
         await OBR.scene.items.updateItems([item.id], (items) => {
-          for (const i of items) {
-            i.metadata[METADATA_KEY] = newChar;
-          }
+          for (const i of items) i.metadata[LINK_KEY] = linkFor(newChar);
         });
+        await saveCharacter(newChar);
         setCharacter(newChar);
         setSelectionState("ready");
-        return item.id;
       },
     });
   };
 
   /**
-   * Sets the current player as the owner of the currently loaded character.
+   * Sets the current player as the owner of the currently loaded character,
+   * saves it to the vault, and fans the change out to every token
+   * displaying it (see `fanOutSnapshot`).
    *
    * @remarks This is intentionally **not** gated by `canEdit` — it is the
    * entry point that grants edit rights in the first place. It powers two
@@ -1268,24 +1966,50 @@ export function useOBR(): UseOBRReturn {
       execute: async () => {
         const latest = characterRef.current;
         if (!latest) return;
-        // Write target read fresh from the live selection, not
-        // `latest.tokenId` — see selectedTokenIdRef's doc.
-        const targetId = selectedTokenIdRef.current;
-        if (!targetId) return;
-        const claimed = {
-          ...latest,
-          ownerId: playerIdRef.current,
-          tokenId: targetId,
-          updatedAt: Date.now(),
-        };
+        const claimed = { ...latest, ownerId: playerIdRef.current, updatedAt: Date.now() };
         assertOnline();
-        await OBR.scene.items.updateItems([targetId], (items) => {
-          for (const item of items) {
-            item.metadata[METADATA_KEY] = claimed;
-          }
-        });
+        await saveCharacter(claimed);
+        void fanOutSnapshot(claimed);
         setCharacter(claimed);
-        return targetId;
+      },
+    });
+  };
+
+  /**
+   * Links the currently selected (sheet-less) token to an existing vault
+   * character by id — the "Retrieve a lost soul" recovery action. A
+   * `"player"`-kind character survives its token's deletion (see
+   * {@link CharacterKind}'s doc); this is what makes it reachable again
+   * from a different, or the same, token.
+   *
+   * No-ops if nothing is selected, or if `characterId` no longer resolves
+   * in the vault by the time this runs — the list shown to the player
+   * (`orphanedCharacters`) is a snapshot from whenever the no-sheet screen
+   * loaded, and could in principle be a moment stale (another client
+   * recovering the same character first, however unlikely at this table
+   * size). Recovering doesn't remove the character from anyone else's
+   * list either, and isn't exclusive: a character can legitimately be
+   * linked from more than one token at once (see `selectedTokenIdRef`'s
+   * doc) — a race here just means two tokens end up pointing at the same
+   * character, not a conflict to prevent.
+   *
+   * @remarks Not gated by `canEdit`, matching `createSheetForToken` and
+   * `claimToken`: attaching a sheet to a blank token is not itself an edit
+   * to that sheet's contents.
+   */
+  const recoverCharacter = async (characterId: string) => {
+    const targetId = selectedTokenIdRef.current;
+    if (!targetId) return;
+    await performWrite({
+      execute: async () => {
+        assertOnline();
+        const found = await loadCharacter(characterId);
+        if (!found) return;
+        await OBR.scene.items.updateItems([targetId], (items) => {
+          for (const item of items) item.metadata[LINK_KEY] = linkFor(found);
+        });
+        setCharacter(found);
+        setSelectionState("ready");
       },
     });
   };
@@ -1309,5 +2033,7 @@ export function useOBR(): UseOBRReturn {
     recentRolls,
     createSheetForToken,
     claimToken,
+    orphanedCharacters,
+    recoverCharacter,
   };
 }

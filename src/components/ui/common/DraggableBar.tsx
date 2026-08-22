@@ -16,6 +16,7 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { KeyboardEvent } from "react";
+import { useDebouncedCommit } from "../../../hooks/useDebouncedCommit";
 
 /**
  * @property value - Valeur actuelle (ex: HP courant).
@@ -113,13 +114,20 @@ export function DraggableBar({
     handlePointerMove(clientX);
   };
 
-  /**
-   * Standard WAI-ARIA slider keyboard interaction: arrow keys step by 1,
-   * Home/End jump to the extremes. Each press commits immediately (there's
-   * no separate press/release the way a drag has mousedown/mouseup, so
-   * `onChange` and `onCommit` both fire per keystroke, same as
-   * `InlineNumberField`'s direct-entry path elsewhere in this app).
-   */
+  // Standard WAI-ARIA slider keyboard interaction: arrow keys step by 1,
+  // Home/End jump to the extremes. There's no separate press/release the
+  // way a drag has mousedown/mouseup — holding a key fires OS key-repeat,
+  // potentially dozens of keydown events per second — so the commit itself
+  // is debounced (see useDebouncedCommit) rather than fired on every
+  // keystroke the way it used to be: one write per repeated keydown was
+  // tolerable before the vault-decoupling batch doubled write volume per
+  // save (vault + snapshot fan-out), but enough on its own to trip OBR's
+  // rate limit once it was. `onChange` (local display only) still fires on
+  // every keystroke for instant visual feedback — only the OBR write is
+  // throttled.
+  const { schedule: scheduleKeyCommit, flush: flushKeyCommit } =
+    useDebouncedCommit<number>((v) => onCommit?.(v));
+
   const handleKeyDown = (e: KeyboardEvent<HTMLDivElement>) => {
     if (!canEdit) return;
     let next: number;
@@ -143,8 +151,11 @@ export function DraggableBar({
     }
     e.preventDefault();
     onChange(next);
-    onCommit?.(next);
+    scheduleKeyCommit(next);
   };
+
+  /** Commits immediately on blur rather than waiting out the debounce — leaving the control shouldn't leave a write pending. */
+  const handleBlur = () => flushKeyCommit();
 
   // ── Listeners globaux pendant le drag ──────────────────────────
   useEffect(() => {
@@ -189,6 +200,7 @@ export function DraggableBar({
       role={canEdit ? "slider" : undefined}
       tabIndex={canEdit ? 0 : undefined}
       onKeyDown={canEdit ? handleKeyDown : undefined}
+      onBlur={canEdit ? handleBlur : undefined}
       aria-label={canEdit ? ariaLabel : undefined}
       aria-valuenow={canEdit ? value : undefined}
       aria-valuemin={canEdit ? 0 : undefined}

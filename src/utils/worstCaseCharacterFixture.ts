@@ -264,9 +264,10 @@ export function buildWorstCaseCharacter(): NimbleCharacter {
     gold: 42,
     silver: 15,
 
-    tokenId: "fixture-token-0000-0000-0000-000000000000",
+    id: "fixture-character-0000-0000-0000-000000000000",
     ownerId: "fixture-player-0000-0000-0000-000000000000",
     updatedAt: Date.UTC(2026, 7, 20),
+    kind: "player",
 
     schemaVersion: CURRENT_SCHEMA_VERSION,
   };
