@@ -18,6 +18,7 @@ import { InventoryTab } from "./components/tabs/InventoryTab";
 import { RollLog } from "./components/ui/RollLog";
 import { DicePanel } from "./components/ui/DicePanel";
 import { CharacterHeader } from "./components/ui/CharacterHeader";
+import { NoSheetPanel } from "./components/ui/NoSheetPanel";
 import { SyncStatusBanner } from "./components/ui/SyncStatusBanner";
 import { DeleteUndoToast } from "./components/ui/DeleteUndoToast";
 import type { DiceRollRequest, RollMode } from "./types/character";
@@ -53,6 +54,8 @@ export default function App() {
     recentRolls,
     createSheetForToken,
     claimToken,
+    orphanedCharacters,
+    recoverCharacter,
   } = useOBR();
 
   const { canEdit, isGM } = permissions;
@@ -191,22 +194,34 @@ export default function App() {
         </div>
       )}
 
-      {/* ── No-sheet message ──────────────────────────────────────── */}
+      {/* ── No-sheet — "Create a sheet" always, "Retrieve a lost soul"
+          only when the vault holds a recoverable player character — see
+          NoSheetPanel's own file header.
+
+          CONSTRAINT: this (like every other block above `<main>`) is a
+          sibling of `<main>` inside the OUTER container, which is
+          `overflow-hidden` (see its className below). Neither this block
+          nor `<main>` has `min-h-0`, so neither can shrink below its own
+          content's natural height — if THIS block's natural height grows
+          enough that the combined total exceeds the panel's fixed size
+          (400x800, set via `OBR.action.setWidth/setHeight` in useOBR.ts),
+          the excess is silently CLIPPED by the outer `overflow-hidden`,
+          not made scrollable — and since `<main>` (containing DicePanel/
+          RollLog) renders AFTER this block, its BOTTOM content is what
+          gets clipped first. This is exactly what an unbounded recovery
+          list inside NoSheetPanel risked before its own `max-h-64`
+          scroll cap was added — bounding content here is what keeps this
+          block's height safely small, not a change to this flex chain
+          itself. Do not remove that cap without re-verifying Roll History
+          is still visible on the no-sheet screen in real OBR — this
+          exact interaction is not something type-check/lint/tests can
+          see, per the Panel layout contract elsewhere in this file. ── */}
       {showNoSheet && (
-        <div className="flex flex-col items-center justify-center gap-4 py-10 px-6 text-center">
-          <span className="text-5xl opacity-40">📄</span>
-          <p className="text-sm text-stone-500 max-w-50 leading-relaxed">
-            This token has no character sheet.
-          </p>
-          {firstItem && (
-            <button
-              onClick={() => createSheetForToken(firstItem)}
-              className="px-4 py-2 rounded-lg bg-amber-800 hover:bg-amber-700 text-amber-100 text-sm font-semibold transition-colors"
-            >
-              Create sheet
-            </button>
-          )}
-        </div>
+        <NoSheetPanel
+          orphanedCharacters={orphanedCharacters}
+          onCreate={firstItem ? () => createSheetForToken(firstItem) : undefined}
+          onRecover={recoverCharacter}
+        />
       )}
 
       {/* ── Unsupported schema version — a newer client wrote this sheet
@@ -339,26 +354,44 @@ export default function App() {
           </>
         )}
 
-        {/* ── DicePanel + RollLog — always mounted here, never unmounted.
-            Mounted once in <main>, visible in all states. RollLog (inline)
-            also carries the pinned Nimble license notices — see its
-            @file header — present here from the empty state onward.
+        {/* ── DicePanel + RollLog — DicePanel always mounted here, never
+            unmounted (single-JSX-tree rule, see "Structural constraints"
+            in CLAUDE.md). RollLog (inline) also carries the pinned Nimble
+            license notices — see its @file header.
 
-            Part 1h: plain `flex flex-col gap-3` (natural content height,
-            a normal block-flow child of `<main>`) when a sheet tab is
-            open — no `flex-1`/`min-h-0`, nothing to stretch or collapse.
-            `flex-1 min-h-0` only when this wrapper is `<main>`'s sole
-            child (no-sheet states) — see the comment on `<main>` above for
-            why that's safe there and not elsewhere. */}
+            Three states for this wrapper, by className below:
+            - Sheet open (`showSheet`): plain `flex flex-col gap-3`
+              (natural content height, a normal block-flow child of
+              `<main>`) — no `flex-1`/`min-h-0`, nothing to stretch or
+              collapse. Part 1h.
+            - No-sheet (`showNoSheet`): `hidden`. That screen's one job is
+              create/recover a sheet — free-rolling dice and roll history
+              are already one click away via deselecting to the no-token
+              state, so this batch removed both rather than fixing their
+              layout there (see the "Panel layout contract" in CLAUDE.md).
+              `DicePanel` stays MOUNTED regardless — `hidden` on this
+              WRAPPER, never a `{condition && ...}` around `DicePanel`
+              itself, is what keeps it mounted-but-invisible instead of
+              unmounted. `RollLog` (unlike `DicePanel`, fine to actually
+              unmount — see "Structural constraints") is excluded from
+              this state's render condition below instead of also being
+              hidden here; its required license notices are rendered
+              directly by `NoSheetPanel` instead (see that file).
+            - Every other no-sheet-shaped state (no-token/unsupported/
+              invalid): `flex-1 min-h-0`, since this wrapper is `<main>`'s
+              sole child there — see the comment on `<main>` above for why
+              that's safe in these states specifically and not elsewhere. */}
         <div
-          className={`px-3 pt-2 pb-3 flex flex-col gap-3 ${showSheet ? "" : "flex-1 min-h-0"}`}
+          className={`px-3 pt-2 pb-3 flex flex-col gap-3 ${
+            showNoSheet ? "hidden" : showSheet ? "" : "flex-1 min-h-0"
+          }`}
         >
           <DicePanel
             isGM={isGM}
             onRoll={onFreeRoll}
             defaultCollapsed={true}
           />
-          {(showNoToken || showNoSheet || showUnsupportedVersion || showInvalidSheet) && (
+          {(showNoToken || showUnsupportedVersion || showInvalidSheet) && (
             <RollLog
               rolls={recentRolls}
               isGM={isGM}
