@@ -181,6 +181,7 @@ export function buildWorstCaseCharacter(): NimbleCharacter {
       formula: "",
       isFavorite: true,
       isArmor: false,
+      category: "gear",
     }),
     createCustomItem({
       name: "Carnet de Croquis Ensorcelé",
@@ -190,6 +191,7 @@ export function buildWorstCaseCharacter(): NimbleCharacter {
       formula: "",
       isFavorite: false,
       isArmor: false,
+      category: "gear",
     }),
   ];
 

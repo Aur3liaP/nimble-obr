@@ -21,5 +21,12 @@
     "erasableSyntaxOnly": true,
     "noFallthroughCasesInSwitch": true
   },
-  "include": ["src"]
+  "include": ["src"],
+  /* metadataSizing.ts is Node-only (uses node:zlib) — type-checked instead
+   * under tsconfig.node.json, which has the Node type declarations this
+   * (DOM-only) project deliberately doesn't. Its test is excluded too:
+   * `exclude` only stops a glob from picking a file as a root, it doesn't
+   * stop this project from still loading (and diagnosing) it as a
+   * dependency if something in-scope imports it. */
+  "exclude": ["src/utils/metadataSizing.ts", "src/utils/metadataSizing.test.ts"]
 }

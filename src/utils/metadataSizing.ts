@@ -232,7 +232,7 @@ const ALL_CHARACTER_FIELD_NAMES = [
   "actionsRemaining", "initiativeResult",
   "id", "type", "range", "formula", "description", "isFavorite", "manaCost", "spellTier", "spellSchool",
   "slots", "isCustom", "actionCost", "sourceKey", "catalogVersion",
-  "quantity", "isEquipped", "isArmor", "manualResolution",
+  "quantity", "isEquipped", "isArmor", "manualResolution", "category",
 ];
 
 /**
