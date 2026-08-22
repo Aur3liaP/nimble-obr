@@ -62,8 +62,8 @@ export default function App() {
   // Mounted here, above the conditionally-rendered tabs, so a pending undo
   // survives switching tabs — see useDeleteUndo's file header for why a
   // tab-local useState would lose it. `selectedItems[0]?.id` (the live
-  // selection's real item id), not `character.tokenId`, is what the hook
-  // uses to detect a token switch — see its JSDoc.
+  // selection's real item id) is what the hook uses to detect a token
+  // switch — see its JSDoc.
   const { pendingUndo, deleteWithUndo, undo } = useDeleteUndo(
     character,
     selectedItems[0]?.id,

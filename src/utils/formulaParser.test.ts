@@ -61,7 +61,7 @@ const NO_CHARACTER_CTX: FormulaContext = {
 };
 
 function makeCharacter(overrides: Partial<NimbleCharacter> = {}): NimbleCharacter {
-  const char = createDefaultCharacter("token-1", "owner-1");
+  const char = createDefaultCharacter("owner-1");
   return {
     ...char,
     level: 5,

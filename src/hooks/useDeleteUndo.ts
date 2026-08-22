@@ -60,15 +60,22 @@ export type UndoableArrayKey = "actions" | "inventory";
  * `removeEntryById`'s doc in `entryUndo.ts`), used to restore roughly the
  * same list position.
  * @property tokenId - The real OBR item id of the token this deletion
- * happened on (the live selection's id, never `character.tokenId` from
- * the sheet payload — see `selectedTokenIdRef`'s doc in `useOBR.ts` for
- * why the payload id can't be trusted for this: a token copy-pasted in
- * the same scene carries an identical payload `tokenId` until its first
- * edit, which would make this guard fail to tell the original and the
- * copy apart). Guards against restoring into a *different* character's
- * sheet if the player switches token selection during the undo window —
- * switching tabs on the SAME character does not touch this, see the
- * effect below.
+ * happened on (the live selection's id — see `selectedTokenIdRef`'s doc in
+ * `useOBR.ts`, which this mirrors: always the actual selected item id,
+ * never anything read out of stored character data). Guards against
+ * restoring into a *different* character's sheet if the player switches
+ * token selection during the undo window — switching tabs on the SAME
+ * character does not touch this, see the effect below.
+ *
+ * Historical note: before schema v6, `NimbleCharacter` itself carried a
+ * `tokenId` field, and this property was deliberately never sourced from
+ * it — a token copy-pasted in the same scene carried an identical payload
+ * `tokenId` until its first edit, which would have made this guard fail to
+ * tell the original and the copy apart. That field is gone now (a
+ * character no longer knows which token(s) display it at all), but the
+ * discipline it forced — always identify a token by the live selection,
+ * never by anything read out of character data — is exactly what this
+ * property still does.
  */
 export type PendingUndo =
   | {
@@ -128,9 +135,7 @@ export interface UseDeleteUndoReturn {
  * @param selectedTokenId - The real OBR item id of the currently selected
  * token (`useOBR`'s `selectedItems[0]?.id`), or `undefined`. Used ONLY as
  * an identity key for the same-character guard described on
- * {@link PendingUndo.tokenId} — never `character.tokenId`, which is part
- * of the sheet payload and can lag behind the actual selection (see that
- * property's doc).
+ * {@link PendingUndo.tokenId} — see that property's doc.
  * @param updateCharacter - `useOBR`'s write function. Resolves `true` only
  * once the SDK write actually went through without throwing (see its doc
  * in `useOBR.ts`) — `deleteWithUndo` relies on that to decide whether a

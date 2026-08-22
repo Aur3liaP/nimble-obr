@@ -84,7 +84,7 @@ const GROUP_SPECS: GroupSpec[] = [
   { group: "spells", kind: "spellActions" },
   { group: "inventory", kind: "keys", keys: ["inventory", "inventorySlots", "gold", "silver"] },
   { group: "notes", kind: "keys", keys: ["languages", "abilities", "notes", "battleNotes", "spellNotes", "inventoryNotes"] },
-  { group: "schemaMeta", kind: "keys", keys: ["tokenId", "ownerId", "updatedAt", "schemaVersion"] },
+  { group: "schemaMeta", kind: "keys", keys: ["id", "ownerId", "updatedAt", "kind", "schemaVersion"] },
 ];
 
 /** Every {@link NimbleCharacter} key covered by {@link GROUP_SPECS} — used by a reflective test to guard against a field silently falling outside every group. */
@@ -224,7 +224,7 @@ const ALL_CHARACTER_FIELD_NAMES = [
   "defense", "initiativeBonus", "initiativeAdvantage", "combat",
   "languages", "abilities", "notes", "battleNotes", "spellNotes", "inventoryNotes",
   "actions", "inventory", "inventorySlots", "gold", "silver",
-  "tokenId", "ownerId", "updatedAt", "schemaVersion",
+  "id", "ownerId", "updatedAt", "kind", "schemaVersion",
   "current", "temp", "max", "dice",
   "str", "dex", "int", "wil",
   "arcana", "examination", "finesse", "influence", "insight", "lore", "might", "naturecraft", "perception", "stealth",
