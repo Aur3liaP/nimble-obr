@@ -389,20 +389,6 @@ export function SummaryTab({
                       className="w-7 text-center text-sm font-bold bg-stone-900 border border-stone-700 rounded text-stone-200 outline-none py-0.5 focus:border-amber-600"
                     />
                     <span className="text-stone-600 text-xs">/</span>
-                    <input
-                      type="number"
-                      value={character.hitDice.max}
-                      min={1}
-                      onChange={(e) =>
-                        onUpdate({
-                          hitDice: {
-                            ...character.hitDice,
-                            max: Math.max(1, parseInt(e.target.value) || 1),
-                          },
-                        })
-                      }
-                      className="w-7 text-center text-sm font-bold bg-stone-900 border border-stone-700 rounded text-stone-200 outline-none py-0.5 focus:border-amber-600"
-                    />
                     <select
                       value={character.hitDice.dice}
                       onChange={(e) =>
