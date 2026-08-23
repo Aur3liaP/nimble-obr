@@ -11,8 +11,12 @@
  * see CLAUDE.md).
  */
 
-import { migrateCharacter, type MigrationResult } from "./characterMigrations";
-import type { CharacterLink, NimbleCharacter } from "../types/character";
+import {
+  migrateCharacter,
+  migrateVaultRecord,
+  type VaultMigrationResult,
+} from "./characterMigrations";
+import type { CharacterLink, CharacterRecord, NimbleCharacter } from "../types/character";
 
 /**
  * Outcome of resolving a token's read path: given the {@link CharacterLink}
@@ -32,14 +36,16 @@ import type { CharacterLink, NimbleCharacter } from "../types/character";
  *   copy-pasted into a scene whose vault doesn't hold it yet, or one whose
  *   own {@link CharacterLink} was just created). The token's own `snapshot`
  *   is the only copy of the data that exists anywhere, so it's promoted:
- *   run through `migrateCharacter` (a snapshot is expected to already be at
- *   {@link NimbleCharacter.schemaVersion} = current, but defense in depth
- *   costs nothing here, same reasoning as `characterStore.ts`'s own reads),
- *   then the caller writes the result into the vault.
+ *   run through {@link migrateVaultRecord} (dispatched by the snapshot's own
+ *   `kind`, since a link can point at either a player or a monster record;
+ *   a snapshot is expected to already be at its own type's current schema
+ *   version, but defense in depth costs nothing here, same reasoning as
+ *   `characterStore.ts`'s own reads), then the caller writes the result
+ *   into the vault.
  */
 export type CharacterReadResolution =
-  | { action: "use-vault"; character: NimbleCharacter; needsSnapshotRepair: boolean }
-  | { action: "rehydrate"; migration: MigrationResult };
+  | { action: "use-vault"; character: CharacterRecord; needsSnapshotRepair: boolean }
+  | { action: "rehydrate"; migration: VaultMigrationResult };
 
 /**
  * Resolves a token's read path — the "coffre puis snapshot" order the vault
@@ -54,7 +60,7 @@ export type CharacterReadResolution =
  */
 export function resolveCharacterRead(
   link: CharacterLink,
-  vaultCharacter: NimbleCharacter | null,
+  vaultCharacter: CharacterRecord | null,
 ): CharacterReadResolution {
   if (vaultCharacter) {
     return {
@@ -63,7 +69,7 @@ export function resolveCharacterRead(
       needsSnapshotRepair: vaultCharacter.updatedAt > link.updatedAt,
     };
   }
-  return { action: "rehydrate", migration: migrateCharacter(link.snapshot) };
+  return { action: "rehydrate", migration: migrateVaultRecord(link.snapshot) };
 }
 
 /**
@@ -142,10 +148,10 @@ export function prepareLegacySheetMigration(
  * @param linkedCharacterIds - Every `characterId` currently referenced by a
  * token's {@link CharacterLink} in the scene.
  */
-export function findOrphanedCharacters(
-  characters: NimbleCharacter[],
+export function findOrphanedCharacters<T extends CharacterRecord>(
+  characters: T[],
   linkedCharacterIds: Iterable<string>,
-): NimbleCharacter[] {
+): T[] {
   const linked = new Set(linkedCharacterIds);
   return characters.filter((character) => !linked.has(character.id));
 }
@@ -196,20 +202,21 @@ export function filterRecoverableCharacters(
  * independently hand-copied checks have drifted before elsewhere in this
  * codebase (see the `guessCategory` history in CLAUDE.md).
  *
- * @param characters - Every character currently in the vault.
+ * @param characters - Every record currently in the vault (player and
+ * monster mixed — this function does the `kind` narrowing itself).
  * @param linkedCharacterIds - Every `characterId` currently referenced by a
  * token's {@link CharacterLink} in the scene.
  * @param viewerId - The current player's OBR id.
  * @param isGM - Whether the current player has the GM role.
  */
 export function visibleRecoverableCharacters(
-  characters: NimbleCharacter[],
+  characters: CharacterRecord[],
   linkedCharacterIds: Iterable<string>,
   viewerId: string,
   isGM: boolean,
 ): NimbleCharacter[] {
   const orphans = findOrphanedCharacters(characters, linkedCharacterIds).filter(
-    (character) => character.kind === "player",
+    (character): character is NimbleCharacter => character.kind === "player",
   );
   return filterRecoverableCharacters(orphans, viewerId, isGM);
 }

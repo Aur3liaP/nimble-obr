@@ -36,7 +36,7 @@
  * simply sit as the first/last items in the flex column, structurally
  * unable to be interleaved with entries in between.
  */
-import { useState } from "react";
+import { useState, type ReactNode } from "react";
 import type { DiceRollResult } from "../../types/character";
 import { formatModifier } from "../../utils/formatModifier";
 
@@ -97,12 +97,32 @@ export function LicenseAttribution({ className = "" }: { className?: string }) {
  * @property isGM - Whether the current player is the GM (controls hidden-roll visibility and the "· hidden" tag).
  * @property currentPlayerId - Used to highlight the current player's own rolls.
  * @property inline - Renders as a static inline list instead of the floating pill popup.
+ * @property extraAction - Rendered at the LEFT edge of a full-sheet-width
+ * row that also carries the floating pill button (pinned to the right edge
+ * via `ml-auto`, exactly where it's always been), inside the SAME
+ * absolutely-positioned container. Ignored in `inline` mode (there is no
+ * pill row to attach it to there). This exists specifically so a caller
+ * needing something visually "next to the roll log pill, spread across the
+ * sheet" (currently `App.tsx`'s player/monster switch button) can put it in
+ * the pill's own positioning system instead of maintaining a second,
+ * independently-positioned element that has to be manually kept in sync
+ * with wherever the pill happens to render — earlier attempts at exactly
+ * that (an absolutely-positioned near-miss; an in-flow element with a
+ * guessed clearance margin; and, once genuinely inside this container, a
+ * shrink-to-fit row that only bunched the two elements together on the
+ * right instead of spreading them) each failed for a different reason, the
+ * first two for the structural reason described in this file's own comment
+ * at the render site below: two different positioning systems cannot be
+ * made to visually align by adjusting margins on one of them. Generic
+ * `ReactNode`, not a named "switch button" prop — this component
+ * has no reason to know what it's rendering, only where.
  */
 interface RollLogProps {
   rolls: DiceRollResult[];
   isGM: boolean;
   currentPlayerId: string;
   inline?: boolean;
+  extraAction?: ReactNode;
 }
 
 /** Formats a roll timestamp as a zero-padded 24h `HH:MM` string. */
@@ -128,6 +148,7 @@ export function RollLog({
   isGM,
   currentPlayerId,
   inline = false,
+  extraAction,
 }: RollLogProps) {
   const [isOpen, setIsOpen] = useState(false);
 
@@ -197,9 +218,20 @@ export function RollLog({
   }
 
   return (
-    <div className="absolute bottom-3 right-3 z-40 flex flex-col items-end gap-1">
+    // left-3 (not just right-3) so this container spans the panel's full
+    // width, per the button-row requirement below — a container sized to
+    // only its own content (the old right-3-only box) bunches extraAction
+    // and the pill together on the right instead of spreading them across
+    // the sheet. `pointer-events-none` here because a full-width
+    // absolutely-positioned box would otherwise sit on top of (and
+    // silently swallow clicks into) whatever real content happens to
+    // scroll underneath the empty middle of this row — the popup and the
+    // button row below each opt back into `pointer-events-auto`
+    // individually, so only the genuinely interactive pieces intercept
+    // anything.
+    <div className="absolute bottom-3 left-3 right-3 z-40 flex flex-col items-end gap-1 pointer-events-none">
       {isOpen && (
-        <div className="w-64 max-h-80 flex flex-col rounded-xl border border-stone-700 bg-stone-950/95 shadow-2xl shadow-black/60 backdrop-blur-sm overflow-hidden">
+        <div className="w-64 max-h-80 flex flex-col rounded-xl border border-stone-700 bg-stone-950/95 shadow-2xl shadow-black/60 backdrop-blur-sm overflow-hidden pointer-events-auto">
           <div className="shrink-0 bg-stone-900 px-3 py-2 border-b border-stone-700 flex items-center justify-between">
             <span className="text-xs font-semibold tracking-widest text-stone-400 uppercase">
               Roll History
@@ -236,33 +268,51 @@ export function RollLog({
         </div>
       )}
 
-      <button
-        onClick={() => setIsOpen(!isOpen)}
-        className={`flex items-center gap-2 px-3 py-1.5 rounded-full border shadow-lg text-xs font-bold transition-all ${
-          last?.isCritical
-            ? "border-amber-500 bg-amber-900/80 text-amber-200"
-            : last?.isFumble
-              ? "border-rose-700 bg-rose-950/80 text-rose-300"
-              : "border-stone-700 bg-stone-900/90 text-stone-200"
-        }`}
-      >
-        <span>🎲</span>
-        {last ? (
-          <>
-            <span className="max-w-25 truncate">{last.label}</span>
-            <span
-              className={`text-base font-black ${last.isCritical ? "text-amber-300" : last.isFumble ? "text-rose-400" : "text-white"}`}
-            >
-              {last.total}
-            </span>
-            {last.isCritical && <span className="text-amber-400">⚡</span>}
-            {last.isFumble && <span className="text-rose-400">💀</span>}
-            {last.hidden && <span className="text-stone-400">👁</span>}
-          </>
-        ) : (
-          <span className="text-stone-400">Roll Log</span>
-        )}
-      </button>
+      {/* extraAction + the pill button, spread across the FULL width of
+          the sheet — extraAction (when present) at the left edge, the pill
+          pinned to the right edge exactly where it's always been. `w-full`
+          makes this row actually span that width (the outer container is
+          now left-3/right-3, not just right-3 — see its own comment); the
+          pill's own `ml-auto` is what pins IT to the right regardless of
+          whether extraAction renders at all, rather than `justify-between`,
+          which would work for exactly two children but pushes a LONE
+          remaining child (the pill, when extraAction is absent — e.g. a
+          non-GM viewer) to the START of the row instead of leaving it on
+          the right where it belongs. `pointer-events-auto` on both
+          children, not the row itself, since the row's parent is now
+          `pointer-events-none` (see the container's own comment) and the
+          empty space this row's own width creates must stay click-through
+          too. */}
+      <div className="flex items-center w-full">
+        {extraAction && <div className="pointer-events-auto">{extraAction}</div>}
+        <button
+          onClick={() => setIsOpen(!isOpen)}
+          className={`ml-auto pointer-events-auto flex items-center gap-2 px-3 py-1.5 rounded-full border shadow-lg text-xs font-bold transition-all ${
+            last?.isCritical
+              ? "border-amber-500 bg-amber-900/80 text-amber-200"
+              : last?.isFumble
+                ? "border-rose-700 bg-rose-950/80 text-rose-300"
+                : "border-stone-700 bg-stone-900/90 text-stone-200"
+          }`}
+        >
+          <span>🎲</span>
+          {last ? (
+            <>
+              <span className="max-w-25 truncate">{last.label}</span>
+              <span
+                className={`text-base font-black ${last.isCritical ? "text-amber-300" : last.isFumble ? "text-rose-400" : "text-white"}`}
+              >
+                {last.total}
+              </span>
+              {last.isCritical && <span className="text-amber-400">⚡</span>}
+              {last.isFumble && <span className="text-rose-400">💀</span>}
+              {last.hidden && <span className="text-stone-400">👁</span>}
+            </>
+          ) : (
+            <span className="text-stone-400">Roll Log</span>
+          )}
+        </button>
+      </div>
     </div>
   );
 }

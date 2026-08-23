@@ -1149,6 +1149,14 @@ deliberately (see below).
   minimum forced by the schema change, not restructured, since this layer
   is what caught the original tokenId copy-paste bug and a wider rewrite
   risked degrading it.
+- **Recurring bug shape: an identity read from a source that isn't fresh
+  yet — this is the second occurrence, after the tokenId-copy-paste bug
+  above.** Any write that changes `character.id` while a sheet is already
+  open (`useOBR.ts`'s `switchToMonster`/`switchToPlayer`) must set
+  `characterRef.current` synchronously, before the OBR write, or
+  `onMetadataChange`'s resync re-fetches by the OLD id and silently
+  overwrites the switch with the stale record still sitting there
+  unlinked.
 - **Two rate-limit incidents were found via real multi-client OBR testing
   (not reproducible in this project's Vitest suite, which doesn't mock the
   SDK) and fixed — worth knowing about before touching any of this code
