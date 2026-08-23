@@ -15,17 +15,16 @@ export type ActionType = "melee" | "ranged" | "spell" | "ability" | "item";
 export type SaveAdvantage = "advantage" | "disadvantage" | "none";
 
 /**
- * Whether a {@link NimbleCharacter} is a persistent player character or a
- * disposable monster/NPC. Drives vault cleanup: a `"monster"` record with no
- * token pointing to it is deleted (see `cleanupOrphanedMonsters` in
- * `useOBR.ts`); a `"player"` record survives token deletion and can be
- * recovered (see `findOrphanedCharacters` in `characterVault.ts`).
+ * Whether a vault record ({@link NimbleCharacter} or {@link MonsterSheet}) is
+ * a persistent player character or a disposable monster/NPC. Drives vault
+ * cleanup: a `"monster"` record with no token pointing to it is deleted (see
+ * `cleanupOrphanedMonsters` in `useOBR.ts`); a `"player"` record survives
+ * token deletion and can be recovered (see `findOrphanedCharacters` in
+ * `characterVault.ts`).
  *
- * Defaults to `"player"`. There is no UI to set `"monster"` yet, nor a
- * simplified view for players looking at a monster's sheet — both are out of
- * scope for the vault-decoupling batch that introduced this field. The field
- * exists now specifically so those can be added later without another schema
- * bump.
+ * Also the discriminant of {@link CharacterRecord} — see that type's doc for
+ * why a monster is its own type rather than a `NimbleCharacter` with most
+ * fields unused.
  */
 export type CharacterKind = "player" | "monster";
 export type SpellSchool =
@@ -253,16 +252,69 @@ export interface InventoryItem {
 }
 
 /**
- * Full persisted state of a single Nimble character sheet.
+ * Fields shared by every vault record ({@link NimbleCharacter} and
+ * {@link MonsterSheet}) — the plumbing a token's {@link CharacterLink},
+ * `characterStore.ts`, and `characterVault.ts` all need regardless of which
+ * kind of sheet they're actually handling. Extending this instead of
+ * hand-copying these five fields on both interfaces means they can't drift
+ * apart from each other the way two independently hand-copied checks have
+ * drifted before elsewhere in this codebase (see the `guessCategory` history
+ * in CLAUDE.md) — while `kind` still discriminates {@link CharacterRecord}
+ * exactly as it would with two fully independent interfaces.
+ */
+export interface CharacterRecordBase {
+  /**
+   * Stable identity of this record, independent of any token. Generated
+   * once with `crypto.randomUUID()` and never changed again — this is the
+   * key the record is stored under in the scene-metadata vault (see
+   * `characterStore.ts`) and the value every token's {@link CharacterLink}
+   * points at.
+   *
+   * Replaces the old `tokenId` field (removed in the schema v5 -> v6
+   * migration, see `characterMigrations.ts`): a record no longer knows, or
+   * needs to know, which token(s) currently display it. `tokenId`'s removal
+   * is also what fixed a real copy-paste write-targeting bug (see
+   * `selectedTokenIdRef` in `useOBR.ts`) — do not reintroduce a
+   * token-pointing field here.
+   */
+  id: string;
+  /**
+   * Who may edit this record. For a {@link NimbleCharacter}, compared
+   * against the current player's id (`useOBR.ts`'s `isOwner`/`canEdit`); for
+   * a {@link MonsterSheet}, editing is gated on GM role alone (see
+   * `CharacterKind`'s doc and the "Permissions" section of this batch's
+   * design notes) and `ownerId` is only "who created/last switched this
+   * record", not a permission check. A plain application-level convention
+   * either way — this app has no OBR-side ACL on metadata, so a determined
+   * client could still bypass it from devtools.
+   */
+  ownerId: string;
+  updatedAt: number;
+  /** See {@link CharacterKind}. */
+  kind: CharacterKind;
+  /**
+   * Schema version this record was written at. `NimbleCharacter` and
+   * `MonsterSheet` version independently (see {@link CURRENT_SCHEMA_VERSION}
+   * / {@link CURRENT_MONSTER_SCHEMA_VERSION} and `characterMigrations.ts`'s
+   * `MIGRATIONS`/`MONSTER_MIGRATIONS`) — a bump to one never implies a bump
+   * to the other, since their shapes change independently.
+   */
+  schemaVersion: number;
+}
+
+/**
+ * Full persisted state of a single Nimble player character sheet.
  *
- * This entire object is stored as-is in the OBR item metadata under
- * {@link METADATA_KEY} and is read/written via `OBR.scene.items.updateItems`.
- * Any player or the GM with edit rights can trigger an update; OBR then
- * syncs the change to every connected client in real time.
+ * This entire object is stored as-is in the scene-metadata vault
+ * (`characterStore.ts`) and read/written via `OBR.scene.setMetadata`. Any
+ * player or the GM with edit rights can trigger an update; OBR then syncs
+ * the change to every connected client in real time.
  *
  * @see createDefaultCharacter for the initial state given to a fresh token.
  */
-export interface NimbleCharacter {
+export interface NimbleCharacter extends CharacterRecordBase {
+  kind: "player";
+
   name: string;
   ancestry: string;
   class: string;
@@ -307,72 +359,128 @@ export interface NimbleCharacter {
   inventorySlots: number;
   gold: number;
   silver: number;
-
-  /**
-   * Stable identity of this character, independent of any token. Generated
-   * once with `crypto.randomUUID()` and never changed again — this is the
-   * key the character is stored under in the scene-metadata vault (see
-   * `characterStore.ts`) and the value every token's {@link CharacterLink}
-   * points at.
-   *
-   * Replaces the old `tokenId` field (removed in the schema v5 -> v6
-   * migration, see `characterMigrations.ts`): a character no longer knows,
-   * or needs to know, which token(s) currently display it. `tokenId`'s
-   * removal is also what fixed a real copy-paste write-targeting bug (see
-   * `selectedTokenIdRef` in `useOBR.ts`) — do not reintroduce a
-   * token-pointing field on the character itself.
-   */
-  id: string;
-  /**
-   * Who may edit this sheet. Read entirely from this field, a plain
-   * application-level convention — leaving item metadata (schema v5 -> v6)
-   * means this app no longer rides on OBR's own item-ownership system for
-   * anything permission-related. `useOBR.ts`'s `canEdit` is computed by
-   * comparing this to the current player's id; a determined player could
-   * still bypass it from devtools, exactly as before.
-   */
-  ownerId: string;
-  updatedAt: number;
-  /** See {@link CharacterKind}. Defaults to `"player"`. */
-  kind: CharacterKind;
-
-  /**
-   * Schema version this record was written at. Used by `migrateCharacter`
-   * (`src/utils/characterMigrations.ts`) to bring older records up to
-   * {@link CURRENT_SCHEMA_VERSION} on load, and to refuse a record whose
-   * version is newer than this build understands, rather than guessing at
-   * fields it doesn't know about. See that file's header for the procedure
-   * to follow when `NimbleCharacter`'s shape changes.
-   */
-  schemaVersion: number;
 }
+
+/**
+ * Coarse, purely informational armor descriptor for a {@link MonsterSheet}.
+ * Unlike {@link Defense} (the player hero stat, which feeds
+ * `computeDefense.ts`), this drives no calculation at all — the GM's own
+ * external statblock is the source of truth for the monster's real numbers,
+ * this is only a visual hint for the sheet. Deliberately reuses the word
+ * "armor" in a different sense than `Defense`/`InventoryItem.isArmor`, same
+ * as the book itself does (see the "Armor" -> "Defense" rename note
+ * elsewhere in this file's history) — context disambiguates which sense
+ * applies.
+ */
+export type MonsterArmor = "unarmored" | "medium" | "heavy";
+
+/**
+ * Full persisted state of a minimal monster/NPC sheet.
+ *
+ * Deliberately NOT a `NimbleCharacter` with most fields unused: this batch's
+ * driving constraint is a GM who already has full statblocks elsewhere
+ * (physical or virtual) and refuses to re-enter them in OBR — the sheet
+ * exists purely as a combat visual aid for players (name, a rough sense of
+ * how hurt the creature is, its conditions), not a mechanically complete
+ * character. No stats, skills, spells, inventory, or background; no
+ * model/instance sharing (see this batch's design notes for why a shared
+ * statblock isn't worth it at four fields) — every monster token gets its
+ * own sheet.
+ *
+ * Has no existence independent of a token (see {@link CharacterKind}'s doc):
+ * `cleanupOrphanedMonsters` (`useOBR.ts`) deletes a `"monster"`-kind vault
+ * record the moment no token links to it anymore.
+ *
+ * @see createDefaultMonster for the initial state given to a fresh token.
+ */
+export interface MonsterSheet extends CharacterRecordBase {
+  kind: "monster";
+
+  /** Free text, no auto-numbering — the GM names it however their own notes do. */
+  name: string;
+  /**
+   * Damage inflicted so far, NOT hit points remaining. This is the whole
+   * design point of this batch's damage tracker (see the design notes'
+   * "Le compteur de dégâts, pas de PV" section): players at the table never
+   * knew a monster's exact HP, only how much damage they'd landed and
+   * whatever the GM chose to narrate ("it starts to falter"). Never derive
+   * or display a fraction/percentage from this alongside {@link maxHp} on
+   * anything a non-GM viewer can see — that reconstructs the exact HP the
+   * whole field exists to hide (see `maxHp`'s own doc).
+   */
+  damageTaken: number;
+  /**
+   * Meant for the GM's eyes only, within what this app's own UI controls —
+   * see `monsterView.ts`'s file header for the full, honest picture of what
+   * that does and doesn't guarantee. In short: this app never renders this
+   * value, or a fine-grained signal derived from it (an exact color ramp, a
+   * percentage — a counter that turns red at 23 damage implies a max around
+   * 25 almost as plainly as the number itself would), to a non-GM viewer;
+   * `MonsterPlayerView`'s own prop type structurally excludes it, via the
+   * `toPlayerView` choke point (`monsterView.ts`). What this canNOT do is
+   * keep the raw value out of a player's REACH entirely: it is present, in
+   * full, on BOTH surfaces every connected client already receives
+   * identically — the vault entry in scene metadata (`characterStore.ts`)
+   * AND every linked token's own `CharacterLink.snapshot` in item metadata
+   * — because OBR's SDK has no concept of per-client metadata visibility
+   * for either surface (see CLAUDE.md's repeated notes on `canEdit` being
+   * an application-level convention for the identical underlying reason).
+   * A player who calls `OBR.scene.getMetadata()` or reads a token's own
+   * metadata from the console can still see it. A player-facing damage
+   * indicator must use coarse, GM-narration-shaped bands (e.g. unharmed /
+   * wounded / badly hurt) — see `MonsterPlayerView`.
+   */
+  maxHp: number;
+  /** Purely informational — see {@link MonsterArmor}'s own doc. */
+  armor: MonsterArmor;
+  speed: number;
+  /**
+   * Free-form condition tags, official (see `src/data/conditions.ts`) or
+   * GM-improvised. No duration or associated value is tracked — the GM
+   * keeps that in their head, same as everything else this sheet
+   * deliberately leaves out.
+   */
+  conditions: string[];
+  /** GM's notes, shared with players (unlike a player character's private-by-convention `notes`, this is meant to be read at the table). */
+  notes: string;
+}
+
+/**
+ * A vault record of either kind, discriminated on `kind`. Everything that
+ * touches vault storage without caring which kind it's handling
+ * (`characterStore.ts`, `CharacterLink.snapshot`, `characterVault.ts`'s
+ * `resolveCharacterRead`/`findOrphanedCharacters`) is typed to this; code
+ * that only makes sense for one kind (stat rolls, spell/inventory tabs, the
+ * monster sheet panel) narrows on `kind` first.
+ */
+export type CharacterRecord = NimbleCharacter | MonsterSheet;
 
 /**
  * The pointer stored on an OBR token (item metadata, key {@link LINK_KEY})
  * that connects it to a {@link NimbleCharacter} living in the scene-metadata
  * vault (`characterStore.ts`).
  *
- * @property characterId - The vault key ({@link NimbleCharacter.id}) this
- * token displays.
- * @property snapshot - A copy of the character, for TRANSPORT ONLY. It is
- * never read during normal operation while the vault already holds this
- * `characterId` — see `resolveCharacterRead` in `characterVault.ts`, whose
- * whole job is picking the vault over this snapshot whenever the vault has
- * an answer. Its only purpose is surviving a copy-paste to a scene whose
- * vault has never seen this `characterId`: OBR copies token metadata
- * verbatim on paste, so the pasted token still carries a full copy of the
- * character even though the destination scene's vault starts out empty for
- * it. Two copies of the same data existing here looks like a bug on a first
- * read of this file without that context — it is deliberate.
+ * @property characterId - The vault key ({@link CharacterRecordBase.id})
+ * this token displays.
+ * @property snapshot - A copy of the record (player or monster), for
+ * TRANSPORT ONLY. It is never read during normal operation while the vault
+ * already holds this `characterId` — see `resolveCharacterRead` in
+ * `characterVault.ts`, whose whole job is picking the vault over this
+ * snapshot whenever the vault has an answer. Its only purpose is surviving a
+ * copy-paste to a scene whose vault has never seen this `characterId`: OBR
+ * copies token metadata verbatim on paste, so the pasted token still carries
+ * a full copy of the record even though the destination scene's vault starts
+ * out empty for it. Two copies of the same data existing here looks like a
+ * bug on a first read of this file without that context — it is deliberate.
  * @property updatedAt - Mirrors `snapshot.updatedAt` at the moment this link
- * was last written. Compared against the vault character's own `updatedAt`
+ * was last written. Compared against the vault record's own `updatedAt`
  * (never against `snapshot.updatedAt` after the fact, which could require
  * migrating `snapshot` first) to detect a stale snapshot cheaply and repair
  * it in the background — see `resolveCharacterRead`'s `needsSnapshotRepair`.
  */
 export interface CharacterLink {
   characterId: string;
-  snapshot: NimbleCharacter;
+  snapshot: CharacterRecord;
   updatedAt: number;
 }
 
@@ -505,15 +613,10 @@ export const SKILL_STAT_MAP: Record<keyof Skills, keyof Stats> = {
  * one yet.
  *
  * @param ownerId - OBR player ID who will own (and be able to edit) this sheet.
- * @param kind - See {@link CharacterKind}. Defaults to `"player"` — there is
- * no UI to create a `"monster"` record yet (see that type's doc).
  * @returns A fresh character at level 1 with zeroed stats and empty
- * inventory, with a freshly generated {@link NimbleCharacter.id}.
+ * inventory, with a freshly generated {@link CharacterRecordBase.id}.
  */
-export function createDefaultCharacter(
-  ownerId: string,
-  kind: CharacterKind = "player",
-): NimbleCharacter {
+export function createDefaultCharacter(ownerId: string): NimbleCharacter {
   return {
     name: "New Hero",
     ancestry: "",
@@ -564,7 +667,46 @@ export function createDefaultCharacter(
     id: crypto.randomUUID(),
     ownerId,
     updatedAt: Date.now(),
-    kind,
+    kind: "player",
     schemaVersion: CURRENT_SCHEMA_VERSION,
+  };
+}
+
+/**
+ * Current schema version of {@link MonsterSheet}. Versioned independently of
+ * {@link CURRENT_SCHEMA_VERSION} (`NimbleCharacter`'s own version counter) —
+ * the two types' shapes change independently, so a bump to one must never be
+ * read as implying anything about the other. See `characterMigrations.ts`'s
+ * `MONSTER_MIGRATIONS` for the matching migration chain, currently empty
+ * (no `MonsterSheet` has ever shipped at any earlier shape).
+ */
+export const CURRENT_MONSTER_SCHEMA_VERSION = 1;
+
+/**
+ * Builds a brand-new {@link MonsterSheet} with sensible defaults, used when
+ * the GM attaches a monster sheet to a token — either directly ("Create a
+ * monster") or via switching an existing player sheet to monster mode (see
+ * `characterSwitch.ts`).
+ *
+ * @param ownerId - OBR player ID of the GM creating this sheet. Not a
+ * permission check (see {@link CharacterRecordBase.ownerId}'s doc) — editing
+ * a monster sheet is gated on GM role alone, regardless of `ownerId`.
+ * @returns A fresh, minimal monster sheet with a freshly generated
+ * {@link CharacterRecordBase.id}.
+ */
+export function createDefaultMonster(ownerId: string): MonsterSheet {
+  return {
+    name: "New Monster",
+    damageTaken: 0,
+    maxHp: 10,
+    armor: "unarmored",
+    speed: 6,
+    conditions: [],
+    notes: "",
+    id: crypto.randomUUID(),
+    ownerId,
+    updatedAt: Date.now(),
+    kind: "monster",
+    schemaVersion: CURRENT_MONSTER_SCHEMA_VERSION,
   };
 }

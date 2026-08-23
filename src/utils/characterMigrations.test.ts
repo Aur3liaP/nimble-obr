@@ -8,14 +8,21 @@
  */
 
 import { describe, expect, it, vi } from "vitest";
-import { createDefaultCharacter, CURRENT_SCHEMA_VERSION } from "../types/character";
+import {
+  createDefaultCharacter,
+  createDefaultMonster,
+  CURRENT_SCHEMA_VERSION,
+  CURRENT_MONSTER_SCHEMA_VERSION,
+} from "../types/character";
 import { BASIC_EQUIPMENTS } from "../data/equipment";
 import { BASE_SPELLS } from "../data/spells";
 import {
   applyMigrations,
   migrateCharacter,
+  migrateVaultRecord,
   MIGRATIONS,
   validateCharacterShape,
+  validateMonsterSheetShape,
 } from "./characterMigrations";
 
 /** Shallow-omits `keys` from `obj` without triggering unused-destructured-var lint warnings. */
@@ -1150,5 +1157,77 @@ describe("validateCharacterShape", () => {
     expect(
       validateCharacterShape({ ...character, defense: defenseWithoutOptionalField }),
     ).toBeNull();
+  });
+});
+
+describe("validateMonsterSheetShape", () => {
+  it("accepts a fresh default monster", () => {
+    expect(validateMonsterSheetShape(createDefaultMonster("gm-1"))).toBeNull();
+  });
+
+  it("flags a missing required field", () => {
+    const monster = omit(
+      createDefaultMonster("gm-1") as unknown as Record<string, unknown>,
+      ["damageTaken"],
+    );
+    expect(validateMonsterSheetShape(monster)).toContain("damageTaken");
+  });
+
+  it("flags a type mismatch on a required field", () => {
+    const monster = { ...createDefaultMonster("gm-1"), maxHp: "ten" };
+    expect(validateMonsterSheetShape(monster)).toContain("maxHp");
+  });
+});
+
+describe("migrateVaultRecord — dispatch on kind", () => {
+  it("routes a monster-shaped record through the monster migration chain", () => {
+    const raw = createDefaultMonster("gm-1") as unknown as Record<string, unknown>;
+    const result = migrateVaultRecord(raw);
+    expect(result.status).toBe("ok");
+    if (result.status !== "ok") return;
+    expect(result.character.kind).toBe("monster");
+    expect(result.character.schemaVersion).toBe(CURRENT_MONSTER_SCHEMA_VERSION);
+  });
+
+  it("routes a player-shaped record (kind: player) through the player migration chain", () => {
+    const raw = createDefaultCharacter("owner-1") as unknown as Record<string, unknown>;
+    const result = migrateVaultRecord(raw);
+    expect(result.status).toBe("ok");
+    if (result.status !== "ok") return;
+    expect(result.character.kind).toBe("player");
+    expect(result.character.schemaVersion).toBe(CURRENT_SCHEMA_VERSION);
+  });
+
+  it("routes a record with no kind field at all (pre-v6 player data) through the player migration chain, same as migrateCharacter's own default", () => {
+    const raw = makeV0Character();
+    const result = migrateVaultRecord(raw);
+    expect(result.status).toBe("ok");
+    if (result.status !== "ok") return;
+    expect(result.character.kind).toBe("player");
+  });
+
+  it("propagates invalid monster data as invalid, not silently coerced through the player validator", () => {
+    const raw = omit(
+      createDefaultMonster("gm-1") as unknown as Record<string, unknown>,
+      ["armor"],
+    );
+    const result = migrateVaultRecord(raw);
+    expect(result.status).toBe("invalid");
+  });
+
+  it("propagates an unsupported (future-schema) monster record", () => {
+    const raw = {
+      ...createDefaultMonster("gm-1"),
+      schemaVersion: CURRENT_MONSTER_SCHEMA_VERSION + 1,
+    };
+    expect(migrateVaultRecord(raw)).toEqual({
+      status: "unsupported",
+      foundVersion: CURRENT_MONSTER_SCHEMA_VERSION + 1,
+    });
+  });
+
+  it("propagates a non-object value as invalid without throwing", () => {
+    expect(migrateVaultRecord("not a record").status).toBe("invalid");
+    expect(migrateVaultRecord(null).status).toBe("invalid");
   });
 });

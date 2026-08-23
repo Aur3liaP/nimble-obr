@@ -1,8 +1,9 @@
 /**
  * @file The character vault — the SOLE choke point for reading and writing
- * {@link NimbleCharacter} records to OBR scene metadata.
+ * {@link CharacterRecord} records (`NimbleCharacter` or `MonsterSheet`) to
+ * OBR scene metadata.
  *
- * Every character lives under its own root-level scene-metadata key,
+ * Every record lives under its own root-level scene-metadata key,
  * `${CHARACTER_KEY_PREFIX}<id>` (never one shared object under a single
  * key): `OBR.scene.setMetadata` merges at the root-key level, so giving
  * each character its own key means two players editing two different
@@ -29,8 +30,8 @@
  */
 
 import OBR from "@owlbear-rodeo/sdk";
-import { migrateCharacter } from "./characterMigrations";
-import type { NimbleCharacter } from "../types/character";
+import { migrateVaultRecord } from "./characterMigrations";
+import type { CharacterRecord } from "../types/character";
 
 /**
  * Root-level scene-metadata key prefix a character is stored under:
@@ -50,7 +51,7 @@ function vaultKey(id: string): string {
  * discipline `useOBR.ts`'s `updateCharacter` already applied when the
  * character lived in item metadata).
  */
-export async function saveCharacter(character: NimbleCharacter): Promise<void> {
+export async function saveCharacter(character: CharacterRecord): Promise<void> {
   await OBR.scene.setMetadata({ [vaultKey(character.id)]: character });
 }
 
@@ -68,13 +69,18 @@ export async function saveCharacter(character: NimbleCharacter): Promise<void> {
  * falling back to a token's snapshot. A corrupted vault entry is logged to
  * the console either way, same as a corrupted legacy per-token record
  * always has been.
+ *
+ * Dispatches on the raw value's own `kind` via {@link migrateVaultRecord} —
+ * a vault key holds either a `NimbleCharacter` or a `MonsterSheet`
+ * indistinguishably from the key alone, so the migration/validation path
+ * that actually matches the stored shape has to be chosen from its content.
  */
-export async function loadCharacter(id: string): Promise<NimbleCharacter | null> {
+export async function loadCharacter(id: string): Promise<CharacterRecord | null> {
   const meta = await OBR.scene.getMetadata();
   const raw = meta[vaultKey(id)];
   if (raw === undefined) return null;
 
-  const result = migrateCharacter(raw);
+  const result = migrateVaultRecord(raw);
   if (result.status === "ok") return result.character;
 
   console.error(
@@ -96,12 +102,12 @@ export async function loadCharacter(id: string): Promise<NimbleCharacter | null>
  * listing — one corrupted character must not hide every other legitimate
  * one from cleanup/recovery.
  */
-export async function listCharacters(): Promise<NimbleCharacter[]> {
+export async function listCharacters(): Promise<CharacterRecord[]> {
   const meta = await OBR.scene.getMetadata();
-  const characters: NimbleCharacter[] = [];
+  const characters: CharacterRecord[] = [];
   for (const key of Object.keys(meta)) {
     if (!key.startsWith(CHARACTER_KEY_PREFIX)) continue;
-    const result = migrateCharacter(meta[key]);
+    const result = migrateVaultRecord(meta[key]);
     if (result.status === "ok") {
       characters.push(result.character);
     } else {

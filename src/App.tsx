@@ -18,9 +18,13 @@ import { InventoryTab } from "./components/tabs/InventoryTab";
 import { RollLog } from "./components/ui/RollLog";
 import { DicePanel } from "./components/ui/DicePanel";
 import { CharacterHeader } from "./components/ui/CharacterHeader";
+import { MonsterPanel } from "./components/ui/MonsterPanel";
 import { NoSheetPanel } from "./components/ui/NoSheetPanel";
 import { SyncStatusBanner } from "./components/ui/SyncStatusBanner";
 import { DeleteUndoToast } from "./components/ui/DeleteUndoToast";
+import { SwitchKindButton } from "./components/ui/SwitchKindButton";
+import { MonsterPlayerView } from "./components/ui/MonsterPlayerView";
+import { computeDamageBand, toPlayerView } from "./utils/monsterView";
 import type { DiceRollRequest, RollMode } from "./types/character";
 
 /** Identifiers for the four character sheet tabs. */
@@ -53,9 +57,13 @@ export default function App() {
     rollInitiative,
     recentRolls,
     createSheetForToken,
+    createMonsterForToken,
     claimToken,
+    switchToMonster,
+    switchToPlayer,
     orphanedCharacters,
     recoverCharacter,
+    updateMonster,
   } = useOBR();
 
   const { canEdit, isGM } = permissions;
@@ -66,9 +74,11 @@ export default function App() {
   // survives switching tabs — see useDeleteUndo's file header for why a
   // tab-local useState would lose it. `selectedItems[0]?.id` (the live
   // selection's real item id) is what the hook uses to detect a token
-  // switch — see its JSDoc.
+  // switch — see its JSDoc. Deletable entries (actions/spells/inventory)
+  // only exist on a player sheet, so a loaded monster sheet is passed as
+  // `null` here — nothing on MonsterPanel ever calls `deleteWithUndo`.
   const { pendingUndo, deleteWithUndo, undo } = useDeleteUndo(
-    character,
+    character && character.kind === "player" ? character : null,
     selectedItems[0]?.id,
     updateCharacter,
   );
@@ -139,26 +149,90 @@ export default function App() {
   const showUnsupportedVersion = selectionState === "unsupported-version";
   const showInvalidSheet = selectionState === "invalid-sheet";
   const firstItem = selectedItems[0];
+  // Player sheet vs monster sheet is a content-only branch inside the
+  // existing showSheet block below — it changes neither <main>'s classes
+  // nor the DicePanel/RollLog wrapper's, so it doesn't touch the "Panel
+  // layout contract" states at all.
+  const isMonster = showSheet && character?.kind === "monster";
+
+  /**
+   * The switch button's own confirmation, per this batch's design decision:
+   * both directions confirm (both lose something), but with different
+   * wording since the actual risk differs. Player-to-monster is NOT very
+   * destructive: the original player sheet stays recoverable via "Retrieve
+   * a lost soul" (see `characterSwitch.ts`). Monster-to-player IS: the
+   * monster's tracked damage/conditions are gone for good the moment its
+   * token is later removed, with no recovery path at all. `window.confirm`
+   * per this batch's own "keep it simple" decision — same convention
+   * "Reset to book version" already uses (see CLAUDE.md).
+   */
+  const handleSwitchClick = () => {
+    if (isMonster) {
+      const ok = window.confirm(
+        "Switch back to a player sheet? This monster's tracked damage and conditions cannot be recovered once this token is removed from the scene.",
+      );
+      if (ok) void switchToPlayer();
+    } else {
+      const ok = window.confirm(
+        "Switch this sheet to monster mode? The player sheet itself is not deleted, it stays recoverable from \"Retrieve a lost soul\". Only the new monster sheet becomes disposable.",
+      );
+      if (ok) void switchToMonster();
+    }
+  };
 
   return (
-    <div className="relative flex flex-col h-full bg-stone-950 text-stone-200 overflow-hidden font-sans pb-7">
+    <div
+      className={`relative flex flex-col h-full bg-stone-950 text-stone-200 overflow-hidden font-sans pb-7 border-t-2 ${
+        isMonster ? "border-rose-700" : "border-transparent"
+      }`}
+    >
+      {/* Monster-mode accent, panel-wide (not just the switch button) —
+          the top border above plus this thin edge glow. Cosmetic only:
+          neither touches <main>'s own classes nor the DicePanel/RollLog
+          wrapper's, so it's outside the scope of the Panel layout
+          contract in CLAUDE.md. */}
+      {isMonster && (
+        <div
+          aria-hidden="true"
+          className="pointer-events-none absolute inset-0 z-0 shadow-[inset_0_0_0_1px_rgba(190,18,60,0.35)]"
+        />
+      )}
       {/* ── Sync status — always mounted, renders nothing when idle.
           Not scoped to showSheet: a roll log write can fail with no
           character sheet open at all. ── */}
       <SyncStatusBanner status={syncStatus} />
       <DeleteUndoToast pendingUndo={pendingUndo} onUndo={undo} />
 
-      {/* ── Header — only when a sheet is open ───────────────────── */}
-      {showSheet && character && (
+      {/* ── Header — only when a sheet is open. Player and monster
+          sheets get different headers: CharacterHeader (HP/wounds/claim)
+          only makes sense for a NimbleCharacter, so a monster sheet gets
+          its own minimal header here instead, badged so the panel's
+          monster mode is visible somewhere other than the switch button
+          itself (the border accent above covers the rest of that
+          requirement). ── */}
+      {showSheet && character && character.kind === "player" && (
         <CharacterHeader
           character={character}
           permissions={permissions}
           onClaim={claimToken}
         />
       )}
+      {showSheet && character && character.kind === "monster" && (
+        <header className="shrink-0 px-3 pt-3 pb-0">
+          <div className="bento-card py-2! px-3! flex items-center justify-between gap-2">
+            <h1 className="text-base font-black text-rose-200 truncate leading-tight">
+              {character.name}
+            </h1>
+            <span className="shrink-0 px-1.5 py-0.5 rounded text-[9px] font-bold tracking-widest uppercase bg-rose-900/40 text-rose-300 border border-rose-800/40">
+              Monster
+            </span>
+          </div>
+        </header>
+      )}
 
-      {/* ── Tab bar — only when sheet open ───────────────────────── */}
-      {showSheet && (
+      {/* ── Tab bar — player sheets only; a monster sheet has no tabs,
+          every field fits on MonsterPanel's single screen ──────────── */}
+      {showSheet && character?.kind === "player" && (
         <>
           <div className="shrink-0 flex gap-1 px-3 pt-2">
             {TABS.map((tab) => (
@@ -220,6 +294,9 @@ export default function App() {
         <NoSheetPanel
           orphanedCharacters={orphanedCharacters}
           onCreate={firstItem ? () => createSheetForToken(firstItem) : undefined}
+          onCreateMonster={
+            isGM && firstItem ? () => createMonsterForToken(firstItem) : undefined
+          }
           onRecover={recoverCharacter}
         />
       )}
@@ -309,7 +386,7 @@ export default function App() {
             scroll container in this state, so DicePanel below sits at the
             bottom of this content and scrolls away with it — per the
             contract, that's the intended behavior, not a bug to fix. */}
-        {showSheet && character && (
+        {showSheet && character && character.kind === "player" && (
           <>
             {activeTab === "summary" && (
               <SummaryTab
@@ -352,6 +429,21 @@ export default function App() {
               />
             )}
           </>
+        )}
+        {/* GM gets the full sheet; everyone else gets MonsterPlayerView,
+            whose props are narrowed to MonsterPlayerViewData (no maxHp, no
+            speed) at the toPlayerView choke point — see monsterView.ts's
+            file header for why that narrowing lives in a pure function
+            rather than being "just don't render this field" inside a
+            component that received the whole record anyway. */}
+        {showSheet && character && character.kind === "monster" && isGM && (
+          <MonsterPanel character={character} canEdit={canEdit} onUpdate={updateMonster} />
+        )}
+        {showSheet && character && character.kind === "monster" && !isGM && (
+          <MonsterPlayerView
+            data={toPlayerView(character)}
+            damageBand={computeDamageBand(character.damageTaken, character.maxHp)}
+          />
         )}
 
         {/* ── DicePanel + RollLog — DicePanel always mounted here, never
@@ -405,9 +497,30 @@ export default function App() {
       {/* Floating pill — only when sheet is visible (not to stack with inline log).
           Carries the same pinned license notices inside its popup, and no
           longer unmounts when there are zero rolls — see RollLog's @file
-          header. */}
+          header.
+
+          Player/monster switch (GM only) rides along via `extraAction`,
+          rendered INSIDE RollLog's own absolutely-positioned pill
+          container, immediately to its left. Two earlier placements (a
+          second absolutely-positioned element guessed near the pill; an
+          in-flow element with a margin tuned to clear it) both tried to
+          align two independent positioning systems by adjusting one of
+          them, which cannot converge — only actually SHARING the pill's
+          own container does. See `extraAction`'s own doc in RollLog.tsx. */}
       {showSheet && (
-        <RollLog rolls={recentRolls} isGM={isGM} currentPlayerId={playerId} />
+        <RollLog
+          rolls={recentRolls}
+          isGM={isGM}
+          currentPlayerId={playerId}
+          extraAction={
+            isGM ? (
+              <SwitchKindButton
+                targetKind={isMonster ? "player" : "monster"}
+                onClick={handleSwitchClick}
+              />
+            ) : undefined
+          }
+        />
       )}
     </div>
   );

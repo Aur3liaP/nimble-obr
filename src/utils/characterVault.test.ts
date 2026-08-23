@@ -6,7 +6,12 @@
  */
 
 import { describe, expect, it } from "vitest";
-import { createDefaultCharacter, CURRENT_SCHEMA_VERSION, type CharacterLink } from "../types/character";
+import {
+  createDefaultCharacter,
+  createDefaultMonster,
+  CURRENT_SCHEMA_VERSION,
+  type CharacterLink,
+} from "../types/character";
 import {
   filterRecoverableCharacters,
   findOrphanedCharacters,
@@ -164,8 +169,8 @@ describe("findOrphanedCharacters", () => {
   });
 
   it("is agnostic to kind — callers filter by kind themselves", () => {
-    const player = createDefaultCharacter("owner-1", "player");
-    const monster = createDefaultCharacter("owner-2", "monster");
+    const player = createDefaultCharacter("owner-1");
+    const monster = createDefaultMonster("owner-2");
     const result = findOrphanedCharacters([player, monster], []);
     expect(result).toEqual([player, monster]);
   });
@@ -205,10 +210,10 @@ describe("filterRecoverableCharacters", () => {
 
 describe("visibleRecoverableCharacters", () => {
   it("combines orphan, kind, and ownership filters", () => {
-    const myOrphanedPlayer = createDefaultCharacter("player-1", "player");
-    const someoneElsesOrphanedPlayer = createDefaultCharacter("player-2", "player");
-    const myLinkedPlayer = createDefaultCharacter("player-1", "player");
-    const myOrphanedMonster = createDefaultCharacter("player-1", "monster");
+    const myOrphanedPlayer = createDefaultCharacter("player-1");
+    const someoneElsesOrphanedPlayer = createDefaultCharacter("player-2");
+    const myLinkedPlayer = createDefaultCharacter("player-1");
+    const myOrphanedMonster = createDefaultMonster("player-1");
 
     const result = visibleRecoverableCharacters(
       [myOrphanedPlayer, someoneElsesOrphanedPlayer, myLinkedPlayer, myOrphanedMonster],
@@ -221,9 +226,9 @@ describe("visibleRecoverableCharacters", () => {
   });
 
   it("the GM sees every orphaned player character regardless of owner, but never a monster", () => {
-    const orphanedPlayerA = createDefaultCharacter("player-1", "player");
-    const orphanedPlayerB = createDefaultCharacter("player-2", "player");
-    const orphanedMonster = createDefaultCharacter("player-1", "monster");
+    const orphanedPlayerA = createDefaultCharacter("player-1");
+    const orphanedPlayerB = createDefaultCharacter("player-2");
+    const orphanedMonster = createDefaultMonster("player-1");
 
     const result = visibleRecoverableCharacters(
       [orphanedPlayerA, orphanedPlayerB, orphanedMonster],
