@@ -29,7 +29,11 @@
 
 import {
   createDefaultCharacter,
+  createDefaultMonster,
   CURRENT_SCHEMA_VERSION,
+  CURRENT_MONSTER_SCHEMA_VERSION,
+  type CharacterRecord,
+  type MonsterSheet,
   type NimbleCharacter,
 } from "../types/character";
 import { BASIC_EQUIPMENTS } from "../data/equipment";
@@ -826,3 +830,113 @@ export function migrateCharacter(value: unknown): MigrationResult {
  * imported by application code — go through {@link migrateCharacter}.
  */
 export { MIGRATIONS, applyMigrations };
+
+// ─────────────────────────────────────────────────────────────────────────
+// MonsterSheet migrations — a completely separate chain from the
+// NimbleCharacter one above, versioned independently (see
+// CURRENT_MONSTER_SCHEMA_VERSION's own doc). No MonsterSheet has ever
+// shipped at any earlier shape, so MONSTER_MIGRATIONS starts empty; the
+// first entry appended here follows the exact same procedure as this file's
+// header describes for MIGRATIONS (change the type, bump
+// CURRENT_MONSTER_SCHEMA_VERSION by exactly 1, append one v(n) -> v(n+1)
+// function, never edit an already-shipped one).
+// ─────────────────────────────────────────────────────────────────────────
+
+/** See the file header's procedure — the `MonsterSheet` equivalent of `MIGRATIONS`. Empty: no shipped shape predates this field yet. */
+const MONSTER_MIGRATIONS: Migration[] = [];
+
+/** The `MonsterSheet` equivalent of {@link MigrationResult}. */
+export type MonsterMigrationResult =
+  | { status: "ok"; character: MonsterSheet; migrated: boolean }
+  | { status: "unsupported"; foundVersion: number }
+  | { status: "invalid"; reason: string };
+
+/**
+ * The `MonsterSheet` equivalent of {@link validateCharacterShape} — same
+ * template-walk approach (see that function's doc for the full rationale
+ * and known gaps), walked against {@link createDefaultMonster}'s own return
+ * value instead of `createDefaultCharacter`'s.
+ */
+export function validateMonsterSheetShape(value: unknown): string | null {
+  return findShapeMismatch(value, createDefaultMonster(""), "monster");
+}
+
+/**
+ * The `MonsterSheet` equivalent of {@link migrateCharacter} — same shape,
+ * same contract, run against {@link MONSTER_MIGRATIONS} and
+ * {@link CURRENT_MONSTER_SCHEMA_VERSION} instead of the player chain. Not
+ * meant to be called directly outside this file/its tests — every real
+ * caller goes through {@link migrateVaultRecord}, which decides which of the
+ * two chains a raw vault record actually needs.
+ */
+function migrateMonsterSheet(value: unknown): MonsterMigrationResult {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) {
+    return {
+      status: "invalid",
+      reason: `expected an object, got ${Array.isArray(value) ? "array" : typeof value}`,
+    };
+  }
+
+  const record = value as Record<string, unknown>;
+  const foundVersion = typeof record.schemaVersion === "number" ? record.schemaVersion : 0;
+
+  if (foundVersion > CURRENT_MONSTER_SCHEMA_VERSION) {
+    return { status: "unsupported", foundVersion };
+  }
+
+  try {
+    const current = applyMigrations(MONSTER_MIGRATIONS, record, foundVersion);
+    const migrated = { ...current, schemaVersion: CURRENT_MONSTER_SCHEMA_VERSION };
+
+    const mismatch = validateMonsterSheetShape(migrated);
+    if (mismatch) {
+      return { status: "invalid", reason: `shape mismatch after migration: ${mismatch}` };
+    }
+
+    return {
+      status: "ok",
+      character: migrated as unknown as MonsterSheet,
+      migrated: foundVersion < CURRENT_MONSTER_SCHEMA_VERSION,
+    };
+  } catch (err) {
+    return {
+      status: "invalid",
+      reason: err instanceof Error ? err.message : String(err),
+    };
+  }
+}
+
+/** The `MonsterSheet` equivalent of {@link MigrationResult}/{@link MonsterMigrationResult}, for {@link migrateVaultRecord}'s dispatched return. */
+export type VaultMigrationResult =
+  | { status: "ok"; character: CharacterRecord; migrated: boolean }
+  | { status: "unsupported"; foundVersion: number }
+  | { status: "invalid"; reason: string };
+
+/**
+ * Single entry point for migrating a RAW vault/snapshot value of unknown
+ * kind — the choke point every caller that doesn't already know whether
+ * it's holding a player or monster record should use, instead of guessing
+ * or calling {@link migrateCharacter} unconditionally (which would run a
+ * monster's raw data through the player shape validator and always report
+ * it invalid).
+ *
+ * Dispatches purely on the raw value's own `kind` field: `"monster"` routes
+ * to {@link migrateMonsterSheet}, everything else (including a v0-v5 player
+ * record that predates `kind` existing at all, i.e. `kind === undefined`)
+ * routes to {@link migrateCharacter} — the same default {@link
+ * MIGRATIONS}'s own v5 -> v6 step already assumes ("every character that
+ * existed before 'monster' had a meaning was, definitionally, someone's
+ * player character").
+ *
+ * @param value - Raw metadata value read from the vault or a
+ * {@link CharacterLink}'s `snapshot`, of unknown shape.
+ */
+export function migrateVaultRecord(value: unknown): VaultMigrationResult {
+  const isMonsterShaped =
+    typeof value === "object" &&
+    value !== null &&
+    !Array.isArray(value) &&
+    (value as Record<string, unknown>).kind === "monster";
+
+  return isMonsterShaped ? migrateMonsterSheet(value) : migrateCharacter(value);
+}

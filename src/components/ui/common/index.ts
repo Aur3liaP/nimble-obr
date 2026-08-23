@@ -14,3 +14,4 @@ export { ItemRowBase } from "./ItemRowBase";
 export { FormulaHelpButton } from "./FormulaHelp";
 export { FormulaField, FormulaDiscardNotice } from "./FormulaField";
 export { OutdatedBadge } from "./OutdatedBadge";
+export { TagSelector } from "./TagSelector";

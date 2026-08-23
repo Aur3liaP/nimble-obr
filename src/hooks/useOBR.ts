@@ -44,7 +44,10 @@ import {
   MIN_SKILL,
   MAX_SKILL,
   createDefaultCharacter,
+  createDefaultMonster,
   type NimbleCharacter,
+  type MonsterSheet,
+  type CharacterRecord,
   type CharacterLink,
   type DiceRollRequest,
   type DiceRollResult,
@@ -70,6 +73,7 @@ import {
   listCharacters,
   saveCharacter,
 } from "../utils/characterStore";
+import { convertToMonster, convertToPlayer } from "../utils/characterSwitch";
 import { formatModifier } from "../utils/formatModifier";
 
 /** OBR player role as reported by the SDK. */
@@ -238,7 +242,7 @@ export interface SyncErrorStatus {
 export interface UseOBRReturn {
   isReady: boolean;
   selectionState: SelectionState;
-  character: NimbleCharacter | null;
+  character: CharacterRecord | null;
   selectedItems: Item[];
   playerId: string;
   playerName: string;
@@ -250,6 +254,8 @@ export interface UseOBRReturn {
   permissions: CharacterPermissions;
   syncStatus: SyncStatus;
   updateCharacter: (updates: Partial<NimbleCharacter>) => Promise<boolean>;
+  /** The `MonsterSheet` equivalent of `updateCharacter` — see that function's doc for the shared write mechanics; GM-only regardless of `ownerId` (see `CharacterKind`'s doc). */
+  updateMonster: (updates: Partial<MonsterSheet>) => Promise<boolean>;
   handleRoll: (req: DiceRollRequest) => Promise<DiceRollResult | null>;
   handleFreeRoll: (req: DiceRollRequest) => Promise<DiceRollResult | null>;
   rollInitiative: (
@@ -259,6 +265,8 @@ export interface UseOBRReturn {
   ) => Promise<DiceRollResult | null>;
   recentRolls: DiceRollResult[];
   createSheetForToken: (item: Item) => Promise<void>;
+  /** GM-only direct monster-creation entry point — see `NoSheetPanel`'s `onCreateMonster` doc for why this exists as its own path rather than "create a sheet then switch". */
+  createMonsterForToken: (item: Item) => Promise<void>;
   claimToken: () => Promise<void>;
   /**
    * `"player"`-kind vault characters with no token currently linking to
@@ -275,6 +283,19 @@ export interface UseOBRReturn {
    * id — what selecting an entry from the recovery list above does.
    */
   recoverCharacter: (characterId: string) => Promise<void>;
+  /**
+   * Switches the currently selected token's sheet from player to monster
+   * mode — GM-only (no-op otherwise), never a mutation in place (see
+   * `characterSwitch.ts`). Returns `false` without writing anything if the
+   * guard fails (no token/character, wrong kind, or not GM) or the write
+   * itself fails; the caller (`CharacterHeader`'s switch button) is
+   * expected to have already shown its own confirmation dialog before
+   * calling this — this function performs the switch unconditionally, it
+   * does not confirm anything itself.
+   */
+  switchToMonster: () => Promise<boolean>;
+  /** The reverse of {@link switchToMonster} — monster to player. Same guards, same "caller already confirmed" contract. */
+  switchToPlayer: () => Promise<boolean>;
 }
 
 /** Scene metadata key under which the shared, table-wide roll log is stored. */
@@ -454,7 +475,7 @@ function describeWriteFailure(isOptimistic: boolean, hint: string): string {
  * `snapshot`, `updatedAt`) can never drift out of sync with each other at
  * one call site but not another.
  */
-function linkFor(character: NimbleCharacter): CharacterLink {
+function linkFor(character: CharacterRecord): CharacterLink {
   return { characterId: character.id, snapshot: character, updatedAt: character.updatedAt };
 }
 
@@ -502,7 +523,7 @@ function linkFor(character: NimbleCharacter): CharacterLink {
  * catches it — see the paragraph above), which is what makes the gap
  * acceptable rather than something to build a workaround for.
  */
-async function fanOutSnapshot(character: NimbleCharacter): Promise<void> {
+async function fanOutSnapshot(character: CharacterRecord): Promise<void> {
   try {
     const liveTokens = await OBR.scene.items.getItems(
       (item) =>
@@ -536,7 +557,7 @@ async function fanOutSnapshot(character: NimbleCharacter): Promise<void> {
  * failure log paper over the more specific, actionable one the caller can
  * produce.
  */
-async function repairStaleSnapshot(tokenId: string, character: NimbleCharacter): Promise<void> {
+async function repairStaleSnapshot(tokenId: string, character: CharacterRecord): Promise<void> {
   await OBR.scene.items.updateItems([tokenId], (items) => {
     for (const item of items) {
       item.metadata[LINK_KEY] = linkFor(character);
@@ -572,7 +593,7 @@ async function repairStaleSnapshot(tokenId: string, character: NimbleCharacter):
 type BackgroundWrite =
   | { kind: "legacy-migration"; run: () => Promise<void> }
   | { kind: "rehydrate"; run: () => Promise<void> }
-  | { kind: "repair"; character: NimbleCharacter };
+  | { kind: "repair"; character: CharacterRecord };
 
 /**
  * Outcome of {@link loadCharacterForToken}.
@@ -588,7 +609,7 @@ type TokenLoadResult =
   | { status: "none" }
   | {
       status: "ready";
-      character: NimbleCharacter;
+      character: CharacterRecord;
       backgroundWrite?: BackgroundWrite;
     }
   | { status: "unsupported"; foundVersion: number }
@@ -765,7 +786,7 @@ async function cleanupOrphanedMonsters(): Promise<void> {
  * to the filter.
  */
 async function fetchOrphanRefreshInputs(): Promise<{
-  characters: NimbleCharacter[];
+  characters: CharacterRecord[];
   linkedIds: string[];
 }> {
   const [characters, linkedIds] = await Promise.all([listCharacters(), fetchLinkedCharacterIds()]);
@@ -796,7 +817,7 @@ async function fetchOrphanRefreshInputs(): Promise<{
 export function useOBR(): UseOBRReturn {
   const [isReady, setIsReady] = useState(false);
   const [selectionState, setSelectionState] = useState<SelectionState>("none");
-  const [character, setCharacter] = useState<NimbleCharacter | null>(null);
+  const [character, setCharacter] = useState<CharacterRecord | null>(null);
   const [selectedItems, setSelectedItems] = useState<Item[]>([]);
   const [playerId, setPlayerId] = useState("");
   const [playerName, setPlayerName] = useState("");
@@ -804,7 +825,7 @@ export function useOBR(): UseOBRReturn {
   const [recentRolls, setRecentRolls] = useState<DiceRollResult[]>([]);
   const [orphanedCharacters, setOrphanedCharacters] = useState<NimbleCharacter[]>([]);
 
-  const characterRef = useRef<NimbleCharacter | null>(null);
+  const characterRef = useRef<CharacterRecord | null>(null);
   const playerIdRef = useRef<string>("");
   const playerNameRef = useRef<string>("");
   // Mirrors `permissions.canEdit` synchronously for use inside callbacks
@@ -851,9 +872,18 @@ export function useOBR(): UseOBRReturn {
 
   const isGM = role === "GM";
 
+  // Ownership/claiming is a player-sheet-only concept — a MonsterSheet's
+  // `ownerId` is "who created/last switched this record", never a
+  // permission check (see CharacterRecordBase.ownerId's doc): editing a
+  // monster is gated on GM role alone. Forcing isOwner/isUnclaimed false
+  // for a monster is what makes that fall out of `canEdit` below without a
+  // separate branch: canEdit = isGM || false = isGM.
   const isOwner =
-    character !== null && !!character.ownerId && character.ownerId === playerId;
-  const isUnclaimed = character !== null && !character.ownerId;
+    character !== null &&
+    character.kind === "player" &&
+    !!character.ownerId &&
+    character.ownerId === playerId;
+  const isUnclaimed = character !== null && character.kind === "player" && !character.ownerId;
 
   const canEdit = isGM || isOwner;
 
@@ -981,7 +1011,7 @@ export function useOBR(): UseOBRReturn {
    * records `character.updatedAt` in {@link lastRepairedUpdatedAtRef} so the
    * `items.onChange` listener can recognize this write's own echo.
    */
-  const maybeRunRepair = useCallback((tokenId: string, character: NimbleCharacter) => {
+  const maybeRunRepair = useCallback((tokenId: string, character: CharacterRecord) => {
     const guards = repairGuardRef.current;
     const state = guards.get(tokenId) ?? {
       inFlight: false,
@@ -1045,7 +1075,7 @@ export function useOBR(): UseOBRReturn {
    * would have made that self-heal path do work a plain per-character
    * timer avoids needing at all.
    */
-  const scheduleFanOut = useCallback((character: NimbleCharacter) => {
+  const scheduleFanOut = useCallback((character: CharacterRecord) => {
     const timers = fanOutTimersRef.current;
     const existing = timers.get(character.id);
     if (existing !== undefined) clearTimeout(existing);
@@ -1068,7 +1098,7 @@ export function useOBR(): UseOBRReturn {
    * baseline" step can't drift between the two call sites.
    */
   const applyOrphanRefresh = useCallback(
-    (characters: NimbleCharacter[], linkedIds: string[]) => {
+    (characters: CharacterRecord[], linkedIds: string[]) => {
       linkedCharacterIdsSignatureRef.current = linkedCharacterIdsSignature(linkedIds);
       setOrphanedCharacters(
         visibleRecoverableCharacters(characters, linkedIds, playerIdRef.current, isGMRef.current),
@@ -1385,6 +1415,19 @@ export function useOBR(): UseOBRReturn {
       // entry: the vault, not any one token, is what changes when another
       // client edits this character, so this listener (not items.onChange
       // above) is what a remote character edit actually arrives through.
+      //
+      // TRAP for any future write that changes WHICH character.id is
+      // loaded (not just fields on the same one): this resync below reads
+      // `characterRef.current.id` to decide what to re-fetch. Every write
+      // in this hook except switchToMonster/switchToPlayer keeps that id
+      // constant, so a stale ref here is harmless (re-fetching the same id
+      // just confirms what was already set). A write that swaps `character`
+      // to a DIFFERENT id must set `characterRef.current` itself,
+      // synchronously, BEFORE any OBR write that could trigger this
+      // listener — otherwise this resync fires with the OLD id, re-fetches
+      // the OLD (still-valid, not-yet-deleted) record, and silently
+      // overwrites the new one. See switchToMonster's own `@remarks` for
+      // the full trace of this exact bug.
       unsubscribers.push(
         OBR.scene.onMetadataChange(async (meta) => {
           const log = meta[ROLL_LOG_KEY] as DiceRollResult[] | undefined;
@@ -1721,7 +1764,7 @@ export function useOBR(): UseOBRReturn {
     updates: Partial<NimbleCharacter>,
   ): Promise<boolean> => {
     const current = characterRef.current;
-    if (!current) return false;
+    if (!current || current.kind !== "player") return false;
     if (!canEditRef.current) {
       console.warn(
         "[Nimble] updateCharacter blocked: current player has no edit rights on this sheet.",
@@ -1757,7 +1800,7 @@ export function useOBR(): UseOBRReturn {
         // same closure runs again, unchanged, on retry, potentially after
         // other fields changed remotely — see performWrite's JSDoc.
         const latest = characterRef.current;
-        if (!latest || !canEditRef.current) return;
+        if (!latest || latest.kind !== "player" || !canEditRef.current) return;
         const updated = { ...latest, ...clampedUpdates, updatedAt: Date.now() };
         // setCharacter first, offline check second: the field must still
         // show what was typed even if we already know the write will fail
@@ -1769,6 +1812,49 @@ export function useOBR(): UseOBRReturn {
         // Debounced, not immediate — see scheduleFanOut's doc for why the
         // fan-out doesn't need to run on the same cadence as the vault
         // save that's actually the source of truth.
+        scheduleFanOut(updated);
+      },
+    });
+  };
+
+  /**
+   * The `MonsterSheet` equivalent of {@link updateCharacter} — same write
+   * mechanics (vault save, debounced fan-out, optimistic local state), but
+   * gated on GM role alone rather than `canEditRef` — a monster's `canEdit`
+   * already reduces to `isGM` (see the permissions block above), but this
+   * reads `isGMRef` directly rather than `canEditRef` so the guard's intent
+   * ("only the GM may touch a monster sheet") stays legible on its own,
+   * without relying on the reader recalling how `canEdit` happens to be
+   * derived for this one kind. No clamping: `MonsterSheet` has no
+   * rulebook-bounded numeric fields the way `NimbleCharacter.level`/
+   * `stats`/`skills` do — `damageTaken`/`maxHp`/`speed` are the GM's own
+   * numbers, informed by whatever statblock they're already tracking
+   * elsewhere, not values this app has any rulebook basis to clamp.
+   *
+   * @param updates - Partial monster fields to merge into the current state.
+   * @returns Same contract as {@link updateCharacter}'s `@returns`.
+   */
+  const updateMonster = async (
+    updates: Partial<MonsterSheet>,
+  ): Promise<boolean> => {
+    const current = characterRef.current;
+    if (!current || current.kind !== "monster") return false;
+    if (!isGMRef.current) {
+      console.warn(
+        "[Nimble] updateMonster blocked: only the GM may edit a monster sheet.",
+      );
+      return false;
+    }
+
+    return performWrite({
+      isOptimistic: true,
+      execute: async () => {
+        const latest = characterRef.current;
+        if (!latest || latest.kind !== "monster" || !isGMRef.current) return;
+        const updated = { ...latest, ...updates, updatedAt: Date.now() };
+        setCharacter(updated);
+        assertOnline();
+        await saveCharacter(updated);
         scheduleFanOut(updated);
       },
     });
@@ -1822,7 +1908,12 @@ export function useOBR(): UseOBRReturn {
    * to the sheet itself* goes through {@link updateCharacter}'s guard.
    *
    * @param req - Label, formula, roll mode, and optional hidden flag.
-   * @returns The resolved {@link DiceRollResult}, or `null` if no character is loaded.
+   * @returns The resolved {@link DiceRollResult}, or `null` if no character
+   * is loaded, or the loaded record is a {@link MonsterSheet} — a monster
+   * sheet carries no formulas at all (see that type's doc), so there is
+   * nothing this could ever roll; `MonsterPanel` never wires an `onRoll` in
+   * the first place, this guard is defense in depth against a stale
+   * closure calling it anyway.
    * If the formula failed (`result.error` set), the result is still
    * returned to the caller (so it can show the roller what went wrong) but
    * is *not* pushed to the shared roll log — a failed roll must never reach
@@ -1832,7 +1923,7 @@ export function useOBR(): UseOBRReturn {
     req: DiceRollRequest,
   ): Promise<DiceRollResult | null> => {
     const current = characterRef.current;
-    if (!current) return null;
+    if (!current || current.kind !== "player") return null;
     const rolled = rollFormula(
       req.formula,
       current,
@@ -1904,7 +1995,7 @@ export function useOBR(): UseOBRReturn {
     hidden = false,
   ) => {
     const current = characterRef.current;
-    if (!current) return null;
+    if (!current || current.kind !== "player") return null;
     return handleRoll({
       label: "Initiative",
       formula: `1d20${formatModifier(current.stats.dex + (current.initiativeBonus || 0))}`,
@@ -1939,6 +2030,139 @@ export function useOBR(): UseOBRReturn {
   };
 
   /**
+   * Creates a brand-new default {@link MonsterSheet} and links the given
+   * token to it directly — GM-only. Not "create a player sheet, then
+   * switch": see `NoSheetPanel`'s `onCreateMonster` doc for why routing a
+   * monster through a throwaway `NimbleCharacter` first would leave an
+   * orphaned, unrecoverable-by-cleanup "New Hero" record behind in the
+   * vault every time.
+   *
+   * @param item - The OBR scene item (token) to attach a monster sheet to.
+   */
+  const createMonsterForToken = async (item: Item) => {
+    if (!isGMRef.current) {
+      console.warn("[Nimble] createMonsterForToken blocked: GM only.");
+      return;
+    }
+    const newMonster = createDefaultMonster(playerIdRef.current);
+    await performWrite({
+      execute: async () => {
+        assertOnline();
+        if (!isGMRef.current) return;
+        // Same ordering as createSheetForToken — token link before vault
+        // entry, see cleanupOrphanedMonsters' comment for why.
+        await OBR.scene.items.updateItems([item.id], (items) => {
+          for (const i of items) i.metadata[LINK_KEY] = linkFor(newMonster);
+        });
+        await saveCharacter(newMonster);
+        setCharacter(newMonster);
+        setSelectionState("ready");
+      },
+    });
+  };
+
+  /**
+   * Switches the selected token's sheet from player to monster mode —
+   * GM-only, never a mutation in place (see `characterSwitch.ts`'s
+   * `convertToMonster`). The original `NimbleCharacter` record is left
+   * behind in the vault, unlinked — a `"player"`-kind record with no
+   * token pointing to it is exactly what "Retrieve a lost soul" already
+   * surfaces, so it stays recoverable through that existing path with no
+   * bespoke undo mechanism needed.
+   *
+   * Does NOT show a confirmation dialog itself — the caller
+   * (`CharacterHeader`'s switch button) is responsible for that; this
+   * function performs the switch unconditionally once called.
+   *
+   * @remarks Sets local state (`character` AND `characterRef.current`,
+   * synchronously, before either OBR write) — diagnosed as load-bearing,
+   * not cosmetic: `OBR.scene.onMetadataChange`'s listener (this file's main
+   * effect) resyncs "the currently loaded character" by re-reading
+   * `characterRef.current.id` from the vault whenever ANY scene-metadata
+   * write lands, including this function's own `saveCharacter(monster)`.
+   * Every OTHER write in this hook keeps that ref pointed at the SAME
+   * character id throughout (only fields on it change), so that resync is
+   * harmless there. This function is the one place `character.id` itself
+   * changes while a sheet is already open — if `characterRef.current`
+   * still held the OLD player id when that listener's resync fired (which
+   * it would, updating that ref only via the `useEffect` mirror further up
+   * runs strictly after this render commits, i.e. possibly after the
+   * listener already read it), the listener would re-fetch the OLD
+   * player record (still sitting in the vault, unlinked but not deleted —
+   * see `characterSwitch.ts`) and silently overwrite this function's own
+   * correct `setCharacter(monster)` with it. Reproduced exactly like this
+   * in real testing: the switch appeared to do nothing until the token was
+   * deselected and reselected, which forces a clean, unraced reload.
+   * Updating `characterRef.current` here, synchronously, before either
+   * write starts, closes the window: by the time that listener's resync
+   * can possibly run, it already sees the new monster id, and re-fetching
+   * that id only ever lands on the (correct) new data.
+   * @returns `false` without writing anything if the guard fails (no
+   * selected token, no character loaded, the loaded character isn't a
+   * player sheet, or not GM) or the write itself fails.
+   */
+  const switchToMonster = async (): Promise<boolean> => {
+    const targetId = selectedTokenIdRef.current;
+    const initial = characterRef.current;
+    if (!targetId || !initial || initial.kind !== "player" || !isGMRef.current) return false;
+
+    return performWrite({
+      isOptimistic: true,
+      execute: async () => {
+        const latest = characterRef.current;
+        if (!targetId || !latest || latest.kind !== "player" || !isGMRef.current) return;
+        const monster = convertToMonster(latest, playerIdRef.current);
+        // Optimistic AND ahead of characterRef's own mirror effect — see
+        // this function's @remarks above for the race this specifically
+        // closes. assertOnline() still comes after, same "show it, then
+        // check" ordering updateCharacter already uses.
+        characterRef.current = monster;
+        setCharacter(monster);
+        assertOnline();
+        await OBR.scene.items.updateItems([targetId], (items) => {
+          for (const item of items) item.metadata[LINK_KEY] = linkFor(monster);
+        });
+        await saveCharacter(monster);
+      },
+    });
+  };
+
+  /**
+   * The reverse of {@link switchToMonster} — monster to player. The
+   * original {@link MonsterSheet} is left behind in the vault, unlinked;
+   * unlike the player-to-monster direction, this loss is real and
+   * permanent — a `"monster"`-kind record with no linking token is swept
+   * by `cleanupOrphanedMonsters` at the next scene load (see
+   * `characterSwitch.ts`'s `convertToPlayer` and this batch's design notes
+   * for why the two directions carry different confirmation wording).
+   *
+   * @remarks Same `characterRef.current` ordering, and the same race it
+   * closes, as {@link switchToMonster} — see that function's `@remarks`.
+   * @returns Same contract as {@link switchToMonster}'s `@returns`.
+   */
+  const switchToPlayer = async (): Promise<boolean> => {
+    const targetId = selectedTokenIdRef.current;
+    const initial = characterRef.current;
+    if (!targetId || !initial || initial.kind !== "monster" || !isGMRef.current) return false;
+
+    return performWrite({
+      isOptimistic: true,
+      execute: async () => {
+        const latest = characterRef.current;
+        if (!targetId || !latest || latest.kind !== "monster" || !isGMRef.current) return;
+        const player = convertToPlayer(latest, playerIdRef.current);
+        characterRef.current = player;
+        setCharacter(player);
+        assertOnline();
+        await OBR.scene.items.updateItems([targetId], (items) => {
+          for (const item of items) item.metadata[LINK_KEY] = linkFor(player);
+        });
+        await saveCharacter(player);
+      },
+    });
+  };
+
+  /**
    * Sets the current player as the owner of the currently loaded character,
    * saves it to the vault, and fans the change out to every token
    * displaying it (see `fanOutSnapshot`).
@@ -1961,11 +2185,16 @@ export function useOBR(): UseOBRReturn {
    */
   const claimToken = async () => {
     const initial = characterRef.current;
-    if (!initial) return;
+    // Claiming is a player-sheet-only concept — a MonsterSheet's ownerId is
+    // never a permission check (see CharacterRecordBase.ownerId's doc), so
+    // there is nothing to "claim" on one. `App.tsx` never renders this
+    // button for a monster sheet in the first place; this guard is defense
+    // in depth against a stale closure calling it anyway.
+    if (!initial || initial.kind !== "player") return;
     await performWrite({
       execute: async () => {
         const latest = characterRef.current;
-        if (!latest) return;
+        if (!latest || latest.kind !== "player") return;
         const claimed = { ...latest, ownerId: playerIdRef.current, updatedAt: Date.now() };
         assertOnline();
         await saveCharacter(claimed);
@@ -2027,12 +2256,16 @@ export function useOBR(): UseOBRReturn {
     permissions,
     syncStatus,
     updateCharacter,
+    updateMonster,
     handleRoll,
     handleFreeRoll,
     rollInitiative,
     recentRolls,
     createSheetForToken,
+    createMonsterForToken,
     claimToken,
+    switchToMonster,
+    switchToPlayer,
     orphanedCharacters,
     recoverCharacter,
   };

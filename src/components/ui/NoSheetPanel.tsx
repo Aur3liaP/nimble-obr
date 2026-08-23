@@ -2,7 +2,10 @@
  * @file NoSheetPanel — shown in `App.tsx` when the selected token has no
  * character sheet attached.
  *
- * Always offers "Create a sheet". Also offers "Retrieve a lost soul" when
+ * Always offers "Create a sheet" and, for the GM only, "Create a monster"
+ * (see `onCreateMonster`'s own doc for why that's a direct entry point
+ * rather than routing through a throwaway player sheet plus the switch
+ * button). Also offers "Retrieve a lost soul" when
  * the vault holds at least one `"player"`-kind character no token currently
  * links to (`orphanedCharacters`, from `useOBR`, already filtered by
  * ownership — a player sees only their own, the GM sees everything) —
@@ -34,6 +37,8 @@ import { useState } from "react";
 import type { NimbleCharacter } from "../../types/character";
 import { useSearchFilter } from "../../hooks/useSearchFilter";
 import { LicenseAttribution, VttNotice } from "./RollLog";
+import { MonsterIcon } from "./icons/MonsterIcon";
+import { BlueFlameIcon } from "./icons/BlueFlameIcon";
 
 /**
  * The recovery list shows a name filter once there are more than this many
@@ -61,6 +66,20 @@ interface NoSheetPanelProps {
   orphanedCharacters: NimbleCharacter[];
   /** Attaches a brand-new default sheet to the selected token. `undefined` when there's no concrete token to attach to (defensive; `App.tsx` only renders this panel when one exists). */
   onCreate: (() => void) | undefined;
+  /**
+   * Attaches a brand-new monster sheet directly to the selected token —
+   * GM-only (`undefined` for a non-GM viewer, hiding the button entirely,
+   * same convention as `onCreate` being `undefined` with no concrete
+   * token). Deliberately a separate entry point from "Create a sheet" +
+   * the switch button: routing every monster through a throwaway
+   * `NimbleCharacter` first would leave an empty, orphaned "New Hero"
+   * record behind in the vault on every single monster created — harmless
+   * one at a time, but a real mess on a ten-monster encounter (ten
+   * unrecoverable player-kind orphans cluttering the GM's own recovery
+   * list, since `cleanupOrphanedMonsters` only ever sweeps `"monster"`
+   * kind).
+   */
+  onCreateMonster: (() => void) | undefined;
   /** Links the selected token to an existing vault character by id. */
   onRecover: (characterId: string) => void;
 }
@@ -80,7 +99,12 @@ interface NoSheetPanelProps {
  * task list already has planned — export-before-delete is the safety net
  * this needs, not a same-list confirmation prompt bolted on early.
  */
-export function NoSheetPanel({ orphanedCharacters, onCreate, onRecover }: NoSheetPanelProps) {
+export function NoSheetPanel({
+  orphanedCharacters,
+  onCreate,
+  onCreateMonster,
+  onRecover,
+}: NoSheetPanelProps) {
   const [showRecoveryList, setShowRecoveryList] = useState(false);
   const { search, setSearch, filtered } = useSearchFilter(orphanedCharacters, (c) => [c.name]);
 
@@ -147,20 +171,38 @@ export function NoSheetPanel({ orphanedCharacters, onCreate, onRecover }: NoShee
       <p className="text-sm text-stone-500 max-w-50 leading-relaxed">
         This token has no character sheet.
       </p>
-      <div className="flex gap-2">
+      {/* Three same-level buttons, each with an icon — a plain emoji for
+          "Create a sheet" (no icon-library dependency justified for one
+          glyph — see this batch's own decision to drop lucide-react), the
+          project's own SVG icons (inlined as components, not loaded via
+          <img> — see MonsterIcon/BlueFlameIcon's own file headers for why)
+          for the other two. `flex-wrap` so a narrow panel stacks instead of
+          truncating/overflowing when all three are present. */}
+      <div className="flex flex-wrap justify-center gap-2">
         {onCreate && (
           <button
             onClick={onCreate}
-            className="px-4 py-2 rounded-lg bg-amber-800 hover:bg-amber-700 text-amber-100 text-sm font-semibold transition-colors"
+            className="flex items-center gap-1.5 px-4 py-2 rounded-lg bg-amber-800 hover:bg-amber-700 text-amber-100 text-sm font-semibold transition-colors"
           >
+            <span className="text-sm leading-none" aria-hidden="true">📄</span>
             Create a sheet
+          </button>
+        )}
+        {onCreateMonster && (
+          <button
+            onClick={onCreateMonster}
+            className="flex items-center gap-1.5 px-4 py-2 rounded-lg bg-stone-800 hover:bg-stone-700 text-stone-200 text-sm font-semibold transition-colors"
+          >
+            <MonsterIcon className="w-3.5 h-3.5 text-stone-200" />
+            Create a monster
           </button>
         )}
         {orphanedCharacters.length > 0 && (
           <button
             onClick={() => setShowRecoveryList(true)}
-            className="px-4 py-2 rounded-lg bg-stone-800 hover:bg-stone-700 text-stone-200 text-sm font-semibold transition-colors"
+            className="flex items-center gap-1.5 px-4 py-2 rounded-lg bg-stone-800 hover:bg-stone-700 text-stone-200 text-sm font-semibold transition-colors"
           >
+            <BlueFlameIcon className="w-3.5 h-3.5" />
             Retrieve a lost soul
           </button>
         )}
