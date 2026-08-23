@@ -15,7 +15,23 @@
  *   style, used for identity fields in SummaryTab (Name, Class, Ancestry, Size).
  * - {@link InlineNumberField} — numeric-only shorthand with size variants,
  *   used for HP, Level, Speed, and other prominent numeric displays.
+ *
+ * {@link InlineNumberField}'s commit to OBR is debounced (see
+ * `useDebouncedCommit`), unlike every other field in this file: a native
+ * `<input type="number">`'s spinner buttons and mouse-wheel scrolling both
+ * fire `change` events far faster than a human types, and committing every
+ * one of them used to send one OBR write per tick. Tolerable before the
+ * vault-decoupling batch doubled write volume per save (vault + snapshot
+ * fan-out); enough on its own to trip OBR's rate limit once it was.
+ * `InlineEditField`'s plain text fields are NOT debounced, on purpose — a
+ * human typing prose is naturally paced well under any rate limit, and
+ * every keystroke committing immediately is deliberate design (see
+ * CLAUDE.md's "Formula input fields keep local state..." bullet for the
+ * one other deliberate exception, unrelated to this one).
  */
+
+import { useEffect, useRef, useState } from "react";
+import { useDebouncedCommit } from "../../../hooks/useDebouncedCommit";
 
 /** Native input type supported by {@link InlineEditField}. */
 type FieldType = "text" | "number";
@@ -195,6 +211,24 @@ export function InlineNumberField({
     : undefined;
   const staticColorCls = isDynamicColor ? "" : (colorClass as string);
 
+  // Local optimistic display, resynced from `value` whenever this field
+  // isn't the one currently mid-edit — same "don't let a remote update
+  // yank the field out from under an in-progress local change" reasoning
+  // as `useDraggableValue`. Needed here because the actual OBR commit
+  // (`onChange`) is now debounced (see the file header): without a local
+  // display value, the field would show stale numbers between ticks while
+  // waiting for the commit to fire.
+  const [displayValue, setDisplayValue] = useState(value);
+  const isEditingRef = useRef(false);
+  const { schedule, flush } = useDebouncedCommit<number>((v) => {
+    isEditingRef.current = false;
+    onChange?.(v);
+  });
+
+  useEffect(() => {
+    if (!isEditingRef.current) setDisplayValue(value);
+  }, [value]);
+
   return (
     <div className={`flex flex-col gap-0.5 ${className}`}>
       {label && (
@@ -205,13 +239,17 @@ export function InlineNumberField({
       {canEdit ? (
         <input
           type="number"
-          value={value}
+          value={displayValue}
           min={min}
           max={max}
           onChange={(e) => {
             const v = parseInt(e.target.value);
-            if (!isNaN(v)) onChange?.(v);
+            if (isNaN(v)) return;
+            isEditingRef.current = true;
+            setDisplayValue(v);
+            schedule(v);
           }}
+          onBlur={flush}
           className={`
             ${INPUT_UNDERLINE} font-bold
             ${sizeCls} ${alignCls} ${staticColorCls}

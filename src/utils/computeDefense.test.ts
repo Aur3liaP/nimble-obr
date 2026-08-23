@@ -10,7 +10,7 @@ import { BASIC_EQUIPMENTS } from "../data/equipment";
 import { computeDefense } from "./computeDefense";
 
 function makeCharacter(overrides: Partial<NimbleCharacter> = {}): NimbleCharacter {
-  const char = createDefaultCharacter("token-1", "owner-1");
+  const char = createDefaultCharacter("owner-1");
   return { ...char, ...overrides };
 }
 

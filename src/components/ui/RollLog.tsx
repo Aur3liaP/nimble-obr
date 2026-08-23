@@ -2,10 +2,15 @@
  * @file Shared roll history display.
  *
  * Rendered in two modes from the same component:
- * - Inline (`inline` prop): a static list embedded in the page flow,
- *   used when no character sheet is open (no-token/no-sheet states,
- *   including the no-token "welcome" state shown on extension open and
- *   whenever the selection is cleared).
+ * - Inline (`inline` prop): a static list embedded in the page flow, used
+ *   when no character sheet is open — the no-token "welcome" state (shown
+ *   on extension open and whenever the selection is cleared),
+ *   unsupported-version, and invalid-sheet. NOT the no-sheet state: that
+ *   screen's one job is creating/recovering a sheet (`NoSheetPanel.tsx`),
+ *   so it shows neither this nor `DicePanel` — see the "Panel layout
+ *   contract" in CLAUDE.md. `VttNotice`/`LicenseAttribution` below are
+ *   exported so that screen can still carry the required license text
+ *   without pulling in the roll list it doesn't want.
  * - Floating pill (default): a bottom-right collapsible popup showing the
  *   most recent roll, used whenever a character sheet is open.
  *
@@ -50,8 +55,19 @@ const VTT_NOTICE =
 const LICENSE_ATTRIBUTION_TEXT =
   "Nimble OBR is an independent product published under the Nimble 3rd Party Creator License. Nimble TTRPG (c) Nimble Co.";
 
-/** Pinned, non-dismissible VTT notice — see {@link VTT_NOTICE}. */
-function VttNotice({ className = "" }: { className?: string }) {
+/**
+ * Pinned, non-dismissible VTT notice — see {@link VTT_NOTICE}.
+ *
+ * Exported (not just used internally by this file's own inline mode) so
+ * `NoSheetPanel.tsx` can render the same required legal text on the
+ * no-sheet screen, which — as of the batch that added it — shows neither
+ * `DicePanel` nor `RollLog` (see the "Panel layout contract" in CLAUDE.md),
+ * so it can't get this notice "for free" through inline `RollLog` the way
+ * every other empty state does. `RollLog.tsx` stays the single source of
+ * this text either way — `NoSheetPanel` imports it rather than holding its
+ * own copy.
+ */
+export function VttNotice({ className = "" }: { className?: string }) {
   return (
     <p className={`text-[9px] leading-snug text-stone-500 ${className}`}>
       {VTT_NOTICE}
@@ -65,8 +81,10 @@ function VttNotice({ className = "" }: { className?: string }) {
  * name said nothing about WHAT it's attributing (attribution of what, to
  * whom?) and read as a generic UI-credits component to a reader who
  * hadn't just read this file's @file header.
+ *
+ * Exported for the same reason as {@link VttNotice} — see its doc.
  */
-function LicenseAttribution({ className = "" }: { className?: string }) {
+export function LicenseAttribution({ className = "" }: { className?: string }) {
   return (
     <p className={`text-[8px] leading-snug text-stone-600 ${className}`}>
       {LICENSE_ATTRIBUTION_TEXT}

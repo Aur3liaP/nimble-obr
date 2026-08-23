@@ -26,7 +26,7 @@ function omit(obj: Record<string, unknown>, keys: string[]): Record<string, unkn
 }
 
 function makeV0Character(): Record<string, unknown> {
-  const full = createDefaultCharacter("token-1", "owner-1") as unknown as Record<string, unknown>;
+  const full = createDefaultCharacter("owner-1") as unknown as Record<string, unknown>;
   return omit(full, ["combat", "schemaVersion"]);
 }
 
@@ -59,7 +59,7 @@ describe("migrateCharacter — versionless and v0 records", () => {
   });
 
   it("does not touch an already-present combat field", () => {
-    const base = createDefaultCharacter("token-1", "owner-1");
+    const base = createDefaultCharacter("owner-1");
     const v0WithCombat = {
       ...omit(base as unknown as Record<string, unknown>, ["schemaVersion"]),
       combat: { actionsRemaining: 1, initiativeResult: 17 },
@@ -71,7 +71,7 @@ describe("migrateCharacter — versionless and v0 records", () => {
   });
 
   it("backfills several missing top-level fields and a missing field inside a sub-object", () => {
-    const base = createDefaultCharacter("token-1", "owner-1") as unknown as Record<string, unknown>;
+    const base = createDefaultCharacter("owner-1") as unknown as Record<string, unknown>;
     const brokenDefense = omit(base.defense as unknown as Record<string, unknown>, ["defenseBonus"]);
     const v0 = omit(
       { ...base, defense: brokenDefense },
@@ -92,7 +92,7 @@ describe("migrateCharacter — versionless and v0 records", () => {
   });
 
   it("does not replace an existing falsy value (0 or empty string) with the default", () => {
-    const base = createDefaultCharacter("token-1", "owner-1") as unknown as Record<string, unknown>;
+    const base = createDefaultCharacter("owner-1") as unknown as Record<string, unknown>;
     const v0 = omit(
       {
         ...base,
@@ -116,7 +116,7 @@ describe("migrateCharacter — versionless and v0 records", () => {
 
 describe("migrateCharacter — v1 -> v2 (initiativeAdvantage)", () => {
   it("defaults initiativeAdvantage to 'none' for a v1 record that predates the field", () => {
-    const base = createDefaultCharacter("token-1", "owner-1") as unknown as Record<string, unknown>;
+    const base = createDefaultCharacter("owner-1") as unknown as Record<string, unknown>;
     const v1 = omit({ ...base, schemaVersion: 1 }, ["initiativeAdvantage"]);
     const result = migrateCharacter(v1);
     expect(result.status).toBe("ok");
@@ -127,7 +127,7 @@ describe("migrateCharacter — v1 -> v2 (initiativeAdvantage)", () => {
   });
 
   it("does not overwrite an already-present initiativeAdvantage", () => {
-    const base = createDefaultCharacter("token-1", "owner-1") as unknown as Record<string, unknown>;
+    const base = createDefaultCharacter("owner-1") as unknown as Record<string, unknown>;
     const v1 = { ...base, schemaVersion: 1, initiativeAdvantage: "advantage" };
     const result = migrateCharacter(v1);
     expect(result.status).toBe("ok");
@@ -142,7 +142,7 @@ describe("migrateCharacter — v1 -> v2 (armor -> defense rename)", () => {
   // record keyed by `armor` (the old field name), never `defense`.
 
   it("renames a fully-populated armor field to defense", () => {
-    const base = createDefaultCharacter("token-1", "owner-1") as unknown as Record<string, unknown>;
+    const base = createDefaultCharacter("owner-1") as unknown as Record<string, unknown>;
     const v1 = {
       ...omit(base, ["defense"]),
       schemaVersion: 1,
@@ -156,7 +156,7 @@ describe("migrateCharacter — v1 -> v2 (armor -> defense rename)", () => {
   });
 
   it("backfills a missing defenseBonus to 0 while renaming, preserving equippedItemId", () => {
-    const base = createDefaultCharacter("token-1", "owner-1") as unknown as Record<string, unknown>;
+    const base = createDefaultCharacter("owner-1") as unknown as Record<string, unknown>;
     const v1 = {
       ...omit(base, ["defense"]),
       schemaVersion: 1,
@@ -174,7 +174,7 @@ describe("migrateCharacter — v1 -> v2 (armor -> defense rename)", () => {
     // (from the current, already-renamed createDefaultCharacter template);
     // v1 -> v2's rename step must leave that alone rather than clobber it
     // with an empty object because it saw no `armor` key to rename.
-    const base = createDefaultCharacter("token-1", "owner-1") as unknown as Record<string, unknown>;
+    const base = createDefaultCharacter("owner-1") as unknown as Record<string, unknown>;
     const v0 = omit(base, ["defense", "schemaVersion", "combat"]);
     const result = migrateCharacter(v0);
     expect(result.status).toBe("ok");
@@ -192,7 +192,7 @@ describe("migrateCharacter — v1 -> v2 (CharacterAction.damage removal)", () =>
   // these fixtures simulate every shape that data can take.
 
   function migrateOneAction(action: Record<string, unknown>): Record<string, unknown> {
-    const base = createDefaultCharacter("token-1", "owner-1") as unknown as Record<string, unknown>;
+    const base = createDefaultCharacter("owner-1") as unknown as Record<string, unknown>;
     const v1 = { ...base, schemaVersion: 1, actions: [action] };
     const result = migrateCharacter(v1);
     expect(result.status).toBe("ok");
@@ -278,7 +278,7 @@ describe("migrateCharacter — v1 -> v2 (InventoryItem.manualResolution backfill
   // comment), not a hardcoded name list.
 
   function migrateOneItem(item: Record<string, unknown>): Record<string, unknown> {
-    const base = createDefaultCharacter("token-1", "owner-1") as unknown as Record<string, unknown>;
+    const base = createDefaultCharacter("owner-1") as unknown as Record<string, unknown>;
     const v1 = { ...base, schemaVersion: 1, inventory: [item] };
     const result = migrateCharacter(v1);
     expect(result.status).toBe("ok");
@@ -346,7 +346,7 @@ describe("migrateCharacter — v2 -> v3 (sourceKey backfill)", () => {
   // above.
 
   function migrateOneItemV2(item: Record<string, unknown>): Record<string, unknown> {
-    const base = createDefaultCharacter("token-1", "owner-1") as unknown as Record<string, unknown>;
+    const base = createDefaultCharacter("owner-1") as unknown as Record<string, unknown>;
     const v2 = { ...base, schemaVersion: 2, inventory: [item] };
     const result = migrateCharacter(v2);
     expect(result.status).toBe("ok");
@@ -355,7 +355,7 @@ describe("migrateCharacter — v2 -> v3 (sourceKey backfill)", () => {
   }
 
   function migrateOneActionV2(action: Record<string, unknown>): Record<string, unknown> {
-    const base = createDefaultCharacter("token-1", "owner-1") as unknown as Record<string, unknown>;
+    const base = createDefaultCharacter("owner-1") as unknown as Record<string, unknown>;
     const v2 = { ...base, schemaVersion: 2, actions: [action] };
     const result = migrateCharacter(v2);
     expect(result.status).toBe("ok");
@@ -509,7 +509,7 @@ describe("migrateCharacter — v3 -> v4 (catalogVersion backfill)", () => {
   // reasoning as the v2 -> v3 block above.
 
   function migrateOneItemV3(item: Record<string, unknown>): Record<string, unknown> {
-    const base = createDefaultCharacter("token-1", "owner-1") as unknown as Record<string, unknown>;
+    const base = createDefaultCharacter("owner-1") as unknown as Record<string, unknown>;
     const v3 = { ...base, schemaVersion: 3, inventory: [item] };
     const result = migrateCharacter(v3);
     expect(result.status).toBe("ok");
@@ -518,7 +518,7 @@ describe("migrateCharacter — v3 -> v4 (catalogVersion backfill)", () => {
   }
 
   function migrateOneActionV3(action: Record<string, unknown>): Record<string, unknown> {
-    const base = createDefaultCharacter("token-1", "owner-1") as unknown as Record<string, unknown>;
+    const base = createDefaultCharacter("owner-1") as unknown as Record<string, unknown>;
     const v3 = { ...base, schemaVersion: 3, actions: [action] };
     const result = migrateCharacter(v3);
     expect(result.status).toBe("ok");
@@ -587,7 +587,7 @@ describe("migrateCharacter — v3 -> v4 (catalogVersion backfill)", () => {
   });
 
   it("chains correctly for a record starting further back (v1): sourceKey backfilled by MIGRATIONS[2] is visible to this step", () => {
-    const base = createDefaultCharacter("token-1", "owner-1") as unknown as Record<string, unknown>;
+    const base = createDefaultCharacter("owner-1") as unknown as Record<string, unknown>;
     const template = BASIC_EQUIPMENTS.find((e) => e.sourceKey === "longsword");
     if (!template) throw new Error("fixture setup: Longsword missing from BASIC_EQUIPMENTS");
     const v1 = {
@@ -615,7 +615,7 @@ describe("migrateCharacter — v3 -> v4 (catalogVersion backfill)", () => {
   });
 
   it("a character holding a mix — backfilled-with-sourceKey, no-sourceKey, custom, and a removed catalog entry — resolves each independently", () => {
-    const base = createDefaultCharacter("token-1", "owner-1") as unknown as Record<string, unknown>;
+    const base = createDefaultCharacter("owner-1") as unknown as Record<string, unknown>;
     const v3 = {
       ...base,
       schemaVersion: 3,
@@ -689,7 +689,7 @@ describe("migrateCharacter — v3 -> v4 (catalogVersion backfill)", () => {
   // correct. See the "already at CURRENT_SCHEMA_VERSION" block below for
   // the actual mechanism that produces the reported symptom.
   it("[bug report repro] backfills catalogVersion: 0 on real-shaped non-custom entries with sourceKey and no catalogVersion", () => {
-    const base = createDefaultCharacter("token-1", "owner-1") as unknown as Record<string, unknown>;
+    const base = createDefaultCharacter("owner-1") as unknown as Record<string, unknown>;
     const v3 = {
       ...base,
       schemaVersion: 3,
@@ -768,7 +768,7 @@ describe("migrateCharacter — v3 -> v4 (catalogVersion backfill)", () => {
   // not a real persisted character — see CLAUDE.md's v1 -> v2 folding
   // precedent for the same reasoning applied to an earlier migration.
   it("[root cause] a record already stamped at CURRENT_SCHEMA_VERSION is never re-migrated, even if it's missing a field a later migration would have backfilled", () => {
-    const base = createDefaultCharacter("token-1", "owner-1") as unknown as Record<string, unknown>;
+    const base = createDefaultCharacter("owner-1") as unknown as Record<string, unknown>;
     const stuckAtCurrent = {
       ...base,
       schemaVersion: CURRENT_SCHEMA_VERSION,
@@ -803,7 +803,7 @@ describe("migrateCharacter — v4 -> v5 (category backfill)", () => {
   // reasoning as the v3 -> v4 block above.
 
   function migrateOneItemV4(item: Record<string, unknown>): Record<string, unknown> {
-    const base = createDefaultCharacter("token-1", "owner-1") as unknown as Record<string, unknown>;
+    const base = createDefaultCharacter("owner-1") as unknown as Record<string, unknown>;
     const v4 = { ...base, schemaVersion: 4, inventory: [item] };
     const result = migrateCharacter(v4);
     expect(result.status).toBe("ok");
@@ -893,7 +893,7 @@ describe("migrateCharacter — v4 -> v5 (category backfill)", () => {
   });
 
   it("a character holding a mix — catalog-matched, untraceable, and custom — resolves each independently", () => {
-    const base = createDefaultCharacter("token-1", "owner-1") as unknown as Record<string, unknown>;
+    const base = createDefaultCharacter("owner-1") as unknown as Record<string, unknown>;
     const v4 = {
       ...base,
       schemaVersion: 4,
@@ -940,9 +940,57 @@ describe("migrateCharacter — v4 -> v5 (category backfill)", () => {
   });
 });
 
+describe("migrateCharacter — v5 -> v6 (id/kind added, tokenId dropped)", () => {
+  // Fixtures start at schemaVersion 5 to isolate MIGRATIONS[5], same
+  // reasoning as the v3 -> v4 / v4 -> v5 blocks above.
+
+  function migrateV5(overrides: Record<string, unknown> = {}): Record<string, unknown> {
+    const base = createDefaultCharacter("owner-1") as unknown as Record<string, unknown>;
+    const v5 = omit({ ...base, ...overrides, schemaVersion: 5 }, ["id", "kind"]);
+    const result = migrateCharacter(v5);
+    expect(result.status).toBe("ok");
+    if (result.status !== "ok") throw new Error("expected migration to succeed");
+    return result.character as unknown as Record<string, unknown>;
+  }
+
+  it("generates a fresh id when the record predates the field", () => {
+    const migrated = migrateV5();
+    expect(typeof migrated.id).toBe("string");
+    expect((migrated.id as string).length).toBeGreaterThan(0);
+  });
+
+  it("defaults kind to 'player' when the record predates the field", () => {
+    const migrated = migrateV5();
+    expect(migrated.kind).toBe("player");
+  });
+
+  it("drops the old tokenId field entirely", () => {
+    const migrated = migrateV5({ tokenId: "old-token-123" });
+    expect(migrated).not.toHaveProperty("tokenId");
+  });
+
+  it("does not regenerate an already-present id", () => {
+    const base = createDefaultCharacter("owner-1") as unknown as Record<string, unknown>;
+    const v5 = { ...base, schemaVersion: 5, id: "already-here", tokenId: "old-token" };
+    const result = migrateCharacter(v5);
+    expect(result.status).toBe("ok");
+    if (result.status !== "ok") return;
+    expect(result.character.id).toBe("already-here");
+  });
+
+  it("does not overwrite an already-present kind", () => {
+    const base = createDefaultCharacter("owner-1") as unknown as Record<string, unknown>;
+    const v5 = { ...base, schemaVersion: 5, kind: "monster", tokenId: "old-token" };
+    const result = migrateCharacter(v5);
+    expect(result.status).toBe("ok");
+    if (result.status !== "ok") return;
+    expect(result.character.kind).toBe("monster");
+  });
+});
+
 describe("migrateCharacter — already current", () => {
   it("reports no migration for a record already at CURRENT_SCHEMA_VERSION", () => {
-    const character = createDefaultCharacter("token-1", "owner-1");
+    const character = createDefaultCharacter("owner-1");
     const result = migrateCharacter(character);
     expect(result).toEqual({ status: "ok", character, migrated: false });
   });
@@ -964,7 +1012,7 @@ describe("migrateCharacter — idempotence", () => {
 
 describe("migrateCharacter — future schema version", () => {
   it("refuses to load a record newer than CURRENT_SCHEMA_VERSION", () => {
-    const character = createDefaultCharacter("token-1", "owner-1");
+    const character = createDefaultCharacter("owner-1");
     const future = { ...character, schemaVersion: CURRENT_SCHEMA_VERSION + 1 };
     const result = migrateCharacter(future);
     expect(result).toEqual({ status: "unsupported", foundVersion: CURRENT_SCHEMA_VERSION + 1 });
@@ -995,7 +1043,7 @@ describe("migrateCharacter — invalid input", () => {
   });
 
   it("rejects a record missing a required top-level field entirely", () => {
-    const character = createDefaultCharacter("token-1", "owner-1");
+    const character = createDefaultCharacter("owner-1");
     const broken = omit(character as unknown as Record<string, unknown>, ["hp"]);
     const result = migrateCharacter(broken);
     expect(result.status).toBe("invalid");
@@ -1004,7 +1052,7 @@ describe("migrateCharacter — invalid input", () => {
   });
 
   it("rejects a record whose migrated shape has a top-level field of the wrong type", () => {
-    const character = createDefaultCharacter("token-1", "owner-1");
+    const character = createDefaultCharacter("owner-1");
     const corrupted = { ...character, hp: "not an object" };
     const result = migrateCharacter(corrupted);
     expect(result.status).toBe("invalid");
@@ -1013,7 +1061,7 @@ describe("migrateCharacter — invalid input", () => {
   });
 
   it("rejects a record with a wrong-typed nested field", () => {
-    const character = createDefaultCharacter("token-1", "owner-1");
+    const character = createDefaultCharacter("owner-1");
     const corrupted = { ...character, stats: { ...character.stats, str: "3" } };
     const result = migrateCharacter(corrupted);
     expect(result.status).toBe("invalid");
@@ -1069,7 +1117,7 @@ describe("applyMigrations — chaining", () => {
 
 describe("validateCharacterShape", () => {
   it("accepts a freshly created default character", () => {
-    expect(validateCharacterShape(createDefaultCharacter("t", "o"))).toBeNull();
+    expect(validateCharacterShape(createDefaultCharacter("o"))).toBeNull();
   });
 
   it("flags a non-object", () => {
@@ -1077,24 +1125,24 @@ describe("validateCharacterShape", () => {
   });
 
   it("flags a missing top-level field", () => {
-    const character = createDefaultCharacter("t", "o");
+    const character = createDefaultCharacter("o");
     const broken = omit(character as unknown as Record<string, unknown>, ["wounds"]);
     expect(validateCharacterShape(broken)).toContain("wounds");
   });
 
   it("flags a wrong-typed nested field", () => {
-    const character = createDefaultCharacter("t", "o");
+    const character = createDefaultCharacter("o");
     const corrupted = { ...character, hitDice: { ...character.hitDice, current: "one" } };
     expect(validateCharacterShape(corrupted)).toContain("hitDice.current");
   });
 
   it("accepts null at any field regardless of the template's type there (documented gap)", () => {
-    const character = createDefaultCharacter("t", "o");
+    const character = createDefaultCharacter("o");
     expect(validateCharacterShape({ ...character, name: null })).toBeNull();
   });
 
   it("does not flag a genuinely optional field left absent", () => {
-    const character = createDefaultCharacter("t", "o");
+    const character = createDefaultCharacter("o");
     const defenseWithoutOptionalField = omit(
       character.defense as unknown as Record<string, unknown>,
       ["equippedItemId"],

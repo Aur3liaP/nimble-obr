@@ -1,7 +1,7 @@
 {
   "name": "nimble-obr",
   "private": true,
-  "version": "1.1.0",
+  "version": "1.2.0",
   "type": "module",
   "scripts": {
     "dev": "vite",
@@ -11,7 +11,8 @@
     "type-check": "tsc -b --noEmit",
     "test": "vitest run",
     "test:watch": "vitest",
-    "test:coverage": "vitest run --coverage"
+    "test:coverage": "vitest run --coverage",
+    "measure:room-metadata": "node scripts/run-measure-room-metadata.mjs"
   },
   "dependencies": {
     "@owlbear-rodeo/sdk": "^3.1.0",

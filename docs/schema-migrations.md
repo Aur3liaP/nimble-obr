@@ -8,14 +8,22 @@ works and why, for a human reading the codebase.
 
 ## The problem
 
-A character sheet is stored as-is in a single OBR scene item's metadata
-(`NimbleCharacter`, `src/types/character.ts`), with no expiry: it exists for
-as long as the token does, which can be months. The shape of
-`NimbleCharacter` has already changed more than once and will keep changing.
-Before this system existed, nothing recorded which shape a given stored
-record was written against: JavaScript accepts a missing field silently
-until something reads it, so an old record with an outdated shape would only
-fail once the app tried to use the field it lacked.
+A character sheet (`NimbleCharacter`, `src/types/character.ts`) is stored
+as-is, with no expiry — as of schema v6, in the scene-metadata vault
+(`characterStore.ts`), keyed by the character's own `id`; before v6, directly
+under a token's item metadata, where it existed for as long as that token did
+(see CLAUDE.md's "vault-decoupling" notes for why that changed, and the
+`prepareLegacySheetMigration`/`loadCharacterForToken` path in `useOBR.ts` for
+how an old token still on that storage location is migrated the first time
+it's loaded). Either way, the shape of `NimbleCharacter` has already changed
+more than once and will keep changing. Before this system existed, nothing
+recorded which shape a given stored record was written against: JavaScript
+accepts a missing field silently until something reads it, so an old record
+with an outdated shape would only fail once the app tried to use the field it
+lacked. Everything below (`MIGRATIONS`, `migrateCharacter`,
+`validateCharacterShape`) is about the character record's own SHAPE, and
+applies identically regardless of which of the two storage locations it's
+read from.
 
 ## Adding a field to `NimbleCharacter`
 
@@ -60,10 +68,11 @@ already sitting in OBR scene metadata. Three situations coexist right after
 a deploy, until every open tab has reloaded:
 
 - **A client that reloads** picks up the new code. The next time it selects
-  a token, `loadCharacterFromItem` (`useOBR.ts`) reads the stored record,
-  runs it through `migrateCharacter`, and if the caller currently holds
-  `canEdit`, a dedicated effect writes the migrated record back to the
-  item's metadata so the stored `schemaVersion` catches up.
+  a token, `loadCharacterForToken` (`useOBR.ts`) resolves the character
+  (from the vault, or from a legacy token payload — see above), running it
+  through `migrateCharacter` either way, and if the caller currently holds
+  `canEdit`, a dedicated effect writes the migrated record back so the
+  stored `schemaVersion` catches up.
 - **A client that has not reloaded** (an old tab left open) can encounter a
   record that another, already-reloaded client just migrated and wrote back
   at a newer `schemaVersion` than the old tab's build understands. There is
@@ -92,7 +101,7 @@ The only migration that exists today, `MIGRATIONS[0]` in
 (character) =>
   fillMissingFields(
     character,
-    createDefaultCharacter("", "") as unknown as Record<string, unknown>,
+    createDefaultCharacter("") as unknown as Record<string, unknown>,
   ),
 ```
 

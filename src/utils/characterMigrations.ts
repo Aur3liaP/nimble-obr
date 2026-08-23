@@ -445,7 +445,7 @@ const MIGRATIONS: Migration[] = [
   (character) =>
     fillMissingFields(
       character,
-      createDefaultCharacter("", "") as unknown as Record<string, unknown>,
+      createDefaultCharacter("") as unknown as Record<string, unknown>,
     ),
 
   // v1 -> v2: FOUR changes folded into this single step, not one each —
@@ -596,6 +596,34 @@ const MIGRATIONS: Migration[] = [
 
     return { ...character, inventory };
   },
+
+  // v5 -> v6: drops `tokenId`, adds `id` and `kind` — the shape half of the
+  // vault-decoupling change (see `characterVault.ts`'s file header for the
+  // OTHER half: moving a legacy record's storage LOCATION from item
+  // metadata to the scene-metadata vault plus a token-side CharacterLink,
+  // which needs an Item to read `createdUserId` from and isn't something a
+  // pure Migration function can do — this step only fixes the character
+  // record's own shape, wherever it ends up living).
+  //
+  // `id` is generated only if missing (presence-checked with `in`, never by
+  // truthiness — same discipline as fillMissingFields) so re-running this
+  // step never mints a second id for a record that already has one; a
+  // record's id must stay stable for its entire life, since it's the vault
+  // key and the value every CharacterLink.characterId compares against.
+  // `kind` defaults to `"player"` — nothing before this version had an
+  // opinion on it, and every character that existed before "monster" had a
+  // meaning was, definitionally, someone's player character.
+  (character) => {
+    const rest: Record<string, unknown> = { ...character };
+    delete rest.tokenId;
+    return {
+      ...rest,
+      id: "id" in character && typeof character.id === "string" && character.id
+        ? character.id
+        : crypto.randomUUID(),
+      kind: "kind" in character ? character.kind : "player",
+    };
+  },
 ];
 
 /**
@@ -700,7 +728,7 @@ function findShapeMismatch(value: unknown, template: unknown, path: string): str
  * description of the first mismatch found otherwise.
  */
 export function validateCharacterShape(value: unknown): string | null {
-  return findShapeMismatch(value, createDefaultCharacter("", ""), "character");
+  return findShapeMismatch(value, createDefaultCharacter(""), "character");
 }
 
 /**

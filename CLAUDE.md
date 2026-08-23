@@ -32,7 +32,7 @@ Owlbear Rodeo (OBR) extension: a real-time-synced character sheet panel for the 
 ## Architecture
 
 - **No backend.** Persistence is entirely via the OBR SDK:
-  - Character sheet: per-token item metadata, key `com.nimble-obr.nimble/character_sheet` (`METADATA_KEY` in `src/types/character.ts`), written via `OBR.scene.items.updateItems()`.
+  - Character sheet (schema v6+): lives in the scene-metadata vault, one root-level key per character (`characterStore.ts`) — a token only carries a pointer, `CharacterLink` (`LINK_KEY`). `METADATA_KEY` (`com.nimble-obr.nimble/character_sheet`) is now a legacy per-token key, migrated to the vault the first time such a token is read. See "Character vault" below for the full picture.
   - Shared roll log: scene metadata (`ROLL_LOG_KEY = ${METADATA_KEY}/roll_log`), capped at 20 entries.
   - Write-failure detection (`useOBR.ts`'s `performWrite`/`SyncStatus`) covers errors the OBR host reports and total loss of network interface (`navigator.onLine`). It does NOT cover the OBR host's own WebSocket relay to the multiplayer server dropping while the network interface stays up: `updateItems`/`setMetadata` resolve successfully either way, since the extension-host handshake is `window.postMessage` between iframe and parent frame, never the network. This residual gap is undetectable from the extension — see the `"idle"` case in `SyncStatus`'s JSDoc.
 - HTTPS is mandatory even for local dev (OBR loads extensions in an iframe requiring HTTPS). `@vitejs/plugin-basic-ssl` is loaded only when `command === 'serve'` in `vite.config.ts`, never in production builds.
@@ -355,12 +355,36 @@ listed below** — not just the state the change was made for.
     log out of the layout entirely.
   - Closes itself automatically once a roll is made (see "State
     transitions" below).
-- **`DicePanel`, no-token / no-sheet / unsupported-version / invalid-sheet
-  state:**
+- **`DicePanel`, no-token / unsupported-version / invalid-sheet state:**
   - Same behavior: opening it must not hide the inline roll log.
   - A roll's result must be visible **without scrolling** — not merely
     reachable by scrolling, actually on-screen the instant the roll lands.
   - Closes itself automatically once a roll is made.
+- **`DicePanel`/`RollLog`, no-sheet state (NOT VISIBLE — deliberate,
+  different from every other state above):** this screen's one job is
+  "create or recover a sheet" (`NoSheetPanel`) — free-rolling dice and
+  browsing roll history are already reachable from the no-token state one
+  click away (deselect), so this batch removed both from the no-sheet
+  screen rather than fixing their layout there. `RollLog`'s inline render
+  is conditioned on `showNoToken || showUnsupportedVersion ||
+  showInvalidSheet` ONLY (no-sheet excluded) — it fully unmounts here,
+  which is fine for `RollLog` (unlike `DicePanel`, it holds no in-progress
+  state worth preserving; see "Structural constraints" below for why that
+  distinction matters). `DicePanel` is different: it must stay MOUNTED
+  per the single-JSX-tree rule below, so its wrapper `<div>` gets a
+  `hidden` class instead of a `{condition && ...}` around `DicePanel`
+  itself — `display: none` on an ancestor hides it without unmounting the
+  component or losing its `collapsed`/mode/count state. The license
+  notices (`VttNotice`/`LicenseAttribution`, normally carried by inline
+  `RollLog` — see that file's own header) still need to appear on this
+  screen despite `RollLog` being absent here; `NoSheetPanel` renders them
+  directly (imported from `RollLog.tsx`, where they're the single source
+  of that text) in its default (non-recovery-list) view only — not in the
+  recovery list sub-view, which needs its vertical space for the list
+  itself. Do not re-add `RollLog`/visible `DicePanel` to this state to
+  "fix" a layout complaint here again without checking this bullet first —
+  the fix for a no-sheet layout problem involving these two is more likely
+  "does it still need to be here at all" than a flex adjustment.
 - **State transitions:** `DicePanel`'s open/closed state (`collapsed`,
   local `useState` inside the always-mounted component — see "Structural
   constraints" below for why it's always mounted) must never carry over in
@@ -425,6 +449,7 @@ These exist because of bugs already diagnosed and fixed. Changing them reintrodu
 
 - `permissions` (`{ canEdit, isGM, isOwner, isUnclaimed }`) is computed once in `useOBR` and passed explicitly as **props** to every interactive component, deliberately not exposed via React context. Any new component needing it must have it threaded through manually.
 - `updateCharacter` re-checks `canEdit` before every write and no-ops with `console.warn` if the caller lacks rights. This is **not a real security boundary** (OBR has no server-side ACL on metadata); it only guards against accidental stale-UI writes.
+- **As of schema v6 (vault decoupling — see the "Character vault" section below), `canEdit` is a plain application-level convention with no OBR backing whatsoever, not even a theoretical one.** Before v6, the character lived inside a specific item's own metadata, so "who owns this item" was at least a coherent question, even though CLAUDE.md already noted OBR enforces nothing server-side about it. Now the character lives in scene metadata, which isn't owned by anyone in OBR's model at all — any client in the room can write any key there. `ownerId` on `NimbleCharacter` is the entire mechanism; there is no fallback platform concept left to lean on even as a matter of intent. This changes nothing about how the app already behaved (the disclaimer above was already true), but it does mean a future "make this a real security boundary" idea has strictly less to build on than it might appear — there is no partial OBR enforcement to extend, only this one field.
 - Rolling dice is intentionally **not** gated by `canEdit`. A read-only viewer can roll using another character's stats. Only persisting sheet changes is guarded. This is a design decision, not an oversight.
 - Claiming or taking over a sheet is also intentionally **not** gated. Any player can currently take over another player's claimed sheet (deliberate design for a trusted table). If GM-only claiming is ever wanted, add the guard at the call site (`App.tsx`/`CharacterHeader.tsx`), not in `useOBR`.
 
@@ -458,19 +483,23 @@ These exist because of bugs already diagnosed and fixed. Changing them reintrodu
 `types/character.ts`). `migrateCharacter` is the single choke point that
 brings an old record up to date, refuses one from a newer, not-yet-reloaded
 client (`"unsupported"`), and refuses one that's corrupted even after
-migration (`"invalid"`) — `useOBR.ts`'s `loadCharacterFromItem` is the only
-caller. To add a migration: change `NimbleCharacter`, bump
-`CURRENT_SCHEMA_VERSION` by exactly 1, and append one `v(n) -> v(n+1)`
-function to `MIGRATIONS`. Full procedure and the reasoning behind each
-design choice (why `MIGRATIONS` is an ordered array of single-step
-functions, why a versionless record is treated as v0, why there's no
-downward migration, why shape validation is a template walk over
+migration (`"invalid"`) — as of schema v6 it has several callers, not one:
+`useOBR.ts`'s `loadCharacterForToken` (a token still on the legacy
+per-token key), `characterStore.ts`'s `loadCharacter`/`listCharacters`
+(every vault read), and `characterVault.ts`'s `resolveCharacterRead`/
+`prepareLegacySheetMigration` — all funnel through this one function rather
+than each reimplementing its own validation. To add a migration: change
+`NimbleCharacter`, bump `CURRENT_SCHEMA_VERSION` by exactly 1, and append
+one `v(n) -> v(n+1)` function to `MIGRATIONS`. Full procedure and the
+reasoning behind each design choice (why `MIGRATIONS` is an ordered array of
+single-step functions, why a versionless record is treated as v0, why
+there's no downward migration, why shape validation is a template walk over
 `createDefaultCharacter()` rather than a hand-written schema) are in that
-file's header and JSDoc — read it before touching this, don't reinvent an
-ad hoc patch in `loadCharacterFromItem` the way the old `combat` backfill
-used to be. See `docs/schema-migrations.md` for the full picture (the
-procedure to add a field, what deploy-time looks like across clients, and
-why `MIGRATIONS[0]` is a generic fill legitimate only for v0).
+file's header and JSDoc — read it before touching this, don't reinvent an ad
+hoc patch in one of `migrateCharacter`'s callers the way the old `combat`
+backfill used to be. See `docs/schema-migrations.md` for the full picture
+(the procedure to add a field, what deploy-time looks like across clients,
+and why `MIGRATIONS[0]` is a generic fill legitimate only for v0).
 
 `validateCharacterShape`'s template-walk approach is deliberately scoped to
 validating this project's own migration output, not arbitrary external
@@ -481,7 +510,11 @@ import, a copy pasted between scenes), replace it with a real schema
 library (Zod or equivalent) and derive `NimbleCharacter` from the schema
 (`z.infer`) rather than maintaining both by hand — two hand-maintained
 descriptions of the same shape is exactly how `FLAW` (see Formula parser
-below) went undetected.
+below) went undetected. **This condition is no longer hypothetical as of
+schema v6**: `resolveCharacterRead`'s `"rehydrate"` path
+(`characterVault.ts`) is exactly "a sheet entering from outside this app's
+own migration chain" — a token's `CharacterLink.snapshot`, copy-pasted
+between scenes, arriving at a vault that has never validated it before.
 
 - **Schema v2: `Armor` renamed to `Defense`, `CharacterAction.damage` removed,
   `InventoryItem.armorValue` removed, `manualResolution` backfilled — all
@@ -901,6 +934,283 @@ below) went undetected.
     shape distinguishes the two today; if that distinction ever needs to
     be surfaced in the UI, it needs a real signal (e.g. a flag next to
     `manualResolution`), not an inference from prose.
+
+- **Schema v6: `id` and `kind` added, `tokenId` removed — the shape half of
+  the vault-decoupling change.** See the "Character vault" section right
+  below for the full architectural story (why this exists, storage
+  location, the recovery UI); this bullet is scoped to the migration
+  mechanics alone, following this section's own established pattern.
+  - `id: string` (`crypto.randomUUID()`) is the character's new stable
+    identity, independent of any token — it's the vault key and the value
+    every token's `CharacterLink.characterId` points at.
+  - `kind: CharacterKind` (`"player" | "monster"`) defaults to `"player"` —
+    nothing before this version had an opinion on it, and every character
+    that existed before "monster" had a meaning was, definitionally,
+    someone's player character.
+  - `tokenId` is gone. A character no longer knows which token(s) display
+    it — this is also what permanently closes the copy-paste
+    write-targeting bug documented elsewhere in this file (a stored
+    `tokenId` drifting out of sync with the item it actually lived on):
+    the field simply doesn't exist anymore to drift.
+  - **This is the first migration in this chain that ISN'T just a shape
+    transform, and that distinction matters for anyone extending it.**
+    `MIGRATIONS[5]` (`characterMigrations.ts`, pure, no OBR access) only
+    fixes the character record's own SHAPE — generates `id` if missing,
+    defaults `kind`, drops `tokenId` — exactly like every migration before
+    it. It does NOT, and structurally CANNOT, move a record's STORAGE
+    LOCATION (legacy per-token `METADATA_KEY` payload → vault entry +
+    token `CharacterLink`): a pure `Migration` function has no OBR access
+    at all, and the storage move additionally needs `item.createdUserId`
+    (an `ownerId` fallback) that only exists on the real `Item`, never in
+    the stored data. That move is a separate, OBR-orchestrated step —
+    `prepareLegacySheetMigration` (`characterVault.ts`, still pure —
+    computes what to write) plus `useOBR.ts`'s `loadCharacterForToken`/
+    `applyTokenLoadResult` (impure — performs the actual writes). See the
+    "Character vault" section for why that step is the ONE background
+    write in that whole subsystem still routed through `performWrite`
+    instead of fired-and-logged like every other one there.
+
+### Character vault (schema v6 — storage location, not just shape)
+
+Before this batch, a character sheet lived entirely inside its token's own
+item metadata (`METADATA_KEY`) — deleting the token destroyed the sheet, no
+exceptions. As of schema v6, the character record lives in the SCENE
+metadata vault (`characterStore.ts`), keyed by its own `id`; the token only
+carries a pointer (`CharacterLink`, key `LINK_KEY`). A `"player"`-kind
+character now survives its token's deletion and can be recovered onto a
+different (or the same) token later; a `"monster"`-kind one still doesn't,
+deliberately (see below).
+
+- **Room metadata was measured and rejected before scene metadata was
+  chosen.** A realistic, half-filled real character
+  (`worstCaseCharacterFixture.ts`, built from the actual `BASE_SPELLS`/
+  `BASIC_EQUIPMENTS` catalogs and `catalogCopy.ts`, not a hand-typed
+  idealization) weighs 7.44 KB. OBR's room metadata has a 16 KB budget
+  **shared across every extension installed in the room**, not a
+  per-extension allowance — a single non-trivial character would already
+  consume most of that shared ceiling by itself, before counting any other
+  extension's own data or a second character. The measurement tooling
+  (`src/utils/metadataSizing.ts`, `scripts/measure-room-metadata.ts`, and
+  the report they produced) stays in the repo as the record of that
+  decision — see that file's own header — even though nothing in the app
+  actually writes to room metadata. Scene metadata has no such
+  cross-extension sharing concern for this app's purposes, which is why it
+  was chosen instead.
+- **`CharacterLink.snapshot` is a deliberate, transport-only duplicate of
+  the character — this looks like a bug on a first read without this
+  context, so it's stated plainly here.** The vault is the source of truth
+  and is consulted first on every read (`resolveCharacterRead` in
+  `characterVault.ts`); `snapshot` is never read while the vault already
+  has an answer for that `characterId`. Its only job is surviving a
+  copy-paste to a DIFFERENT scene: OBR copies a token's item metadata
+  verbatim on paste, so the pasted token still carries a full copy of the
+  character even though the destination scene's vault has never seen that
+  `characterId`. Without `snapshot`, a token pasted into a new scene would
+  point at nothing. When the vault genuinely has no answer (this exact
+  case), the snapshot is promoted: migrated defensively
+  (`migrateCharacter`, same as any other read) and written into the new
+  scene's vault — transparent to the player, no manipulation required, per
+  the original design goal for this path.
+- **The vault module (`characterStore.ts`) exposes exactly four
+  functions** — `saveCharacter`, `loadCharacter`, `listCharacters`,
+  `deleteCharacter` — and is the SOLE place in the codebase allowed to call
+  `OBR.scene.setMetadata`/`getMetadata` for character data. Every character
+  gets its own root-level scene-metadata key
+  (`com.nimble-obr.nimble/character/<id>`), never one shared object under a
+  single key: `setMetadata` merges at the root-key level, so two players
+  editing two different characters at the same time never race each
+  other's write. A shared single-object key would force a read-modify-write
+  where whichever write lands last silently drops the other. Deletion sets
+  the key to `undefined` in a `setMetadata` patch, never the `delete`
+  operator (which would only remove it from a local object, not from the
+  actual stored metadata). This module is NOT unit tested (this project
+  does not mock the OBR SDK — see the testing conventions above) —
+  deliberately kept as a thin, one-line-per-operation wrapper so the only
+  logic worth testing (migration on read) already is, elsewhere.
+- **Read path: vault first, snapshot only as a fallback, arbitrated by
+  `updatedAt`.** `resolveCharacterRead` (`characterVault.ts`, pure, tested)
+  returns either `"use-vault"` (the normal case — also flags
+  `needsSnapshotRepair` when the vault is newer than what this specific
+  token's own `snapshot`/`updatedAt` last recorded, e.g. it missed a
+  fan-out) or `"rehydrate"` (vault has never seen this `characterId` — the
+  cross-scene-paste case above). A stale snapshot is repaired silently in
+  the background (`maybeRunRepair` in `useOBR.ts`) — never a
+  user-facing error, and never unconditionally on every detection: see the
+  rate-limiting bullet below for why that background write is itself
+  guarded.
+- **Write path: vault save is the source of truth; the `CharacterLink`
+  fan-out to every linked token is separate, debounced, and per
+  character.** `updateCharacter` (`useOBR.ts`) always saves to the vault
+  synchronously with the write it's already tracking via `performWrite`.
+  The fan-out (`fanOutSnapshot`, refreshing every token's `snapshot`/
+  `updatedAt` so a FUTURE copy-paste carries current data) is scheduled
+  separately (`scheduleFanOut`), debounced per `characterId` — not a
+  single shared timer, which would let editing character B within the
+  debounce window cancel character A's still-pending fan-out outright (not
+  merely delay it) — and never lets its own failure become a user-facing
+  error: a token that misses a fan-out just self-heals at its own next
+  read via the repair path above. `fanOutSnapshot` itself fetches a FRESH,
+  confirmed-live list of target token ids immediately before every write,
+  never reusing a previous list: `OBR.scene.items.updateItems` was
+  confirmed directly (not assumed) to silently write NOTHING AT ALL for an
+  ENTIRE batch of ids the moment even one of them no longer resolves to a
+  live item — not a partial write skipping just the dead one. A fan-out to
+  three live tokens and one just-deleted one saves none of the three, not
+  two out of three, if the id list going in is even slightly stale.
+- **Character creation always writes the token's `CharacterLink` BEFORE
+  the vault entry — this ordering is what makes the orphaned-monster
+  cleanup below safe to run at any time.** Both creation paths in this
+  codebase (`useOBR.ts`'s `createSheetForToken`, and the legacy-migration
+  branch of `loadCharacterForToken`) follow it. Because of this order, a
+  character's vault entry can never become visible to ANY client
+  (including this one) before its owning token already points at it —
+  there is no window in which a scene-load sweep could observe "exists in
+  the vault, no token points to it yet" for a character that's still being
+  created rather than genuinely orphaned. If the vault write fails after
+  the link write succeeds, the token is left pointing at a `characterId`
+  the vault doesn't have yet — the very next selection of that token takes
+  the "rehydrate" branch above and writes it in, self-healing with no
+  special-case code needed. Applied uniformly regardless of `kind`, even
+  though today's UI can only create `"player"` characters — the ordering
+  stays correct the day a `"monster"`-creating UI exists.
+- **`kind: "monster"` has no existence independent of a token; `"player"`
+  does.** `cleanupOrphanedMonsters` (`useOBR.ts`) deletes every
+  `"monster"`-kind vault character with no token linking to it — an
+  idempotent sweep run on scene load/ready (every client does, redundantly,
+  harmlessly), NOT a live per-deletion listener: a token deletion event
+  isn't reliably observable from every client (see `items.onChange`'s own
+  long-standing "sheet's token removed mid-session — leave state as-is"
+  comment), so a periodic sweep is the mechanism that actually enforces
+  this, not an event handler reacting to the deletion itself. A
+  `"player"`-kind character is never touched by this — it survives token
+  deletion by design, which is the entire point of the "Retrieve a lost
+  soul" recovery flow below.
+- **Recovery UI (`NoSheetPanel.tsx`): "Create a sheet" always, "Retrieve a
+  lost soul" only when the vault holds a character this viewer is allowed
+  to recover.** `orphanedCharacters` (`useOBR.ts` state) is `"player"`-kind
+  vault characters with no linking token, filtered by ownership
+  (`visibleRecoverableCharacters`/`filterRecoverableCharacters` in
+  `characterVault.ts`, tested): a non-GM player sees only their own
+  (`ownerId` exact match); the GM sees everything, including a character
+  with no valid `ownerId` at all — a direct, deliberate consequence of the
+  exact-match filter (an empty `ownerId` can never match a real player id),
+  not a special case handled separately, which is what keeps a genuinely
+  ownerless record (possible after the legacy migration, if neither the
+  old record nor `item.createdUserId` had an owner) recoverable by the GM
+  rather than permanently invisible to everyone. Refreshed in full the
+  moment the no-sheet screen appears, and kept live two different ways
+  while it's showing: `onMetadataChange` (a vault change anywhere) and
+  `items.onChange`'s own linked-id-set signature check (catches a token
+  being deleted/relinked elsewhere, which touches no vault key at all and
+  so never reaches `onMetadataChange`) — see the hot-path bullet below for
+  why that second path costs nothing when nobody's looking at this screen.
+  Known, accepted residual gap: a PURE token deletion with no accompanying
+  vault write (the common case for a `"player"`-kind token) is covered by
+  the `items.onChange` path specifically, not `onMetadataChange` — item
+  metadata and scene metadata are genuinely separate OBR channels. The
+  recovery list itself: a name filter above 10 entries (`useSearchFilter`,
+  the same hook already shared by Inventory/Spells, not a new one), a
+  height-capped, internally-scrolling list, and a Back button pinned above
+  it rather than below — a trailing Back button was unreachable without
+  scrolling through the whole list first once a real test vault had enough
+  entries. No delete action in this list: a destructive button with no
+  confirmation, no undo, and entries that can be visually indistinguishable
+  (two same-named, same-level characters — a real case, not hypothetical)
+  is deferred to its own batch, ideally alongside the JSON export this
+  project doesn't have yet.
+- **The no-sheet screen deliberately shows neither `DicePanel` nor
+  `RollLog`.** That screen's one job is creating or recovering a sheet;
+  free-rolling dice and browsing roll history are already one click away
+  via the no-token state (just deselect). `DicePanel` still stays MOUNTED
+  there — the single-JSX-tree rule below still applies to it — via a
+  `hidden` class on its wrapper `<div>` in `App.tsx`, never a
+  `{condition && <DicePanel/>}` around the component itself; `RollLog` is
+  simply excluded from that state's render condition instead, which is
+  fine for `RollLog` specifically (it holds no in-progress state worth
+  preserving, unlike `DicePanel`). The required Nimble license notices,
+  normally carried by inline `RollLog`, are exported from that file
+  (`VttNotice`/`LicenseAttribution`) and rendered directly by
+  `NoSheetPanel`'s default view instead, so removing `RollLog` from this
+  screen doesn't also remove the only source of that legally-required text
+  here. See the "Panel layout contract" above for the binding version of
+  this.
+- **Sync-feedback impact: the old "token no longer exists" error is gone,
+  not adapted.** `useOBR.ts`'s `performWrite` used to run a debounced
+  post-write existence check (`scheduleExistenceCheck`, since removed)
+  specifically because `OBR.scene.items.updateItems` can silently no-op a
+  write with no rejection — the whole reason that check existed was that,
+  before v6, a vanished token meant vanished data. That premise is gone for
+  `"player"`-kind characters (the vault survives regardless of any token),
+  and irrelevant for the writes that remain token-targeted (sheet
+  creation, claiming) since those target a token the player is actively
+  looking at, not one this hook needs to double-check survived the round
+  trip. `performWrite` itself (pending/offline/sticky-error/retry
+  mechanics) was deliberately left otherwise intact — kept to the strict
+  minimum forced by the schema change, not restructured, since this layer
+  is what caught the original tokenId copy-paste bug and a wider rewrite
+  risked degrading it.
+- **Two rate-limit incidents were found via real multi-client OBR testing
+  (not reproducible in this project's Vitest suite, which doesn't mock the
+  SDK) and fixed — worth knowing about before touching any of this code
+  again:**
+  1. A continuous-edit control used to commit to OBR once per tick
+     instead of once per gesture: `DraggableBar`'s keyboard-arrow path
+     (OS key-repeat) and `InlineNumberField`'s native spinner/mouse-wheel
+     both fired a real write on every single tick. Tolerable before this
+     batch doubled write volume per save (vault + fan-out); enough on its
+     own to trip OBR's rate limit once it was. Fixed with
+     `useDebouncedCommit` (`src/hooks/useDebouncedCommit.ts`) — its actual
+     timing logic lives in a plain, non-React `DebouncedCommit` class
+     specifically so it's unit-testable with fake timers, since this
+     project has no hook-rendering test utility. `InlineEditField`'s plain
+     text fields are deliberately NOT debounced — per-keystroke commit for
+     prose is an existing, deliberate design choice (see "Formula input
+     fields..." elsewhere in this file for the one other exception to
+     that), unrelated to this fix.
+  2. A stale-snapshot repair, fired unconditionally every time
+     `resolveCharacterRead` detected one, retriggered itself during a
+     sustained burst of edits: the vault kept moving to a newer `updatedAt`
+     faster than a single repair round trip could land, so every
+     subsequent `items.onChange` tick during the burst attempted another
+     repair. Fixed with `maybeRunRepair`'s guard (`useOBR.ts`): at most one
+     repair in flight per token, plus an exponential backoff after a
+     failure (base 3s, doubling, capped at 60s) — both required, neither
+     alone was enough in testing.
+- **Hot-path correctness: `items.onChange` fires on every token move on
+  the table — the single most frequent gesture on a virtual tabletop, not
+  an edge case — and is confirmed (not assumed: it's what makes
+  `items.find(i => i.id === targetId)` work at all) to receive the
+  scene's FULL current item list on every call, not a delta.** Two
+  consequences, both load-bearing for anyone touching this listener again:
+  1. Nothing downstream of this listener may re-fetch what it was already
+     handed. `linkedCharacterIdsFromItems` (pure) computes the "Retrieve a
+     lost soul" list's cheap comparison key directly from the `items`
+     parameter — an earlier version called `fetchLinkedCharacterIds`
+     (its own fresh `getItems`) here instead, asking OBR again, on every
+     single frame of every drag, for the exact list it had just been
+     handed.
+  2. Before v6, resolving the selected token's character from an
+     `items.onChange` event was free: the character WAS the item's own
+     metadata, so a plain position/rotation change never touched the
+     field this hook actually read. After v6, that resolution is an
+     indirection through the vault (a full `getMetadata`, a migration
+     pass, and a new object into `setCharacter` — a full sheet re-render),
+     and NOTHING about that indirection is skipped just because the
+     token's own metadata didn't change the one field that matters. This
+     needs its own dedicated short-circuit now: `selectedTokenLinkRef`
+     records the `characterId`/`updatedAt` last actually processed for the
+     selected token, and the listener compares the incoming item's own
+     `CharacterLink` against it BEFORE calling `loadCharacterForToken` at
+     all. A drag/rotate/etc. never touches `item.metadata[LINK_KEY]`, so
+     the overwhelming majority of events concerning the selected token
+     (everything that isn't a genuine link change) now stop at that
+     comparison.
+
+Out of scope for this batch, deliberately, but the data shape already
+accommodates all of it without another schema bump: a `kind` toggle in the
+UI (and a simplified player-facing view for a monster's sheet), the
+model/instance split (several tokens sharing one statblock), a cleanup
+panel for characters with no token, and JSON export/import.
 
 ### Formula parser (`src/utils/formulaParser.ts`)
 
