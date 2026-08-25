@@ -575,6 +575,18 @@ export interface DiceRollResult {
   formula: string;
   rolls: number[];
   kept: number[];
+  /**
+   * Index into `rolls` of every die eliminated by advantage/disadvantage,
+   * carried through unchanged from {@link formulaParser.RollFormulaResult}.
+   * OPTIONAL: this is roll-LOG metadata (a separate, capped scene-metadata
+   * space — see CLAUDE.md's "Shared roll log" note), not part of
+   * `NimbleCharacter`, so adding it needed no schema bump. An entry
+   * already sitting in scene metadata from before this field existed
+   * simply won't have it; `RollLog` falls back to a value-based
+   * reconstruction for those (see `matchKeptDice.ts`) until they age out
+   * of the 20-entry cap — no migration, nothing to backfill.
+   */
+  droppedIndices?: number[];
   modifier: number;
   total: number;
   isCritical: boolean;
