@@ -789,15 +789,124 @@ describe("rollFormula (pinned rolls via mocked Math.random)", () => {
     expect(result.isFumble).toBe(false);
   });
 
-  it("keeps the top 2 of 3 on a multi-dice advantage roll, crit off the highest", () => {
-    // 2d6 in advantage with one bonus die: kept[0] is the highest of the
-    // pool (not just of the base count), which is the intentional Nimble
-    // primary-die rule documented on rollFormula's isCritical/isFumble.
+  it("keeps 2 of 3 dice on an advantage roll, in original roll order — the pool's highest value isn't automatically the primary die", () => {
+    // 2d6 with one advantage die (3 rolled, 1 eliminated): the lowest (2,
+    // the LAST roll) is the one eliminated, so the two survivors keep
+    // their original left-to-right order: [4, 6] — the 6 stays SECOND,
+    // it doesn't jump to the front just because it's the bigger number.
+    // kept[0] (the primary die, here the first-rolled 4) is what decides
+    // the crit, so this does NOT crit even though a 6 was rolled and
+    // survived — a sort-then-slice implementation would wrongly put the
+    // 6 first and report a crit here.
     const char = makeCharacter();
-    mockRolls([6, 2, 4], 6);
+    mockRolls([4, 6, 2], 6);
     const result = rollFormula("2d6", char, "advantage", 1);
-    expect(result.kept).toEqual([6, 4]);
-    expect(result.isCritical).toBe(true);
+    expect(result.kept).toEqual([4, 6]);
+    expect(result.isCritical).toBe(false);
+  });
+
+  it("keeps 2 of 3 dice on a disadvantage roll, in original roll order — the pool's lowest value isn't automatically the primary die", () => {
+    // 2d6 with one disadvantage die (3 rolled, 1 eliminated): the highest
+    // (6, the middle roll) is eliminated, so the survivors keep their
+    // original order: [5, 1] — the 1 stays SECOND. kept[0] is the
+    // first-rolled 5, so this does NOT fumble even though a 1 was rolled
+    // and survived — this is the exact shape of the reported bug (a
+    // formula like "2d12+4" on disadvantage showing a fumble icon because
+    // the lowest-valued survivor was read as primary instead of the
+    // leftmost one).
+    const char = makeCharacter();
+    mockRolls([5, 6, 1], 6);
+    const result = rollFormula("2d6", char, "disadvantage", 1);
+    expect(result.kept).toEqual([5, 1]);
+    expect(result.isFumble).toBe(false);
+  });
+
+  it("disadvantage with a tied pair: eliminates the EARLIEST-rolled die of the tie, primary die is the survivor — [6, 1, 6] keeps [1, 6], primary is the 1, a fumble", () => {
+    // 2d6 with one disadvantage die (3 rolled, 1 eliminated): the highest
+    // value (6) appears twice, at index 0 and index 2. The tie-break
+    // eliminates the EARLIER one (index 0), so the survivors are indices
+    // 1 and 2, in that order: [1, 6]. The primary die is kept[0] = 1, a
+    // fumble — not the second 6, even though it's numerically the same
+    // value as the eliminated die.
+    const char = makeCharacter();
+    mockRolls([6, 1, 6], 6);
+    const result = rollFormula("2d6", char, "disadvantage", 1);
+    expect(result.kept).toEqual([1, 6]);
+    expect(result.isFumble).toBe(true);
+    expect(result.isCritical).toBe(false);
+  });
+
+  it("advantage with a tied pair: eliminates the EARLIEST-rolled die of the tie, primary die is the survivor — [1, 6, 1] keeps [6, 1], no fumble", () => {
+    // 2d6 with one advantage die (3 rolled, 1 eliminated): the lowest
+    // value (1) appears twice, at index 0 and index 2. The tie-break
+    // eliminates the earlier one (index 0), leaving indices 1 and 2, in
+    // that order: [6, 1]. The primary die is kept[0] = 6 — not a fumble,
+    // even though the surviving pool still contains a 1.
+    const char = makeCharacter();
+    mockRolls([1, 6, 1], 6);
+    const result = rollFormula("2d6", char, "advantage", 1);
+    expect(result.kept).toEqual([6, 1]);
+    expect(result.isFumble).toBe(false);
+  });
+
+  it("disadvantage 2 on 2d6 with three of the four rolled dice tied at the max: both eliminations start from the left", () => {
+    // 2d6 with disadvantage 2 (4 rolled, 2 eliminated). Three of the four
+    // rolls tie at the max value (6), at indices 0, 1, and 3; index 2 is
+    // a 2. Eliminating the highest, leftmost-on-a-tie, twice in a row:
+    // first pass sees [6, 6, 2, 6] and drops index 0 (the first of the
+    // three 6s); second pass sees the remaining [6, 2, 6] and drops
+    // index 0 again (the next-leftmost 6). What's left is [2, 6], in
+    // original relative order — the LAST rolled 6 is the one that
+    // survives, not either of the first two.
+    const char = makeCharacter();
+    mockRolls([6, 6, 2, 6], 6);
+    const result = rollFormula("2d6", char, "disadvantage", 2);
+    expect(result.kept).toEqual([2, 6]);
+  });
+
+  describe("mutation guard: tie-break must eliminate the leftmost extreme, not the rightmost", () => {
+    it("regression: reversing the tie-break direction changes which die survives a disadvantage tie", () => {
+      // Same setup as the disadvantage tie-break test above. Both tied
+      // dice are 6s, so a reversed (rightmost-on-a-tie) tie-break can't
+      // be caught by looking at a VALUE alone — it shows up as a
+      // different kept SEQUENCE instead: correct (leftmost eliminated)
+      // keeps indices 1,2 → [1, 6]; reversed (rightmost eliminated) keeps
+      // indices 0,1 → [6, 1]. Same two numbers, different order, and a
+      // different primary die (1 vs 6) — this is exactly why the earlier
+      // test asserts the full ordered array, not just a value set.
+      const char = makeCharacter();
+      mockRolls([6, 1, 6], 6);
+      const result = rollFormula("2d6", char, "disadvantage", 1);
+      expect(result.kept).toEqual([1, 6]);
+      expect(result.kept).not.toEqual([6, 1]);
+    });
+  });
+
+  describe("droppedIndices", () => {
+    it("names the eliminated die by INDEX, not by value — [5, 5, 3] disadvantage 1 drops index 0, even though index 1 has the identical value", () => {
+      // This is the case matchKeptDice's value-based reconstruction gets
+      // wrong (see its own file header): [5, 5, 3] and [5, 3] don't say
+      // on their own WHICH 5 survived. droppedIndices removes that
+      // ambiguity by naming the eliminated slot directly.
+      const char = makeCharacter();
+      mockRolls([5, 5, 3], 6);
+      const result = rollFormula("2d6", char, "disadvantage", 1);
+      expect(result.kept).toEqual([5, 3]);
+      expect(result.droppedIndices).toEqual([0]);
+    });
+
+    it("matches the real bug report: [6, 1, 6] disadvantage 1 drops index 0", () => {
+      const char = makeCharacter();
+      mockRolls([6, 1, 6], 6);
+      const result = rollFormula("2d6", char, "disadvantage", 1);
+      expect(result.droppedIndices).toEqual([0]);
+    });
+
+    it("standard mode (nothing eliminated) reports an empty array", () => {
+      const char = makeCharacter();
+      const result = rollFormula("2d6", char, "standard");
+      expect(result.droppedIndices).toEqual([]);
+    });
   });
 });
 

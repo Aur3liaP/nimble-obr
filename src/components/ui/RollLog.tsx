@@ -38,6 +38,7 @@
  */
 import { useState, type ReactNode } from "react";
 import type { DiceRollResult } from "../../types/character";
+import { resolveKeptFlags } from "../../utils/matchKeptDice";
 import { formatModifier } from "../../utils/formatModifier";
 
 /**
@@ -360,15 +361,15 @@ function RollEntry({
       <div className="flex items-center gap-1.5 mt-0.5 flex-wrap">
         {roll.rolls.length > roll.kept.length ? (
           (() => {
-            const keptCopy = [...roll.kept];
-            const isKept = roll.rolls.map((v) => {
-              const idx = keptCopy.indexOf(v);
-              if (idx !== -1) {
-                keptCopy.splice(idx, 1);
-                return true;
-              }
-              return false;
-            });
+            // See resolveKeptFlags's own doc: exact when droppedIndices
+            // is present (the normal case), approximate fallback
+            // otherwise (a pre-existing log entry from before that field
+            // existed).
+            const isKept = resolveKeptFlags(
+              roll.rolls,
+              roll.kept,
+              roll.droppedIndices,
+            );
             return (
               <span className="font-mono text-[10px]">
                 [

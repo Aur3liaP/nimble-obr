@@ -16,22 +16,18 @@
  * - {@link InlineNumberField} — numeric-only shorthand with size variants,
  *   used for HP, Level, Speed, and other prominent numeric displays.
  *
- * {@link InlineNumberField}'s commit to OBR is debounced (see
- * `useDebouncedCommit`), unlike every other field in this file: a native
- * `<input type="number">`'s spinner buttons and mouse-wheel scrolling both
- * fire `change` events far faster than a human types, and committing every
- * one of them used to send one OBR write per tick. Tolerable before the
- * vault-decoupling batch doubled write volume per save (vault + snapshot
- * fan-out); enough on its own to trip OBR's rate limit once it was.
- * `InlineEditField`'s plain text fields are NOT debounced, on purpose — a
- * human typing prose is naturally paced well under any rate limit, and
- * every keystroke committing immediately is deliberate design (see
- * CLAUDE.md's "Formula input fields keep local state..." bullet for the
- * one other deliberate exception, unrelated to this one).
+ * {@link InlineNumberField} commits to OBR explicitly, on blur or Enter,
+ * via {@link useEditableNumberField} — see that hook's file header for the
+ * full story (the bug it fixes, why `useDebouncedCommit` was retired from
+ * this component specifically, and the deliberate last-commit-wins resync
+ * policy). `InlineEditField`'s plain text fields are unrelated and commit
+ * on every keystroke, unchanged — a human typing prose is naturally paced
+ * well under any rate limit, and immediate commit is deliberate design
+ * there (see CLAUDE.md's "Formula input fields keep local state..." bullet
+ * for the one other deliberate exception, unrelated to this one).
  */
 
-import { useEffect, useRef, useState } from "react";
-import { useDebouncedCommit } from "../../../hooks/useDebouncedCommit";
+import { useEditableNumberField } from "../../../hooks/useEditableNumberField";
 
 /** Native input type supported by {@link InlineEditField}. */
 type FieldType = "text" | "number";
@@ -211,23 +207,21 @@ export function InlineNumberField({
     : undefined;
   const staticColorCls = isDynamicColor ? "" : (colorClass as string);
 
-  // Local optimistic display, resynced from `value` whenever this field
-  // isn't the one currently mid-edit — same "don't let a remote update
-  // yank the field out from under an in-progress local change" reasoning
-  // as `useDraggableValue`. Needed here because the actual OBR commit
-  // (`onChange`) is now debounced (see the file header): without a local
-  // display value, the field would show stale numbers between ticks while
-  // waiting for the commit to fire.
-  const [displayValue, setDisplayValue] = useState(value);
-  const isEditingRef = useRef(false);
-  const { schedule, flush } = useDebouncedCommit<number>((v) => {
-    isEditingRef.current = false;
-    onChange?.(v);
-  });
+  const { displayValue, handleFocus, handleChange, handleBlur, handleKeyDown } =
+    useEditableNumberField(value, (v) => onChange?.(v), min, max);
 
-  useEffect(() => {
-    if (!isEditingRef.current) setDisplayValue(value);
-  }, [value]);
+  // Fixed width in `ch` (character units), sized to the largest number
+  // this field can realistically show (`max`, falling back to the live
+  // `value` when there's no upper bound, e.g. Level/Speed/hp.max itself).
+  // Replaces relying on the input's browser-default width (wide, and
+  // wildly out of proportion to a 1-4 digit stat) or a `truncate` class
+  // (which would clip a number — never acceptable, per this file's own
+  // instructions: a truncated digit reads as a different, wrong number,
+  // unlike truncated prose which just reads as cut off). `+1` leaves room
+  // for the "editing" state briefly showing one extra digit before a
+  // commit clamps it back down.
+  const widthSource = Math.max(Math.abs(value), Math.abs(max ?? 0));
+  const widthCh = Math.max(2, String(widthSource).length + 1);
 
   return (
     <div className={`flex flex-col gap-0.5 ${className}`}>
@@ -238,28 +232,29 @@ export function InlineNumberField({
       )}
       {canEdit ? (
         <input
-          type="number"
+          type="text"
+          inputMode="numeric"
           value={displayValue}
-          min={min}
-          max={max}
-          onChange={(e) => {
-            const v = parseInt(e.target.value);
-            if (isNaN(v)) return;
-            isEditingRef.current = true;
-            setDisplayValue(v);
-            schedule(v);
-          }}
-          onBlur={flush}
+          onFocus={handleFocus}
+          onChange={(e) => handleChange(e.target.value)}
+          onBlur={handleBlur}
+          onKeyDown={handleKeyDown}
           className={`
-            ${INPUT_UNDERLINE} font-bold
+            ${INPUT_UNDERLINE} font-bold tabular-nums
             ${sizeCls} ${alignCls} ${staticColorCls}
           `}
-          style={resolvedColor ? { color: resolvedColor } : undefined}
+          style={{
+            width: `${widthCh}ch`,
+            ...(resolvedColor ? { color: resolvedColor } : undefined),
+          }}
         />
       ) : (
         <span
-          className={`font-bold tabular-nums ${sizeCls} ${alignCls} ${staticColorCls}`}
-          style={resolvedColor ? { color: resolvedColor } : undefined}
+          className={`inline-block font-bold tabular-nums ${sizeCls} ${alignCls} ${staticColorCls}`}
+          style={{
+            width: `${widthCh}ch`,
+            ...(resolvedColor ? { color: resolvedColor } : undefined),
+          }}
         >
           {value}
         </span>

@@ -1076,22 +1076,49 @@ function positionalDieFaceSize(sidesToken: string): number {
 }
 
 /**
- * Index of the (first, on a tie) lowest value in `values`. Shared by
- * {@link rollPositionalDice} (drop the lowest of 3 rolled dice) and
- * {@link positionalDiceAverage}'s exact enumeration, so the tie-break rule
- * — drop the leftmost among equal lowest values — can't drift between the
- * two. Strict `<` (not `<=`) is what makes this "leftmost on a tie": `idx`
- * only moves to a later index when it's a strictly smaller value.
+ * Shared "leftmost among ties" extremum scan behind both
+ * {@link indexOfLowestValue} and {@link indexOfHighestValue} — one
+ * implementation so their tie-break rule can't drift apart into two
+ * subtly different conventions (see CLAUDE.md's note on hand-copied logic
+ * drifting apart). `idx` only moves to a later index when `values[i]` is
+ * STRICTLY more extreme than the current candidate (never on a tie), which
+ * is exactly what makes an equal value resolve to the earlier position.
+ */
+function indexOfExtremeValue(
+  values: number[],
+  isMoreExtreme: (candidate: number, current: number) => boolean,
+): number {
+  let idx = 0;
+  for (let i = 1; i < values.length; i++) {
+    if (isMoreExtreme(values[i], values[idx])) idx = i;
+  }
+  return idx;
+}
+
+/**
+ * Index of the (first, on a tie) lowest value in `values`. Used to pick
+ * which die to drop for advantage (drop the worst = lowest) and by
+ * {@link rollPositionalDice}/{@link positionalDiceAverage} (drop the
+ * lowest of 3 rolled dice for the "a" advantage variant).
  *
  * @example indexOfLowestValue([4, 2, 5]) // → 1 (drops the 2)
  * @example indexOfLowestValue([3, 3, 6]) // → 0 (drops the FIRST 3, not the second)
  */
 function indexOfLowestValue(values: number[]): number {
-  let idx = 0;
-  for (let i = 1; i < values.length; i++) {
-    if (values[i] < values[idx]) idx = i;
-  }
-  return idx;
+  return indexOfExtremeValue(values, (a, b) => a < b);
+}
+
+/**
+ * Index of the (first, on a tie) highest value in `values` — mirror of
+ * {@link indexOfLowestValue}, sharing its tie-break rule via
+ * {@link indexOfExtremeValue}. Used to pick which die to drop for
+ * disadvantage (drop the worst = highest).
+ *
+ * @example indexOfHighestValue([4, 6, 2]) // → 1 (drops the 6)
+ * @example indexOfHighestValue([6, 3, 6]) // → 0 (drops the FIRST 6, not the second)
+ */
+function indexOfHighestValue(values: number[]): number {
+  return indexOfExtremeValue(values, (a, b) => a > b);
 }
 
 /**
@@ -1577,10 +1604,29 @@ export function rollDice(count: number, sides: number): number[] {
  * Fully resolves and rolls a formula for a character, including
  * advantage/disadvantage handling and critical/fumble detection.
  *
- * Advantage adds `extraDice` additional dice and keeps the highest
- * `count` results; disadvantage keeps the lowest. A roll is critical if
- * the first kept die shows the maximum face value, and a fumble if it
- * shows 1.
+ * Advantage/disadvantage works on the WHOLE dice pool, not on a single
+ * designated die: `extraDice` more dice of the same size are rolled and
+ * appended to whatever the base formula already called for, then that many
+ * dice are eliminated from the combined pool, one at a time — the current
+ * worst die (lowest on advantage, highest on disadvantage) each time,
+ * recomputed against whatever's still left after the previous elimination.
+ * Eliminating one at a time (rather than a single sort-and-slice over the
+ * whole pool) is what makes the tie-break rule below hold up correctly
+ * when more than one die is eliminated. Whichever dice survive keep their
+ * original left-to-right roll order in `kept` — they are never re-sorted
+ * by value.
+ *
+ * Tie-break: when two or more remaining dice are equal at the extreme
+ * being eliminated, the EARLIEST-rolled one of them goes, not the later
+ * one. Counter-intuitive consequence worth knowing, not a bug: the extra
+ * advantage/disadvantage dice are appended after the base dice, so a tie
+ * between a base die and an extra die always eliminates the base die
+ * first — the extra die "wins" the tie and survives.
+ *
+ * The PRIMARY die is `kept[0]`, the leftmost surviving die — and it alone
+ * decides both outcomes: the roll is a critical hit if it shows the
+ * maximum face, and a fumble if it shows a 1. The other kept dice (when
+ * `count` > 1) never affect either check, no matter their own values.
  *
  * @param formula - Raw formula, e.g. "2d6+STR".
  * @param char - Character providing variable values.
@@ -1589,12 +1635,13 @@ export function rollDice(count: number, sides: number): number[] {
  * Ignored (forced to 0) when `mode` is "standard", regardless of sign or
  * value, since `mode` is the sole source of truth for how many dice are
  * rolled and kept.
- * @returns Full breakdown: dice notation, all rolls, kept rolls, modifier,
- * total, and critical/fumble flags. If the formula has no dice (a flat
- * modifier), `rolls`/`kept` are empty and `total` equals the modifier. If
- * the formula failed to parse or violated a safety limit, `error` carries
- * the message and every numeric field is zeroed rather than clamped —
- * the caller must not treat that as "rolled a 0".
+ * @returns Full breakdown: dice notation, all rolls, kept rolls (original
+ * roll order preserved — see above), modifier, total, and critical/fumble
+ * flags read off the primary die (`kept[0]`). If the formula has no dice
+ * (a flat modifier), `rolls`/`kept` are empty and `total` equals the
+ * modifier. If the formula failed to parse or violated a safety limit,
+ * `error` carries the message and every numeric field is zeroed rather
+ * than clamped — the caller must not treat that as "rolled a 0".
  *
  * @remarks `isCritical` and `isFumble` can never both be true today: that
  * would require `kept[0]` to equal both `sides` and `1`, i.e. a 1-sided
@@ -1617,7 +1664,27 @@ export function rollFormula(
 export interface RollFormulaResult {
   diceNotation: string;
   rolls: number[];
+  /**
+   * The dice that survived advantage/disadvantage elimination (or, in
+   * standard mode, all of `rolls`), in their ORIGINAL roll order — never
+   * re-sorted by value. `kept[0]` is the primary die: the leftmost
+   * survivor, and the one `isCritical`/`isFumble` read. See
+   * {@link rollFormula}'s own doc for the full elimination/tie-break rule
+   * this ordering comes from.
+   */
   kept: number[];
+  /**
+   * Index into `rolls` of every die eliminated by advantage/disadvantage
+   * (empty for a standard roll, or a flat/positional-no-advantage roll
+   * that never eliminates anything). Elimination order, not necessarily
+   * ascending. Exists specifically so a display like `RollLog` can show
+   * exactly which physical die was dropped WITHOUT re-deriving it from
+   * `rolls`/`kept` by value — a value-based re-derivation can't
+   * distinguish two equal-valued dice when only one of them was actually
+   * eliminated (see `matchKeptDice.ts`'s header, kept as a fallback for
+   * older log entries that predate this field).
+   */
+  droppedIndices: number[];
   modifier: number;
   total: number;
   isCritical: boolean;
@@ -1684,6 +1751,7 @@ export function rollFormulaWithContext(
         diceNotation: "",
         rolls: [],
         kept: [],
+        droppedIndices: [],
         modifier,
         total: modifier,
         isCritical: false,
@@ -1702,6 +1770,7 @@ export function rollFormulaWithContext(
       diceNotation: "",
       rolls: [],
       kept: [],
+      droppedIndices: [],
       modifier: 0,
       total: 0,
       isCritical: false,
@@ -1721,23 +1790,42 @@ export function rollFormulaWithContext(
   const totalCount = count + extraCount;
   const rolls = rollDice(totalCount, sides);
 
-  let kept: number[];
-  if (mode === "advantage") {
-    kept = [...rolls].sort((a, b) => b - a).slice(0, count);
-  } else if (mode === "disadvantage") {
-    kept = [...rolls].sort((a, b) => a - b).slice(0, count);
-  } else {
-    kept = rolls;
+  // Eliminate `extraCount` dice from the pool, ONE AT A TIME, recomputing
+  // the drop position against whatever's still left each time — see
+  // rollFormula's own doc for why this (rather than a single sort+slice)
+  // is required for the tie-break rule to hold on a second-or-later
+  // elimination, and why it leaves the survivors in their original
+  // left-to-right roll order (a splice never reorders what it doesn't
+  // remove). `extraCount` is 0 outside advantage/disadvantage, so the loop
+  // is a no-op and `kept` is just `rolls` unchanged in standard mode.
+  //
+  // `keptOriginalIndices` is spliced in lockstep with `kept` so that, at
+  // each step, `keptOriginalIndices[pos]` still names which slot of the
+  // ORIGINAL `rolls` array a given surviving value came from — needed to
+  // record `droppedIndices` by index rather than by value. A display
+  // (RollLog) that instead tried to re-derive "which die was dropped" by
+  // matching `rolls`/`kept` VALUES can't tell apart two equal-valued dice
+  // when only one of them was actually eliminated — see
+  // `matchKeptDice.ts`'s header for that exact bug.
+  const kept = [...rolls];
+  const keptOriginalIndices = rolls.map((_, i) => i);
+  const droppedIndices: number[] = [];
+  const dropIndexOf =
+    mode === "disadvantage" ? indexOfHighestValue : indexOfLowestValue;
+  for (let i = 0; i < extraCount; i++) {
+    const pos = dropIndexOf(kept);
+    droppedIndices.push(keptOriginalIndices[pos]);
+    kept.splice(pos, 1);
+    keptOriginalIndices.splice(pos, 1);
   }
 
   const diceSum = kept.reduce((a, b) => a + b, 0);
   const total = diceSum + modifier;
 
-  // `kept` is sorted by mode: descending on advantage, ascending on
-  // disadvantage, so `kept[0]` is the highest die on advantage and the
-  // lowest on disadvantage. This is intentional — in Nimble, disadvantage
-  // discards the highest roll, so the primary kept die is the low one, and
-  // crit/fumble detection must read off that same die.
+  // The primary die is kept[0] — the leftmost surviving die, in original
+  // roll order, per rollFormula's own doc above. It alone decides crit
+  // and fumble; the other kept dice (when count > 1) are irrelevant to
+  // both checks.
   const isCritical = kept[0] === sides;
   const isFumble = kept[0] === 1;
 
@@ -1745,6 +1833,7 @@ export function rollFormulaWithContext(
     diceNotation,
     rolls,
     kept,
+    droppedIndices,
     modifier,
     total,
     isCritical,
@@ -1779,8 +1868,9 @@ function rollPositionalDice(
 ): RollFormulaResult {
   const { sides, advantage } = spec;
   const rolls = rollDice(advantage ? 3 : 2, sides);
+  const droppedIndices = advantage ? [indexOfLowestValue(rolls)] : [];
   const kept = advantage
-    ? rolls.filter((_, i) => i !== indexOfLowestValue(rolls))
+    ? rolls.filter((_, i) => !droppedIndices.includes(i))
     : rolls;
   const total = readPositionalValue(kept as [number, number]) + modifier;
 
@@ -1788,6 +1878,7 @@ function rollPositionalDice(
     diceNotation,
     rolls,
     kept,
+    droppedIndices,
     modifier,
     total,
     isCritical: false,
