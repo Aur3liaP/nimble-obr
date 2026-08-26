@@ -54,6 +54,15 @@ export interface Stats {
   int: number;
   wil: number;
 }
+/**
+ * Per-stat save advantage/disadvantage (Nimble Core Rules 2nd printing,
+ * p.9: every hero has exactly one advantaged save and one disadvantaged
+ * save, both determined by class). Read correctly by `StatBox`'s
+ * indicator and SAVE-roll mode, but has NO write path anywhere in this
+ * codebase's UI — every character is stuck at `"none"` for all four stats.
+ * Not the same concept as {@link NimbleCharacter.flawStat} — see that
+ * field's own doc for the distinction.
+ */
 export interface SaveMods {
   str: SaveAdvantage;
   dex: SaveAdvantage;

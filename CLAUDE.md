@@ -1412,6 +1412,15 @@ Reverting one reintroduces the bug.
   documented variable actually substitutes. `FLAW` was documented in the
   README and computed in `buildContext` but never wired up, and nothing caught
   it. Any field added to the context must be substituted or that test fails.
+  **Current status, so a future session doesn't reread this as a still-open
+  bug:** `FLAW` is now wired, covered by this reflexive test, consumed by
+  zero entries in `spells.ts`/`equipment.ts`, and usable in a GM's own
+  custom formula. Separately, `SaveMods` and `initiativeAdvantage` are both
+  correctly typed and correctly read (`StatBox`'s advantage indicator/SAVE
+  button, `CombatTab.confirmInitiativeRoll`) but have no write path
+  anywhere in the UI, so both stay frozen at `"none"` for every character —
+  the same FLAW-shaped gap, one type-check/lint/tests can't catch here
+  either, since "always none" is itself a valid, correctly-typed state.
   - `VARIABLE_TABLE` and `MATH_FUNCTIONS` are the logic, not a description of it.
   `substituteVariables` and `Parser.parsePrimary` loop over these tables, and
   `listFormulaVariables()` / `listFormulaFunctions()` reflect over the same
