@@ -43,6 +43,7 @@ import {
   MAX_STAT,
   MIN_SKILL,
   MAX_SKILL,
+  MAX_KEY_STATS,
   createDefaultCharacter,
   createDefaultMonster,
   type NimbleCharacter,
@@ -1741,13 +1742,15 @@ export function useOBR(): UseOBRReturn {
    * briefly wasn't during a re-render).
    *
    * Also clamps `level` to `[1, MAX_LEVEL]`, `stats` to `[MIN_STAT, MAX_STAT]`,
-   * and `skills` to `[MIN_SKILL, MAX_SKILL]` when present in `updates` — an
+   * `skills` to `[MIN_SKILL, MAX_SKILL]`, and `keyStats` to at most
+   * {@link MAX_KEY_STATS} entries, when present in `updates` — an
    * unbounded level can push a legitimate dynamic-dice spell formula
    * (`incrementdice`/`stepdice`) past formulaParser's dice safety limits,
-   * turning it into one that always errors out, and stats/skills have their
-   * own rulebook-defined ranges (see those constants' JSDoc). Clamped here,
-   * at the single write choke point, rather than only as an input hint,
-   * since an HTML `max` attribute doesn't stop a typed value from being
+   * turning it into one that always errors out, and stats/skills/keyStats
+   * have their own rulebook-defined ranges (see those constants' JSDoc).
+   * Clamped here, at the single write choke point, rather than only as an
+   * input hint, since an HTML `max` attribute (or a UI-level cap on the
+   * `StatBox` triangle toggle) doesn't stop a hand-crafted value from being
    * committed.
    *
    * @param updates - Partial character fields to merge into the current state.
@@ -1788,6 +1791,9 @@ export function useOBR(): UseOBRReturn {
         MIN_SKILL,
         MAX_SKILL,
       );
+    }
+    if (clampedUpdates.keyStats !== undefined) {
+      clampedUpdates.keyStats = clampedUpdates.keyStats.slice(-MAX_KEY_STATS);
     }
 
     return performWrite({

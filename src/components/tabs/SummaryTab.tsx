@@ -12,6 +12,7 @@ import {
   MAX_LEVEL,
   MIN_SKILL,
   MAX_SKILL,
+  MAX_KEY_STATS,
   type NimbleCharacter,
   type DiceRollRequest,
   type RollMode,
@@ -122,9 +123,16 @@ export function SummaryTab({
   } = useDraggableValue(character.hp.current, (v) => setHP("current", v));
 
   /**
-   * Toggles a stat's key/flaw status, ensuring a stat can't be both at once
-   * and that setting a new key/flaw clears it from whichever stat previously
-   * held that status.
+   * Toggles a stat's key/flaw status, ensuring a stat can't be both a key
+   * stat and the flaw stat at once, and that marking a new flaw clears it
+   * from `keyStats` if it was there.
+   *
+   * `keyStats` holds up to {@link MAX_KEY_STATS} stats (Nimble's two KEY
+   * attributes — see `NimbleCharacter.keyStats`'s doc): toggling a stat
+   * that's already in the array removes it; toggling one that isn't adds
+   * it, evicting the OLDEST selected entry first if that would exceed
+   * `MAX_KEY_STATS` (`.slice(-MAX_KEY_STATS)` after appending) — the same
+   * cap `updateCharacter` in `useOBR.ts` enforces again, defense in depth.
    *
    * @param key - The stat being toggled.
    * @param newStatus - The status to apply ("key", "flaw", or "none" to clear).
@@ -133,19 +141,21 @@ export function SummaryTab({
     key: keyof Stats,
     newStatus: "key" | "flaw" | "none",
   ) => {
-    let nextKey = character.keyStat;
+    let nextKeyStats = character.keyStats;
     let nextFlaw = character.flawStat;
     if (newStatus === "key") {
-      nextKey = key;
+      if (!nextKeyStats.includes(key)) {
+        nextKeyStats = [...nextKeyStats, key].slice(-MAX_KEY_STATS);
+      }
       if (nextFlaw === key) nextFlaw = null;
     } else if (newStatus === "flaw") {
       nextFlaw = key;
-      if (nextKey === key) nextKey = null;
+      nextKeyStats = nextKeyStats.filter((k) => k !== key);
     } else {
-      if (nextKey === key) nextKey = null;
+      nextKeyStats = nextKeyStats.filter((k) => k !== key);
       if (nextFlaw === key) nextFlaw = null;
     }
-    onUpdate({ keyStat: nextKey, flawStat: nextFlaw });
+    onUpdate({ keyStats: nextKeyStats, flawStat: nextFlaw });
   };
 
   /**
@@ -433,7 +443,7 @@ export function SummaryTab({
         <StatGrid
           stats={character.stats}
           saveMods={character.saveMods}
-          keyStat={character.keyStat}
+          keyStats={character.keyStats}
           flawStat={character.flawStat}
           canEdit={canEdit}
           onStatChange={(key, val) =>

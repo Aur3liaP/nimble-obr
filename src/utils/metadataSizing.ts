@@ -62,7 +62,7 @@ type GroupSpec =
  */
 const GROUP_SPECS: GroupSpec[] = [
   { group: "identity", kind: "keys", keys: ["name", "ancestry", "class", "level", "size", "speed"] },
-  { group: "stats", kind: "keys", keys: ["stats", "keyStat", "flawStat", "saveMods"] },
+  { group: "stats", kind: "keys", keys: ["stats", "keyStats", "flawStat", "saveMods"] },
   { group: "skills", kind: "keys", keys: ["skills"] },
   {
     group: "vitalsAndCombat",
@@ -220,7 +220,7 @@ export function compareSkillsStorage(character: NimbleCharacter): SkillsStorageC
 const ALL_CHARACTER_FIELD_NAMES = [
   "name", "ancestry", "class", "level", "size", "speed",
   "hp", "wounds", "maxWounds", "mana", "maxMana", "hitDice",
-  "stats", "keyStat", "flawStat", "saveMods", "skills",
+  "stats", "keyStats", "flawStat", "saveMods", "skills",
   "defense", "initiativeBonus", "initiativeAdvantage", "combat",
   "languages", "abilities", "notes", "battleNotes", "spellNotes", "inventoryNotes",
   "actions", "inventory", "inventorySlots", "gold", "silver",
