@@ -339,7 +339,26 @@ export interface NimbleCharacter extends CharacterRecordBase {
   hitDice: HitDice;
 
   stats: Stats;
-  keyStat: keyof Stats | null;
+  /**
+   * Up to {@link MAX_KEY_STATS} stats marked as this character's KEY —
+   * Nimble Core Rules 2nd printing, p.55 (Glossary, "KEY"): a class's two
+   * most important stats. Only the HIGHEST value among the selected
+   * entries is ever used (see `buildContext` in `formulaParser.ts`) — an
+   * array of up to 2 candidate stats, not a value to add together.
+   * Deliberately never stores the resolved max itself: stats change on
+   * level-up, and a stored max would silently go stale the moment the
+   * currently-lower one overtakes it.
+   */
+  keyStats: (keyof Stats)[];
+  /**
+   * A single stat this app calls "FLAW" — not book terminology, and not
+   * the same concept as {@link SaveMods}' per-stat save advantage/
+   * disadvantage. `flawStat` feeds the `FLAW` formula variable (a plain
+   * numeric substitution, see `buildContext`); it has nothing to do with
+   * which save is rolled with advantage/disadvantage. Two different
+   * concepts that happen to sit next to each other in the UI (the same
+   * triangle-toggle row as `keyStats`) — do not merge them.
+   */
   flawStat: keyof Stats | null;
   saveMods: SaveMods;
   skills: Skills;
@@ -520,7 +539,7 @@ export const METADATA_KEY = "com.nimble-obr.nimble/character_sheet";
  * needs transforming to match. See that file's header for the full
  * procedure.
  */
-export const CURRENT_SCHEMA_VERSION = 6;
+export const CURRENT_SCHEMA_VERSION = 7;
 
 /**
  * Highest level a character can be set to.
@@ -557,6 +576,17 @@ export const MAX_STAT = 5;
  */
 export const MIN_SKILL = -5;
 export const MAX_SKILL = 12;
+
+/**
+ * Maximum number of stats a character can mark as KEY at once — Nimble
+ * Core Rules 2nd printing, p.55 (Glossary, "KEY"): a class's two most
+ * important stats. Only the higher-valued of the (up to 2) selected stats
+ * is ever used (see {@link NimbleCharacter.keyStats}). Enforced both at
+ * the input layer (`StatBox`'s triangle toggle) and, defense in depth, at
+ * the write choke point (`updateCharacter` in `useOBR.ts`) — same
+ * reasoning as {@link MAX_LEVEL}.
+ */
+export const MAX_KEY_STATS = 2;
 
 export type RollMode = "standard" | "advantage" | "disadvantage";
 export type AdvantageCount = number;
@@ -652,7 +682,7 @@ export function createDefaultCharacter(ownerId: string): NimbleCharacter {
     maxMana: 0,
     hitDice: { current: 1, max: 1, dice: "d8" },
     stats: { str: 0, dex: 0, int: 0, wil: 0 },
-    keyStat: null,
+    keyStats: [],
     flawStat: null,
     saveMods: { str: "none", dex: "none", int: "none", wil: "none" },
     skills: {

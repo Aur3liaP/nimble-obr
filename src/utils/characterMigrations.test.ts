@@ -995,6 +995,81 @@ describe("migrateCharacter — v5 -> v6 (id/kind added, tokenId dropped)", () =>
   });
 });
 
+describe("migrateCharacter — v6 -> v7 (keyStat -> keyStats)", () => {
+  // Fixtures start at schemaVersion 6 to isolate MIGRATIONS[6], same
+  // reasoning as the v5 -> v6 block above.
+
+  function migrateV6(overrides: Record<string, unknown> = {}): Record<string, unknown> {
+    const base = createDefaultCharacter("owner-1") as unknown as Record<string, unknown>;
+    const v6 = omit({ ...base, ...overrides, schemaVersion: 6 }, ["keyStats"]);
+    const result = migrateCharacter(v6);
+    expect(result.status).toBe("ok");
+    if (result.status !== "ok") throw new Error("expected migration to succeed");
+    return result.character as unknown as Record<string, unknown>;
+  }
+
+  it("converts a set keyStat into a single-element keyStats array", () => {
+    const migrated = migrateV6({ keyStat: "dex" });
+    expect(migrated.keyStats).toEqual(["dex"]);
+  });
+
+  it("converts a null keyStat into an empty keyStats array", () => {
+    const migrated = migrateV6({ keyStat: null });
+    expect(migrated.keyStats).toEqual([]);
+  });
+
+  it("defaults to an empty keyStats array when the record predates keyStat entirely", () => {
+    const migrated = migrateV6();
+    expect(migrated.keyStats).toEqual([]);
+  });
+
+  it("drops the old keyStat field entirely", () => {
+    const migrated = migrateV6({ keyStat: "wil" });
+    expect(migrated).not.toHaveProperty("keyStat");
+  });
+
+  it("does not touch flawStat", () => {
+    const migrated = migrateV6({ keyStat: "str", flawStat: "int" });
+    expect(migrated.flawStat).toBe("int");
+  });
+});
+
+describe("migrateCharacter — full chain v0 -> current (keyStat survives every intermediate step)", () => {
+  // The version stamp on a record doesn't say anything about its ACTUAL
+  // shape — a versionless (v0) record can still carry a field that, in
+  // this codebase's own history, was only ever added at a much later,
+  // fixed version (here: the legacy singular `keyStat`, which existed from
+  // early on but was only renamed to `keyStats` at v7). Isolating
+  // MIGRATIONS[6] alone (the block above) proves that ONE step is correct
+  // in isolation; it does not prove `keyStat` actually survives steps 0
+  // through 5 unharmed to reach it. This test drives the record through
+  // every migration in order, via the real `migrateCharacter` entry point,
+  // the same one every real read path uses.
+
+  it("migrates a v0 record that still carries the legacy singular keyStat all the way to keyStats at CURRENT_SCHEMA_VERSION", () => {
+    const full = createDefaultCharacter("owner-1") as unknown as Record<string, unknown>;
+    const legacyV0 = omit(
+      { ...full, keyStat: "str" },
+      ["keyStats", "combat", "schemaVersion", "id", "kind"],
+    );
+    const result = migrateCharacter(legacyV0);
+    expect(result.status).toBe("ok");
+    if (result.status !== "ok") throw new Error("expected migration to succeed");
+    expect(result.character.schemaVersion).toBe(CURRENT_SCHEMA_VERSION);
+    expect(result.character.keyStats).toEqual(["str"]);
+    expect(result.character).not.toHaveProperty("keyStat");
+  });
+
+  it("migrates a v0 record with no keyStat at all (predates the field entirely) to an empty keyStats array at CURRENT_SCHEMA_VERSION", () => {
+    const legacyV0 = makeV0Character();
+    const result = migrateCharacter(legacyV0);
+    expect(result.status).toBe("ok");
+    if (result.status !== "ok") throw new Error("expected migration to succeed");
+    expect(result.character.schemaVersion).toBe(CURRENT_SCHEMA_VERSION);
+    expect(result.character.keyStats).toEqual([]);
+  });
+});
+
 describe("migrateCharacter — already current", () => {
   it("reports no migration for a record already at CURRENT_SCHEMA_VERSION", () => {
     const character = createDefaultCharacter("owner-1");

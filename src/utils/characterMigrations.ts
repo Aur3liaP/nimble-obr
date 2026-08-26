@@ -628,6 +628,29 @@ const MIGRATIONS: Migration[] = [
       kind: "kind" in character ? character.kind : "player",
     };
   },
+
+  // v6 -> v7: replaces the single `keyStat: keyof Stats | null` with
+  // `keyStats: (keyof Stats)[]` (max 2 — see `MAX_KEY_STATS`). Nimble Core
+  // Rules 2nd printing, p.55: a class has TWO KEY stats, and only the
+  // higher-valued of the two is ever actually used (see `buildContext` in
+  // formulaParser.ts) — the old single-slot field could only ever record
+  // one of the two the rulebook actually grants.
+  //
+  // Short and explicit, deliberately not a `fillMissingFields` call (see
+  // that function's own remarks on why it's legitimate for v0 -> v1 only):
+  // every record reaching this step is, by construction, one that has
+  // never had `keyStats` before (the field didn't exist until this
+  // version), so there's nothing to merge — `keyStats` is derived fully
+  // from whatever `keyStat` held, a set value becomes its one-element
+  // array, `null` or a genuinely absent field both become `[]`.
+  (character) => {
+    const rest: Record<string, unknown> = { ...character };
+    delete rest.keyStat;
+    return {
+      ...rest,
+      keyStats: typeof character.keyStat === "string" ? [character.keyStat] : [],
+    };
+  },
 ];
 
 /**
@@ -722,7 +745,7 @@ function findShapeMismatch(value: unknown, template: unknown, path: string): str
  *   checked as `string`, not against their specific allowed values.
  * - `null` is accepted at any key regardless of the template's type there,
  *   rather than hand-listing the handful of fields that are legitimately
- *   nullable (`keyStat`, `flawStat`, `combat.initiativeResult`).
+ *   nullable (`flawStat`, `combat.initiativeResult`).
  *
  * Good enough for what this actually validates in practice: the output of
  * this project's own migration chain, not arbitrary external data. See
