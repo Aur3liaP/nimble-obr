@@ -66,7 +66,7 @@ function makeCharacter(overrides: Partial<NimbleCharacter> = {}): NimbleCharacte
     ...char,
     level: 5,
     stats: { str: 3, dex: 2, int: 1, wil: 0 },
-    keyStat: "str",
+    keyStats: ["str"],
     flawStat: "wil",
     skills: { ...char.skills, stealth: 4, might: 2 },
     hp: { current: 8, max: 12, temp: 0 },
@@ -189,7 +189,7 @@ describe("evalFormula", () => {
   it("substitutes stats, key, flaw, level, skills and HP", () => {
     const char = makeCharacter();
     expect(evalFormula("STR", char).value).toBe(3);
-    expect(evalFormula("KEY", char).value).toBe(3); // keyStat = str
+    expect(evalFormula("KEY", char).value).toBe(3); // keyStats = ["str"]
     expect(evalFormula("FLAW", char).value).toBe(0); // flawStat = wil
     expect(evalFormula("LEVEL", char).value).toBe(5);
     expect(evalFormula("STEALTH", char).value).toBe(4);
@@ -260,6 +260,65 @@ describe("evalFormula", () => {
     const result = evalFormula("STR;2", char);
     expect(result.value).toBe(0);
     expect(result.error).toBeTruthy();
+  });
+});
+
+describe("buildContext — keyStats (point 3, schema v7)", () => {
+  it("with two keyStats, KEY resolves to the HIGHER of the two, not the sum or the first entry", () => {
+    const char = makeCharacter({
+      stats: { str: 3, dex: 5, int: 1, wil: 0 },
+      keyStats: ["str", "dex"],
+    });
+    expect(buildContext(char).key).toBe(5);
+  });
+
+  it("the highest wins regardless of which entry is listed first in keyStats", () => {
+    const higherFirst = makeCharacter({
+      stats: { str: 5, dex: 3, int: 1, wil: 0 },
+      keyStats: ["str", "dex"],
+    });
+    const higherSecond = makeCharacter({
+      stats: { str: 5, dex: 3, int: 1, wil: 0 },
+      keyStats: ["dex", "str"],
+    });
+    expect(buildContext(higherFirst).key).toBe(5);
+    expect(buildContext(higherSecond).key).toBe(5);
+  });
+
+  it("KEY follows the current values live — never a stored max: raising the previously-lower stat past the other flips which one drives KEY", () => {
+    // Simulates a level-up: same keyStats selection, dex moves from below
+    // str to above it. Nothing about keyStats itself changes — buildContext
+    // must recompute from the live stats every time, not read back a
+    // previously-resolved max.
+    const beforeLevelUp = makeCharacter({
+      stats: { str: 3, dex: 1, int: 1, wil: 0 },
+      keyStats: ["str", "dex"],
+    });
+    const afterLevelUp = makeCharacter({
+      stats: { str: 3, dex: 6, int: 1, wil: 0 },
+      keyStats: ["str", "dex"],
+    });
+    expect(buildContext(beforeLevelUp).key).toBe(3);
+    expect(buildContext(afterLevelUp).key).toBe(6);
+  });
+
+  it("an empty keyStats resolves KEY to exactly 0 — not -Infinity (Math.max()'s empty-call result) and not NaN", () => {
+    const char = makeCharacter({ keyStats: [] });
+    const key = buildContext(char).key;
+    expect(key).toBe(0);
+    expect(key).not.toBe(-Infinity);
+    expect(Number.isNaN(key)).toBe(false);
+  });
+
+  it("does not touch FLAW — flawStat stays a single, separately-resolved stat", () => {
+    const char = makeCharacter({
+      stats: { str: 3, dex: 5, int: 1, wil: -2 },
+      keyStats: ["str", "dex"],
+      flawStat: "wil",
+    });
+    const ctx = buildContext(char);
+    expect(ctx.key).toBe(5);
+    expect(ctx.flaw).toBe(-2);
   });
 });
 
@@ -554,12 +613,12 @@ describe("rollFormula", () => {
   });
 
   it("rejects a dice count of 0, showing the raw formula and what it resolved to (point 2)", () => {
-    // buildContext returns key: 0 whenever char.keyStat isn't set yet —
+    // buildContext returns key: 0 whenever char.keyStats is empty —
     // the normal state of a sheet mid-creation. Once point 1 lets "KEYd20"
     // substitute at all, this is exactly how it turns into "0d20". The
     // message must show *both* — "0d20" alone no longer has "KEY" in it
     // anywhere to explain why count is 0.
-    const char = makeCharacter({ keyStat: null });
+    const char = makeCharacter({ keyStats: [] });
     const result = rollFormula("KEYd20", char);
     expect(result.rolls).toEqual([]);
     expect(result.error).toMatch(/at least 1/i);
@@ -610,7 +669,7 @@ describe("rollFormula", () => {
     // wrong for the subtraction case while barely improving it for the
     // negative-stat case.
     const char = makeCharacter({
-      keyStat: "str",
+      keyStats: ["str"],
       stats: { str: -1, dex: 0, int: 0, wil: 0 },
     });
     const negativeStat = rollFormula("KEYd20", char);
@@ -675,7 +734,7 @@ describe("cross-path consistency: an invalid formula must be rejected identicall
     ["1d6+.", "a bare '.' with no digits is not a valid number"],
     ["KEYd0", "sides below the lower bound"],
   ])("rejects %s (%s) in validateFormula, evalFormulaWithContext, and resolveFormulaDisplay alike", (formula) => {
-    const char = makeCharacter({ keyStat: "str", stats: { str: 3, dex: 0, int: 0, wil: 0 } });
+    const char = makeCharacter({ keyStats: ["str"], stats: { str: 3, dex: 0, int: 0, wil: 0 } });
     const ctx = buildContext(char);
 
     expect(() => validateFormula(formula, ctx)).toThrow(FormulaError);
@@ -995,7 +1054,7 @@ describe("implicit-count dice notation (dN -> 1dN)", () => {
 
   it("resolves KEYd20 (src/data/spells.ts, 'Immolating Breath (Dragonform)') — fixed by the point-1 substitution boundary, see the dedicated describe block below", () => {
     const char = makeCharacter({
-      keyStat: "str",
+      keyStats: ["str"],
       stats: { str: 3, dex: 0, int: 0, wil: 0 },
     });
     const result = rollFormula("KEYd20", char);
@@ -1264,7 +1323,7 @@ describe("substituteVariables word-boundary fix (point 1)", () => {
     const base = makeCharacter({
       level: 8,
       stats: { str: 3, dex: 0, int: 0, wil: 2 },
-      keyStat: "str",
+      keyStats: ["str"],
     });
     const char = { ...base, skills: { ...base.skills, might: 4 } };
     expect(rollFormula("KEYd20", char).rolls).toHaveLength(3); // KEY = str = 3
@@ -1493,7 +1552,7 @@ describe("FormulaContext contract: every field must actually substitute (point 4
   it("substitutes every top-level scalar field (level, key, flaw, hp, maxHp) under its own uppercase token", () => {
     const char = makeCharacter({
       level: 7,
-      keyStat: "str",
+      keyStats: ["str"],
       flawStat: "wil",
       stats: { str: 3, dex: 2, int: 1, wil: 4 },
       hp: { current: 9, max: 15, temp: 0 },
@@ -1582,7 +1641,7 @@ describe("negative stat modifiers (chained-sign parser bug)", () => {
   it("2d4+KEY: negative key stat rolls and displays correctly", () => {
     const char = makeCharacter({
       stats: { str: -1, dex: 0, int: 0, wil: 0 },
-      keyStat: "str",
+      keyStats: ["str"],
     });
     mockRolls([2, 3], 4);
     const result = rollFormula("2d4+KEY", char);
@@ -1618,7 +1677,7 @@ describe("negative stat modifiers (chained-sign parser bug)", () => {
     // reject, just not by way of the "Unrecognized token" bug fixed above.
     const char = makeCharacter({
       stats: { str: -2, dex: 0, int: 0, wil: 0 },
-      keyStat: "str",
+      keyStats: ["str"],
     });
     const result = rollFormula("KEYd20", char);
     expect(result.error).toBeTruthy();
@@ -1762,7 +1821,7 @@ describe("game data validation (point 4)", () => {
   const char = makeCharacter({
     level: 20,
     stats: { str: 3, dex: 2, int: 1, wil: 0 },
-    keyStat: "str",
+    keyStats: ["str"],
     flawStat: "wil",
   });
   const ctx = buildContext(char);
@@ -1923,8 +1982,8 @@ describe("validateFormulaSyntax: write-time gate validates syntax, not resolved 
   // doc comment on validateFormulaSyntax for the full reasoning.
 
   it("accepts KEYd20 regardless of any character's actual key stat", () => {
-    // The motivating case: a GM whose character has no keyStat set yet
-    // (KEY resolves to 0 for a real character in that state) must not
+    // The motivating case: a GM whose character has no keyStats selected
+    // yet (KEY resolves to 0 for a real character in that state) must not
     // have "KEYd20" rejected at save time — it's valid notation for
     // whoever eventually uses it with a key stat set.
     expect(() => validateFormulaSyntax("KEYd20")).not.toThrow();
@@ -1960,7 +2019,7 @@ describe("validateFormulaSyntax: write-time gate validates syntax, not resolved 
   it("still enforces bounds against a real character, via the unchanged validateFormula, at the same LEVEL that validateFormulaSyntax waves through", () => {
     const ctx = buildContext(makeCharacter({ level: 500 }));
     expect(() => validateFormula("incrementdice(1,LEVEL)d6", ctx)).toThrow();
-    const charNoKey = makeCharacter({ keyStat: null });
+    const charNoKey = makeCharacter({ keyStats: [] });
     // KEYd20 -> "0d20" for this real character; validateFormula (the
     // context-bound gate, not validateFormulaSyntax) must still reject it.
     expect(() => validateFormula("KEYd20", buildContext(charNoKey))).toThrow();

@@ -134,6 +134,50 @@ releases) instead of surfacing it as `"invalid"`, and would erase the
 changelog value of this file, where each migration function is a record of
 exactly what changed at that version.
 
+## Worked example: v6 to v7 (`keyStat` -> `keyStats`)
+
+A second worked example, contrasted with v0 -> v1 above: this one is a
+small, explicit, single-field transform — the shape every migration after
+v0 -> v1 is supposed to be, per this document's own procedure.
+
+Nimble's rulebook (Core Rules 2nd printing, p.55) gives every class TWO
+"KEY" stats, and only the higher-valued one is ever actually used wherever
+a formula references KEY. Before schema v7, `NimbleCharacter.keyStat` was
+`keyof Stats | null` — a single slot that could only ever record one of
+the two stats the rulebook actually grants. `MIGRATIONS[6]`:
+
+```ts
+(character) => {
+  const rest: Record<string, unknown> = { ...character };
+  delete rest.keyStat;
+  return {
+    ...rest,
+    keyStats: typeof character.keyStat === "string" ? [character.keyStat] : [],
+  };
+},
+```
+
+Three cases, all handled by that one ternary: a record with `keyStat` set
+to a real stat becomes a one-element `keyStats` array; a record with
+`keyStat: null` (the default, unset state) becomes `[]`; a record that
+predates `keyStat` entirely (never had the field) also becomes `[]`,
+since `character.keyStat` is simply `undefined` there and `typeof
+undefined === "string"` is `false`. `keyStats` is derived wholesale from
+`keyStat`, never merged with anything already present — legitimate here
+specifically because no record reaching this step could ever have had a
+`keyStats` field before (it didn't exist until this version), unlike
+`fillMissingFields`'s job at v0 -> v1, which has to cope with a genuinely
+unbounded range of prior shapes.
+
+`buildContext` (`formulaParser.ts`) resolves the new field with an
+explicit empty-array guard rather than calling `Math.max()` unconditionally
+— `Math.max()` with no arguments returns `-Infinity`, not `0`, which would
+have silently broken the deliberate "KEY resolves to 0 when unset" contract
+this project relies on elsewhere (see CLAUDE.md's Formula parser section on
+why that failure must stay loud). The resolved max is never stored back
+onto the character: stats change on level-up, and a cached max would
+silently go stale the moment the previously-lower stat overtakes the other.
+
 ## Known limits of `validateCharacterShape`
 
 Documented in that function's own JSDoc (`characterMigrations.ts`); repeated
@@ -149,8 +193,8 @@ here because they matter when deciding whether a change is safe:
   `string`, not against their specific allowed values.
 - **Nullable fields are not checked strictly.** `null` is accepted at any
   key regardless of what the template holds there, rather than hand-listing
-  the handful of fields that are legitimately nullable (`keyStat`,
-  `flawStat`, `combat.initiativeResult`).
+  the handful of fields that are legitimately nullable (`flawStat`,
+  `combat.initiativeResult`).
 - **Optional fields absent from the template are not covered**, as noted
   above under step 2.
 

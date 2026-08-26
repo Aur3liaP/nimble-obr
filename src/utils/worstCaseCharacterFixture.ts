@@ -221,7 +221,10 @@ export function buildWorstCaseCharacter(): NimbleCharacter {
     hitDice: { current: 7, max: 10, dice: "d8" },
 
     stats: { str: 5, dex: -1, int: 2, wil: 4 },
-    keyStat: "wil",
+    // A real character has 2 key stats (Nimble Core Rules 2nd printing,
+    // p.55) — using both here, not just one, matches this fixture's own
+    // "heaviest sheet a table is reasonably likely to produce" goal.
+    keyStats: ["wil", "str"],
     flawStat: "dex",
     saveMods: { str: "none", dex: "disadvantage", int: "none", wil: "advantage" },
     skills: {

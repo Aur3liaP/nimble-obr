@@ -17,7 +17,14 @@ import { formatModifier } from "../../utils/formatModifier";
  * @property value - Current bonus value for this stat.
  * @property saveAdvantage - Save advantage/disadvantage indicator shown top-right.
  * @property canEdit - Gates editing, status toggling, and the SAVE button.
- * @property status - Whether this stat is marked as the character's key or flaw stat.
+ * @property status - Whether this stat is marked as the character's key or
+ * flaw stat. `"key"` is the EFFECTIVE key stat — the higher-valued of up to
+ * {@link MAX_KEY_STATS} selected stats, the one actually used wherever a
+ * formula references KEY. `"keySecondary"` is selected as a key stat but
+ * not (currently) the effective one — e.g. tied or lower than the other
+ * selected stat right now; still shown as selected so the player can see
+ * both picks, but styled and titled distinctly so it's clear which one is
+ * driving KEY. See `StatGrid`'s own doc for how this is computed.
  * @property onChange - Called with the new value when an edit is committed.
  * @property onRoll - Called with (label, formula, saveAdvantage) when SAVE is clicked.
  * @property onStatusChange - Called when the key/flaw triangle buttons are toggled.
@@ -27,7 +34,7 @@ interface StatBoxProps {
   value: number;
   saveAdvantage: "advantage" | "disadvantage" | "none";
   canEdit: boolean;
-  status?: "none" | "key" | "flaw";
+  status?: "none" | "key" | "keySecondary" | "flaw";
   onChange?: (key: keyof Stats, value: number) => void;
   onRoll?: (
     label: string,
@@ -121,11 +128,27 @@ export function StatBox({
         <div className="flex justify-around w-full">
           <button
             onClick={() =>
-              onStatusChange?.(statKey, status === "key" ? "none" : "key")
+              onStatusChange?.(
+                statKey,
+                status === "key" || status === "keySecondary" ? "none" : "key",
+              )
             }
-            className={`text-lg transition-colors ${status === "key" ? "text-emerald-500" : "text-stone-600 hover:text-stone-400"}`}
+            className={`text-lg transition-colors ${
+              status === "key"
+                ? "text-emerald-500"
+                : status === "keySecondary"
+                  ? "text-emerald-800"
+                  : "text-stone-600 hover:text-stone-400"
+            }`}
+            title={
+              status === "key"
+                ? "Key stat — currently the higher of your (up to 2) key stats, used for KEY"
+                : status === "keySecondary"
+                  ? "Key stat, but not currently the highest — your other selected key stat is used for KEY instead"
+                  : undefined
+            }
           >
-            {status === "key" ? "▲" : "△"}
+            {status === "key" || status === "keySecondary" ? "▲" : "△"}
           </button>
           <span
             onDoubleClick={() => {
@@ -170,7 +193,8 @@ export function StatBox({
 interface StatGridProps {
   stats: Stats;
   saveMods: SaveMods;
-  keyStat: keyof Stats | null;
+  /** Up to {@link MAX_KEY_STATS} stats marked as key — see `NimbleCharacter.keyStats`'s doc. */
+  keyStats: (keyof Stats)[];
   flawStat: keyof Stats | null;
   canEdit: boolean;
   onStatChange?: (key: keyof Stats, value: number) => void;
@@ -184,20 +208,39 @@ interface StatGridProps {
 
 /**
  * Renders all four stats (STR/DEX/INT/WIL) in a responsive grid, deriving
- * each box's key/flaw status from `keyStat`/`flawStat` and gating all
+ * each box's key/flaw status from `keyStats`/`flawStat` and gating all
  * interactive callbacks behind `canEdit` so non-owners get fully read-only
  * boxes (no edit, no status toggle, no SAVE button).
+ *
+ * `keyStats` holds up to {@link MAX_KEY_STATS} candidate stats; only the
+ * higher-valued one is the character's EFFECTIVE key stat (`status="key"`
+ * on that box), same rule `buildContext` applies for KEY substitution — a
+ * stat in `keyStats` that isn't currently the highest gets
+ * `status="keySecondary"` instead (still shown as selected, just not the
+ * one in effect). This is computed fresh from live `stats` on every
+ * render, never cached: which of the (up to 2) selected stats is higher
+ * can flip after a level-up changes one of them, and there is nothing
+ * persisted that could go stale.
  */
 export function StatGrid({
   stats,
   saveMods,
-  keyStat,
+  keyStats,
   flawStat,
   canEdit,
   onStatChange,
   onStatusChange,
   onRoll,
 }: StatGridProps) {
+  // undefined (not -Infinity/NaN) when keyStats is empty — Math.max() with
+  // no arguments returns -Infinity, which would make every stat's value
+  // look "not the max" instead of correctly rendering no key stat as
+  // selected at all. See buildContext's identical guard in
+  // formulaParser.ts.
+  const maxKeyValue = keyStats.length
+    ? Math.max(...keyStats.map((k) => stats[k]))
+    : undefined;
+
   return (
     <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
       {(["str", "dex", "int", "wil"] as Array<keyof Stats>).map((key) => (
@@ -207,7 +250,15 @@ export function StatGrid({
           value={stats[key]}
           saveAdvantage={saveMods[key]}
           canEdit={canEdit}
-          status={keyStat === key ? "key" : flawStat === key ? "flaw" : "none"}
+          status={
+            keyStats.includes(key)
+              ? stats[key] === maxKeyValue
+                ? "key"
+                : "keySecondary"
+              : flawStat === key
+                ? "flaw"
+                : "none"
+          }
           onChange={canEdit ? onStatChange : undefined}
           onStatusChange={canEdit ? onStatusChange : undefined}
           // onRoll only passed if canEdit — disables the button for non-owners

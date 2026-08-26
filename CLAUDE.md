@@ -413,6 +413,7 @@ attribute doesn't stop a typed value from being committed.
 | `stats.{str,dex,int,wil}` | `[MIN_STAT, MAX_STAT]` = `[-5, +5]` | Rulebook p.6 |
 | `skills.*` | `[MIN_SKILL, MAX_SKILL]` = `[-5, +12]` | Rulebook p.7, p.21 — the +12 ceiling is absolute, not "stat + points"; the floor mirrors the stat floor since invested points are never negative |
 | `level` | `[1, MAX_LEVEL]` | dice-safety-limit driven, see `MAX_LEVEL`'s JSDoc |
+| `keyStats.length` | `[0, MAX_KEY_STATS]` = `[0, 2]` | Rulebook p.55 (KEY) — only the higher-valued selected stat is used, see `buildContext`; schema v7 |
 | `maxWounds` | **not clamped** | deliberately a free field — see below |
 
 - **`maxWounds` is intentionally NOT clamped to any fixed number (e.g. 6).**
@@ -1264,7 +1265,7 @@ Reverting one reintroduces the bug.
   bound, uniformly, even for a hand-typed literal with no variables at all
   (`99999d6`). Two reasons: (1) a real character's KEY/FLAW/HP can
   legitimately be outside any fixed neutral range in either direction —
-  `KEYd20` saved before `keyStat` is set must not be rejected at save time
+  `KEYd20` saved before any `keyStats` entry is set must not be rejected at save time
   for resolving to `0d20` against the *current, incomplete* character; (2)
   bounds are inherently level-dependent for dynamic dice
   (`incrementdice(1,LEVEL)d6` is 1 die at level 1, 5 at level 20) — no
@@ -1412,6 +1413,15 @@ Reverting one reintroduces the bug.
   documented variable actually substitutes. `FLAW` was documented in the
   README and computed in `buildContext` but never wired up, and nothing caught
   it. Any field added to the context must be substituted or that test fails.
+  **Current status, so a future session doesn't reread this as a still-open
+  bug:** `FLAW` is now wired, covered by this reflexive test, consumed by
+  zero entries in `spells.ts`/`equipment.ts`, and usable in a GM's own
+  custom formula. Separately, `SaveMods` and `initiativeAdvantage` are both
+  correctly typed and correctly read (`StatBox`'s advantage indicator/SAVE
+  button, `CombatTab.confirmInitiativeRoll`) but have no write path
+  anywhere in the UI, so both stay frozen at `"none"` for every character —
+  the same FLAW-shaped gap, one type-check/lint/tests can't catch here
+  either, since "always none" is itself a valid, correctly-typed state.
   - `VARIABLE_TABLE` and `MATH_FUNCTIONS` are the logic, not a description of it.
   `substituteVariables` and `Parser.parsePrimary` loop over these tables, and
   `listFormulaVariables()` / `listFormulaFunctions()` reflect over the same

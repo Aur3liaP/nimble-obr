@@ -101,7 +101,15 @@ export type FormulaContext = {
  * values, skills, and current/max HP for variable substitution.
  */
 export function buildContext(char: NimbleCharacter): FormulaContext {
-  const keyValue = char.keyStat ? char.stats[char.keyStat] : 0;
+  // Explicit guard on the empty-array case: Math.max() with no arguments
+  // returns -Infinity, not 0 — calling it unconditionally on an empty
+  // `keyStats` would silently turn every KEY-referencing formula on a
+  // character with no key stat selected into garbage instead of the
+  // documented, deliberately noisy "key: 0" failure (see the dice
+  // lower-bound bullet in CLAUDE.md's Formula parser section).
+  const keyValue = char.keyStats.length
+    ? Math.max(...char.keyStats.map((stat) => char.stats[stat]))
+    : 0;
   const flawValue = char.flawStat ? char.stats[char.flawStat] : 0;
 
   return {
@@ -404,7 +412,7 @@ export function normalizeSubstitutedSignsForDisplay(s: string): string {
  * bypassed by going through one path instead of the other.
  *
  * The lower bound matters in practice, not just in theory: `buildContext`
- * returns `key: 0` whenever `char.keyStat` isn't set yet, which is the
+ * returns `key: 0` whenever `char.keyStats` is empty, which is the
  * normal state of a character sheet mid-creation — a very reachable way to
  * turn a real formula like "KEYd20" into "0d20". This must fail loudly, not
  * silently clamp to 1 die — a silent clamp is exactly the kind of
@@ -1362,8 +1370,8 @@ export function validateFormula(formula: string, ctx: FormulaContext): void {
  * a real character.
  *
  * @remarks Every field is `1`, deliberately not `0`. This project's own bug
- * history (`KEYd20` resolving to `0d20` for a character with no `keyStat`
- * set) is what {@link validateFormulaSyntax} exists to stop happening at
+ * history (`KEYd20` resolving to `0d20` for a character with no `keyStats`
+ * selected) is what {@link validateFormulaSyntax} exists to stop happening at
  * write time instead of roll time — reusing `0` here would just relocate
  * the exact same trap into the neutral context itself, for KEY and for
  * every other variable that can legitimately be `0` on a real character
@@ -1416,10 +1424,10 @@ const NEUTRAL_VALIDATION_CONTEXT: FormulaContext = {
  * in it whatsoever (e.g. a hand-typed "99999d6"). Two concrete reasons,
  * not just caution:
  *
- * - A real character's numeric fields (KEY before `keyStat` is set, FLAW,
- *   HP) can legitimately be outside whatever range a synthetic context
- *   picks, in either direction. `KEYd20` saved by a GM whose character
- *   sheet doesn't have `keyStat` set yet resolves to `0d20` against the
+ * - A real character's numeric fields (KEY before any `keyStats` entry is
+ *   set, FLAW, HP) can legitimately be outside whatever range a synthetic
+ *   context picks, in either direction. `KEYd20` saved by a GM whose
+ *   character sheet has an empty `keyStats` resolves to `0d20` against the
  *   real character right now, and would be wrongly rejected at save time
  *   if this gate substituted with that same real, incomplete context.
  * - Bounds are inherently level/context-dependent for dynamic dice (e.g.
