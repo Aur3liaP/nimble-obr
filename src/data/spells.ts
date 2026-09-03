@@ -17,6 +17,14 @@
  * now a Shadowmancer class ability, not a spell) — and must never be
  * reused for anything else.
  *
+ * The Terramancy, Hexbinder, and Afflictions sections are official Nimble
+ * content by the same author as the Core Rules, distributed separately
+ * (alpha reference sheets, not yet laid out in the main book) and licensed
+ * under the Nimble 3rd Party Creator License v2.0, same as the rest of
+ * this catalog — see `RollLog.tsx`'s `@file` header for where that
+ * license's required notices live in the app.
+ *
+
  * ## `catalogVersion` — bump it when players should know something changed
  *
  * Every entry also carries `catalogVersion: number`, starting at 1. See
@@ -1136,6 +1144,359 @@ export const BASE_SPELLS: SpellTemplate[] = [
     description:
       "Read the surface thoughts of a creature. They can sense you doing this and may not like it.",
     manaCost: 0,
+  },
+
+  // ── TERRAMANCY SPELLS (alpha reference sheet, 3rd Party Creator License) ──
+  {
+    name: "Bouldercast",
+    sourceKey: "bouldercast",
+    catalogVersion: 1,
+    type: "spell",
+    spellTier: 0,
+    spellSchool: "terramancy" as SpellSchool,
+    actionCost: 2,
+    range: "6",
+    formula: "incrementdice(1,level)d12",
+    description:
+      "Deals half as much damage to a creature adjacent to your target. High Levels: +1d12 damage every 5 levels.",
+  },
+  {
+    name: "Vinelash",
+    sourceKey: "vinelash",
+    catalogVersion: 1,
+    type: "spell",
+    spellTier: 0,
+    spellSchool: "terramancy" as SpellSchool,
+    actionCost: 1,
+    range: "8",
+    formula: "1d4",
+    description:
+      "Single Target. You may move the target 1 space instead of damaging them. On crit: you may Blind them instead (until the end of their next turn). High Levels: +1d4 damage or +1 space every 5 levels.",
+  },
+  {
+    name: "Pillar of Stone",
+    sourceKey: "pillar-of-stone",
+    catalogVersion: 1,
+    type: "spell",
+    spellTier: 1,
+    spellSchool: "terramancy" as SpellSchool,
+    actionCost: 2,
+    range: "6",
+    formula: "",
+    description:
+      "Concentration (1 min). A pillar of stone in 1 space shoots forth from the ground. Any creatures entirely in that space are lifted up to 20 ft. in the air. If there is a solid ceiling, you may Restrain the creature against it. Upcast: +10 ft. height or +1 space.",
+  },
+  {
+    name: "Earthward",
+    sourceKey: "earthward",
+    catalogVersion: 1,
+    type: "spell",
+    spellTier: 2,
+    spellSchool: "terramancy" as SpellSchool,
+    actionCost: 2,
+    range: "self",
+    formula: "",
+    description:
+      "Reaction: When you would be damaged or moved against your will. Reduce ALL damage taken this round by 20 and you cannot be moved this round. Upcast: +5 damage reduction.",
+  },
+  {
+    name: "Mendberry",
+    sourceKey: "mendberry",
+    catalogVersion: 1,
+    type: "spell",
+    spellTier: 3,
+    spellSchool: "terramancy" as SpellSchool,
+    actionCost: 1,
+    range: "6",
+    formula: "",
+    description:
+      "Summon a magical bush (max 1) within Reach 6, with KEY healing berries. Any creature adjacent to the bush can eat one or more healing berries to recover 5 HP per berry. Picking 1 berry per turn is free, each additional one costs 1 action. Upcast: +1 berry and +1 HP.",
+  },
+  {
+    name: "Crush",
+    sourceKey: "crush",
+    catalogVersion: 1,
+    type: "spell",
+    spellTier: 4,
+    spellSchool: "terramancy" as SpellSchool,
+    actionCost: 2,
+    range: "6",
+    formula: "2d20+20",
+    description: "2 Targets. Crush a Hampered target. Upcast: +10 damage.",
+  },
+  {
+    name: "Sudden Pit",
+    sourceKey: "sudden-pit",
+    catalogVersion: 1,
+    type: "spell",
+    spellTier: 5,
+    spellSchool: "terramancy" as SpellSchool,
+    actionCost: 2,
+    range: "6",
+    formula: "",
+    description:
+      "Up to 1 minute. Open up a pit in a 2x2 area in the ground. Creatures entirely in the area fall 10 ft. landing Prone. Upcast: +10 ft. deeper, or +2 spaces.",
+  },
+  {
+    name: "Stone’s Embrace",
+    sourceKey: "stones-embrace",
+    catalogVersion: 1,
+    type: "spell",
+    spellTier: 6,
+    spellSchool: "terramancy" as SpellSchool,
+    actionCost: 2,
+    range: "6",
+    formula: "",
+    description:
+      "AoE. Concentration (1 min). Friendly creatures gain +10 Defense. Upcast: +5 Defense.",
+  },
+  {
+    name: "Bramblemaw",
+    sourceKey: "bramblemaw",
+    catalogVersion: 1,
+    type: "spell",
+    spellTier: 7,
+    spellSchool: "terramancy" as SpellSchool,
+    actionCost: 3,
+    range: "6",
+    formula: "",
+    description:
+      "AoE. Up to KEY enemies must make a DEX save or be Restrained. Each suffers 20 damage minus their save. Repeat this damage each time they attempt to escape. Upcast: +10 damage.",
+  },
+
+  // ── HEXBINDER SPELLS (alpha reference sheet, 3rd Party Creator License) ──
+  {
+    name: "Misery",
+    sourceKey: "misery",
+    catalogVersion: 1,
+    type: "spell",
+    spellTier: 1,
+    spellSchool: "hexbinder" as SpellSchool,
+    actionCost: 2,
+    range: "8",
+    formula: "1d8+LVL",
+    description: "Single Target. On hit: apply an Affliction. On crit: apply 2 instead.",
+  },
+  {
+    name: "Life Bloom",
+    sourceKey: "life-bloom",
+    catalogVersion: 1,
+    type: "spell",
+    spellTier: 1,
+    spellSchool: "hexbinder" as SpellSchool,
+    actionCost: 1,
+    range: "8",
+    formula: "",
+    description:
+      "Single Target+. Consume 1 of your own Hit Dice, and 1 more from a willing target. Heal your target and another creature within Reach the sum of those dice.",
+  },
+  {
+    name: "Twitch Curse",
+    sourceKey: "twitch-curse",
+    catalogVersion: 1,
+    type: "spell",
+    spellTier: 2,
+    spellSchool: "hexbinder" as SpellSchool,
+    actionCost: 1,
+    range: "8",
+    formula: "",
+    description:
+      "Single Target. Reaction: When attacked by a creature within Reach, Defend for free. First move the attacker 1 space (+1 space for each Affliction they have). Opportunity attacks triggered this way are made with advantage instead of disadvantage. If you are no longer a valid target (e.g., the attacker is dead, you are out of line of sight/Reach/Range), the triggering attack misses.",
+  },
+  {
+    name: "Bloodcurse",
+    sourceKey: "bloodcurse",
+    catalogVersion: 1,
+    type: "spell",
+    spellTier: 2,
+    spellSchool: "hexbinder" as SpellSchool,
+    actionCost: 2,
+    range: "8",
+    formula: "1d4+LVL",
+    description:
+      "Single Target. Increment the die size for each Affliction the target has. On hit: Target becomes secretly Bloodcursed, suffering 2x the next damage they deal (ignoring armor).",
+  },
+  {
+    name: "Wyrding Strands",
+    sourceKey: "wyrding-strands",
+    catalogVersion: 1,
+    type: "spell",
+    spellTier: 3,
+    spellSchool: "hexbinder" as SpellSchool,
+    actionCost: 2,
+    range: "8",
+    formula: "2d6",
+    description:
+      "AoE. Move creatures in a 4x4 area a total of the rolled spaces, divided among them as you choose. Large or larger creatures move half as far.",
+  },
+  {
+    name: "Frogify",
+    sourceKey: "frogify",
+    catalogVersion: 1,
+    type: "spell",
+    spellTier: 3,
+    spellSchool: "hexbinder" as SpellSchool,
+    actionCost: 2,
+    range: "8",
+    formula: "",
+    description:
+      "Single Target. On a failed WIL save, turn a creature into a harmless, armorless, tiny FROG for up to 1 min. It can still move but not attack (except for bugs). On a save, they are partially transformed, only reducing their armor to none instead. Damage or casting this again ends the effect.",
+  },
+  {
+    name: "Malediction",
+    sourceKey: "malediction",
+    catalogVersion: 1,
+    type: "spell",
+    spellTier: 4,
+    spellSchool: "hexbinder" as SpellSchool,
+    actionCost: 2,
+    range: "4",
+    formula: "",
+    description:
+      "Multi-target. Roll KEYd4 Primary Dice. For each hit, deal LVL damage to a creature within Reach (ignoring armor). Max 1 die per creature.",
+  },
+  {
+    name: "Circle of Thorns",
+    sourceKey: "circle-of-thorns",
+    catalogVersion: 1,
+    type: "spell",
+    spellTier: 4,
+    spellSchool: "hexbinder" as SpellSchool,
+    actionCost: 2,
+    range: "8",
+    formula: "",
+    description:
+      "Single Target. Fill every empty adjacent space around a creature with a growth of thorns. Creatures who enter the area must make a DEX save or take KEYd6 damage and become Restrained, half on save. Lasts up to 1 min or until it has dealt damage 3 times.",
+  },
+  {
+    name: "Terror",
+    sourceKey: "terror",
+    catalogVersion: 1,
+    type: "spell",
+    spellTier: 5,
+    spellSchool: "hexbinder" as SpellSchool,
+    actionCost: 2,
+    range: "8",
+    formula: "",
+    description:
+      "Single Target. Damage: LVL×1d4 (ignoring armor). Advantage for each Affliction on the target.",
+  },
+
+  // ── AFFLICTIONS (alpha reference sheet, 3rd Party Creator License) ──
+  // Named "Affliction - <name>" deliberately, per the name they're catalog
+  // entries for a status condition applied by another spell's effect (e.g.
+  // Misery, Bloodcurse), not something cast on their own: `spellTier: 0`
+  // is authored explicitly (the source sheet gives no tier at all — this
+  // is a stand-in, not a transcribed value) rather than left to whichever
+  // of the three "?? 0" fallbacks in SpellsTab.tsx happens to read it —
+  // same rule as `InventoryItem.category`: authored in the data, never
+  // guessed at a read site. It still sorts these under the "Cantrips"
+  // filter, an imperfect fit accepted for now (the "Affliction - " prefix
+  // is what actually groups/searches them); fixing that display grouping
+  // is a separate batch. No actionCost either (RowMeta.tsx omits the
+  // action-cost badge entirely when it's absent, which is correct here —
+  // nothing is ever "spent" to have one of these active).
+  //
+  // Two page-level rules from the source sheet, deliberately NOT repeated
+  // in each entry below (redundant boilerplate 8 times over):
+  // - Affliction-specific: a creature can have at most INT different
+  //   Afflictions on it at once.
+  // - NOT Affliction-specific, repeated here only for context: an
+  //   Affliction lasts as long as the caster maintains Concentration
+  //   (broken on a DC 10 STR save when crit) — that's the same generic
+  //   Concentration rule already in the Core Rules, not something unique
+  //   to Afflictions.
+  {
+    name: "Affliction - Brittle",
+    sourceKey: "affliction-brittle",
+    catalogVersion: 1,
+    type: "spell",
+    spellTier: 0,
+    spellSchool: "hexbinder" as SpellSchool,
+    range: "",
+    formula: "",
+    description:
+      "Target suffers 1 damage for each space it moves (or is moved). Level 10: 2 damage/space.",
+  },
+  {
+    name: "Affliction - Dimmed",
+    sourceKey: "affliction-dimmed",
+    catalogVersion: 1,
+    type: "spell",
+    spellTier: 0,
+    spellSchool: "hexbinder" as SpellSchool,
+    range: "",
+    formula: "",
+    description: "Target has disadvantage 2 when attacking beyond Range/Reach 1.",
+  },
+  {
+    name: "Affliction - Doomed",
+    sourceKey: "affliction-doomed",
+    catalogVersion: 1,
+    type: "spell",
+    spellTier: 0,
+    spellSchool: "hexbinder" as SpellSchool,
+    range: "",
+    formula: "",
+    description: "1/encounter. Maximize the next roll against target.",
+  },
+  {
+    name: "Affliction - Enfeebled",
+    sourceKey: "affliction-enfeebled",
+    catalogVersion: 1,
+    type: "spell",
+    spellTier: 0,
+    spellSchool: "hexbinder" as SpellSchool,
+    range: "",
+    formula: "",
+    description: "Target falls Prone at the end of each of your turns.",
+  },
+  {
+    name: "Affliction - Frenzied",
+    sourceKey: "affliction-frenzied",
+    catalogVersion: 1,
+    type: "spell",
+    spellTier: 0,
+    spellSchool: "hexbinder" as SpellSchool,
+    range: "",
+    formula: "",
+    description:
+      "Target's first attack each round MUST be against the nearest random creature (acts first amongst monsters).",
+  },
+  {
+    name: "Affliction - Pestilent",
+    sourceKey: "affliction-pestilent",
+    catalogVersion: 1,
+    type: "spell",
+    spellTier: 0,
+    spellSchool: "hexbinder" as SpellSchool,
+    range: "",
+    formula: "",
+    description:
+      "On death of target: creatures within Reach 2 of it suffer LVL damage (ignoring armor).",
+  },
+  {
+    name: "Affliction - Sundered",
+    sourceKey: "affliction-sundered",
+    catalogVersion: 1,
+    type: "spell",
+    spellTier: 0,
+    spellSchool: "hexbinder" as SpellSchool,
+    range: "",
+    formula: "",
+    description: "Target's armor reduced 1 step.",
+  },
+  {
+    name: "Affliction - Withered",
+    sourceKey: "affliction-withered",
+    catalogVersion: 1,
+    type: "spell",
+    spellTier: 0,
+    spellSchool: "hexbinder" as SpellSchool,
+    range: "",
+    formula: "",
+    description:
+      "Target's first attack against a friendly creature each round is made with disadvantage.",
   },
 ];
 

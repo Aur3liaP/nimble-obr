@@ -60,6 +60,7 @@ const SCHOOL_STYLES: Record<SpellSchool, string> = {
   radiant: "text-amber-300 border-amber-800/60 bg-amber-950/30",
   necrotic: "text-purple-300 border-purple-800/60 bg-purple-950/30",
   terramancy: "text-lime-300 border-lime-800/60 bg-lime-950/30",
+  hexbinder: "text-fuchsia-300 border-fuchsia-800/60 bg-fuchsia-950/30",
   utility: "text-stone-300 border-stone-600/60 bg-stone-800/30",
 };
 
@@ -71,6 +72,7 @@ const SCHOOL_ICONS: Record<SpellSchool, string> = {
   radiant: "✨",
   necrotic: "💀",
   terramancy: "🌿",
+  hexbinder: "🪶",
   utility: "🔮",
 };
 
@@ -83,6 +85,7 @@ const SCHOOLS: SpellSchool[] = [
   "radiant",
   "necrotic",
   "terramancy",
+  "hexbinder",
   "utility",
 ];
 
