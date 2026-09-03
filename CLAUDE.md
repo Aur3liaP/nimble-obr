@@ -1409,6 +1409,23 @@ Reverting one reintroduces the bug.
   is a deliberate fourth, separate path (see above) and is NOT required to
   agree with these three on dice bounds — only on syntax-level rejections
   (unknown tokens, wrong arity, over-length, over-depth).
+  - **Known gap, found while trying `LVL*1d4` as a custom formula, not yet
+    fixed:** `validateFormulaSyntax` accepted it at save time; the very
+    first roll then threw `"Unexpected trailing input in formula: d4"`.
+    Root cause: `validateFormulaSyntax` resolves dice via `diceToAverage`,
+    whose `/(\d+)d(\d+)/gi` replace matches `NdX` **anywhere** in the
+    string, so `"1*1d4"` (post-substitution) becomes `"1*3"` and passes.
+    `parseDamageFormula` — the path `rollFormula`/`evalFormula` actually
+    use — only recognizes dice notation as the string's **leading** token
+    (`^(\d+d\d+)`); anything else falls through to `safeEval` on the raw,
+    un-stripped string, which doesn't know what to do with a `d` it never
+    stripped out. A dice token anywhere but the very start is accepted by
+    the lenient write-time check and rejected by the strict roll-time one.
+    Independent of, and found alongside, the separate "`×` isn't `*`, and
+    even `*` wouldn't help because a dice COUNT can't be a variable at
+    all" gap — see the multiplier-before-dice item in the spell content
+    batches' notes for that one. Not fixed here (data-only batch); tracked
+    for a dedicated parser batch alongside adding real multiplier support.
 - **A reflexive test iterates `FormulaContext`'s own keys** to verify every
   documented variable actually substitutes. `FLAW` was documented in the
   README and computed in `buildContext` but never wired up, and nothing caught
