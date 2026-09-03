@@ -35,6 +35,7 @@ export type SpellSchool =
   | "radiant"
   | "necrotic"
   | "terramancy"
+  | "hexbinder"
   | "utility";
 
 export interface HitPoints {
