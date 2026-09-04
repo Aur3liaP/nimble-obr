@@ -1402,30 +1402,66 @@ Reverting one reintroduces the bug.
   latter needs no character context and is a pure "does this even parse"
   gate, which is exactly the class of bug "Special" was (not a bounds
   problem, not a level-dependent problem, not a formula at all).
-- **Three paths must reject identically:** `validateFormula` (write-time,
-  against a real context), `evalFormulaWithContext` (display value),
-  `resolveFormulaDisplay` (display string). A cross-consistency test enforces
-  this. If you add a check to one, add it to all three. `validateFormulaSyntax`
-  is a deliberate fourth, separate path (see above) and is NOT required to
-  agree with these three on dice bounds — only on syntax-level rejections
-  (unknown tokens, wrong arity, over-length, over-depth).
-  - **Known gap, found while trying `LVL*1d4` as a custom formula, not yet
-    fixed:** `validateFormulaSyntax` accepted it at save time; the very
-    first roll then threw `"Unexpected trailing input in formula: d4"`.
-    Root cause: `validateFormulaSyntax` resolves dice via `diceToAverage`,
-    whose `/(\d+)d(\d+)/gi` replace matches `NdX` **anywhere** in the
-    string, so `"1*1d4"` (post-substitution) becomes `"1*3"` and passes.
-    `parseDamageFormula` — the path `rollFormula`/`evalFormula` actually
-    use — only recognizes dice notation as the string's **leading** token
-    (`^(\d+d\d+)`); anything else falls through to `safeEval` on the raw,
-    un-stripped string, which doesn't know what to do with a `d` it never
-    stripped out. A dice token anywhere but the very start is accepted by
-    the lenient write-time check and rejected by the strict roll-time one.
-    Independent of, and found alongside, the separate "`×` isn't `*`, and
-    even `*` wouldn't help because a dice COUNT can't be a variable at
-    all" gap — see the multiplier-before-dice item in the spell content
-    batches' notes for that one. Not fixed here (data-only batch); tracked
-    for a dedicated parser batch alongside adding real multiplier support.
+- **Three paths must reject identically — but only one of them, plus a
+  fourth, is actually wired into the app.** `validateFormula` (write-time,
+  against a real context), `evalFormulaWithContext` (display value), and
+  `resolveFormulaDisplay` (display string) are required to agree, enforced
+  by a cross-consistency test: if you add a check to one, add it to all
+  three. **`validateFormula` itself has zero production callers as of
+  1.5.1 — confirmed by grep, only ever called from tests.** The actual
+  write-time gate in the shipped app is `validateFormulaSyntax` (via
+  `formulaSyntaxError`, via `useFormulaField`), a deliberate fourth,
+  separate path (see above) NOT required to agree with the other three on
+  dice bounds — only on syntax-level rejections (unknown tokens, wrong
+  arity, over-length, over-depth). Whether to wire `validateFormula` into
+  a real write path or remove it is an open decision (see its own JSDoc
+  `@remarks`), not resolved by this note — the note exists so the
+  "three paths" framing above isn't misread as describing what actually
+  runs in production.
+  - **Real gap this produced, found via `LVL*1d4` as a custom formula,
+    fixed in 1.5.1:** `validateFormulaSyntax` accepted it at save time;
+    the very first roll then threw `"Unexpected trailing input in
+    formula: d4"`. Root cause: `validateFormulaSyntax` resolved dice via
+    `diceToAverage`, whose `/(\d+)d(\d+)/gi` replace matches `NdX`
+    **anywhere** in the string, so `"1*1d4"` (post-substitution) became
+    `"1*3"` and passed. `parseDamageFormula` — the path `rollFormula`
+    actually uses — only recognizes dice notation as the string's
+    **leading** token (`^(\d+d\d+)`); anything else falls through to
+    `safeEval` on the raw, un-stripped string, which doesn't know what to
+    do with a `d` it never stripped out. A dice token anywhere but the
+    very start was accepted by the lenient write-time check and rejected
+    by the strict roll-time one — confirmed to affect 8 distinct malformed
+    shapes (multiplier before dice, dice in parens, dice followed by a
+    multiplier), not just the one reported formula.
+    **Fix:** `validateFormulaSyntax` now runs a SECOND gate after its
+    existing arithmetic check: it calls `parseDamageFormula` itself
+    (against the same neutral context, with a new `enforceLimits: false`
+    parameter threaded through to `parseDamageFormula`'s own
+    `resolveDynamicDice` call — the one behavioral addition to
+    `parseDamageFormula`, inert for its only production caller,
+    `rollFormulaWithContext`, which keeps the `true` default) — reusing
+    the SAME position constraint `rollFormula` already enforces, instead
+    of inventing a third definition of "where dice may appear" to sit
+    alongside `diceToAverage`'s and `resolveFormulaDisplay`'s own (still
+    both unanchored — deliberately NOT unified in this batch, since 1.6.0's
+    multiplier support will change what "valid position" even means, and
+    unifying twice would be double the work). Independent of, and found
+    alongside, the separate "`×` isn't `*`, and even `*` wouldn't help
+    because a dice COUNT can't be a variable at all" gap — see the
+    multiplier-before-dice item in the spell content batches' notes for
+    that one; multiplier support itself is still not implemented, tracked
+    for 1.6.0.
+    **Known residual gap, not fixed by this batch:** `useFormulaField`'s
+    `discardedWarning` ("Formula edit wasn't saved...") fires whenever
+    `closeEdit()` runs on a formula that fails syntax — including one that
+    was ALREADY invalid before the edit panel was even opened (that
+    formula is `touched` from mount, since a non-empty `serverValue`
+    starts `touched: true`), not just one the player just broke mid-edit.
+    Opening and closing such a panel without touching the formula shows
+    "wasn't saved" even though nothing was lost — the stored formula is
+    untouched either way. Shared by all 6 formula write sites (spell/
+    item/action create-and-edit forms), since they all route through this
+    one hook. Tracked for 1.6.0 alongside the regex unification above.
 - **A reflexive test iterates `FormulaContext`'s own keys** to verify every
   documented variable actually substitutes. `FLAW` was documented in the
   README and computed in `buildContext` but never wired up, and nothing caught

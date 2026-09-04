@@ -514,10 +514,32 @@ export function diceToAverage(
 /**
  * Splits a formula into its leading dice notation and its numeric modifier.
  *
+ * Also the choke point for this codebase's "where is dice notation allowed
+ * to appear" constraint: dice must be the substituted formula's very first
+ * token (or absent entirely, or positional) — anything else, dice-shaped
+ * text included, is handed to {@link safeEval} as-is and rejected the same
+ * way any other malformed arithmetic is. {@link validateFormulaSyntax}
+ * reuses this exact function (rather than a separate position check) so a
+ * write-time-accepted formula is, by construction, one this function can
+ * actually split — see that function's own doc for why a second,
+ * independent definition of "valid dice position" used to exist and
+ * disagree with this one.
+ *
  * @example parseDamageFormula("1d8+STR+2", ctx) // → { diceNotation: "1d8", modifier: <STR+2> }
  *
  * @param formula - Raw formula (may contain variables and dice).
  * @param ctx - Context used to resolve variables before splitting.
+ * @param enforceLimits - Passed straight through to the internal
+ * {@link resolveDynamicDice} call. Defaults to `true`, unchanged for this
+ * function's only production caller (`rollFormulaWithContext`). Only
+ * {@link validateFormulaSyntax} passes `false`, for the same reason it
+ * already passes `false` to `resolveDynamicDice`/`diceToAverage` directly
+ * elsewhere in this file: dice bounds are a roll-time concern, checked
+ * against a real character, not a write-time one — see that function's own
+ * doc for the full reasoning. This parameter changes nothing for any
+ * existing caller; it exists solely so `validateFormulaSyntax` can reuse
+ * this function's position constraint without also inheriting its bounds
+ * enforcement.
  * @returns The dice part (e.g. "1d8") and the resolved numeric modifier.
  * If there is no leading dice notation, `diceNotation` is empty and the
  * whole formula is evaluated as the modifier. `positional` is set instead
@@ -527,10 +549,11 @@ export function diceToAverage(
 export function parseDamageFormula(
   formula: string,
   ctx: FormulaContext,
+  enforceLimits: boolean = true,
 ): { diceNotation: string; modifier: number; positional?: { sides: number; advantage: boolean } } {
   // Substitute variables first, then split dice from modifiers
   let subbed = substituteVariables(formula, ctx);
-  subbed = resolveDynamicDice(subbed, formula);
+  subbed = resolveDynamicDice(subbed, formula, enforceLimits);
 
   // Positional dice (d44/d66/d88, optional advantage "a") — checked before
   // the plain NdX match below, since normalizeImplicitDiceCount deliberately
@@ -1333,6 +1356,14 @@ export function evalFormulaWithContext(
  * at save time instead of merely failing safely (but silently, from the
  * saver's point of view) the next time someone tries to roll or display it.
  *
+ * @remarks Status as of 1.5.1: this is currently NOT wired into any write
+ * path in the app — grep confirms zero production callers, only tests.
+ * `validateFormulaSyntax` (context-free, see its own doc) is the actual
+ * write-time gate in production today, via `useFormulaField`. Whether to
+ * wire this one in too (it additionally needs a real character context,
+ * which not every write site has to hand) or remove it is a decision for
+ * a future batch, not made here.
+ *
  * @param formula - Raw formula as a player/GM is about to save it.
  * @param ctx - Context used to resolve variables/dynamic dice before checking limits.
  * @throws {FormulaError} if the formula violates any safety limit.
@@ -1443,10 +1474,35 @@ const NEUTRAL_VALIDATION_CONTEXT: FormulaContext = {
  *   (`MAX_PARSE_DEPTH`, still enforced — that's a parser-shape concern,
  *   not a resolved-value one), and dice notation shaped like `NdX`.
  *
+ * @remarks Second gate, added in 1.5.1: a formula can pass the arithmetic
+ * check above and still be unrollable, because that check (via
+ * {@link diceToAverage}) finds dice notation ANYWHERE in the formula and
+ * replaces it with its average before checking the rest as ordinary
+ * arithmetic — so `"LVL*1d4"` averages to `"1*3"` (fine, arithmetically)
+ * even though {@link rollFormula} (via {@link parseDamageFormula}, which
+ * only recognizes dice notation as the formula's leading token) can never
+ * actually roll it. Rather than inventing a second, independent
+ * definition of "where dice are allowed to appear" here, this gate calls
+ * `parseDamageFormula` itself, against the same neutral context and with
+ * `enforceLimits: false` (see its own `@param enforceLimits` doc) — a
+ * formula this function accepts is therefore one `parseDamageFormula` can
+ * actually split, by construction, not by two definitions happening to
+ * agree. Deliberately run as a SEPARATE, second step after the arithmetic
+ * check above (not a replacement for it): the arithmetic check's errors
+ * (unrecognized token, wrong arity, malformed number, over-length,
+ * over-depth) are specific and already GM-legible; only once a formula
+ * has already passed all of that do we know for certain that a
+ * `parseDamageFormula` failure here can only mean one thing — dice
+ * notation sitting somewhere this app's roll engine can't reach it — so
+ * the message below can be equally specific instead of reusing whatever
+ * internal parser wording `parseDamageFormula` happened to throw.
+ *
  * @param formula - Raw formula as a player/GM is about to save it.
  * @throws {FormulaError} if the formula is too long, too deeply nested,
- * uses an unrecognized token or wrong function arity, or otherwise fails
- * to parse to a real number once substituted against the neutral context.
+ * uses an unrecognized token or wrong function arity, fails to parse to a
+ * real number once substituted against the neutral context, or places
+ * dice notation somewhere `parseDamageFormula` can't roll it from (see
+ * the second `@remarks` block above).
  */
 export function validateFormulaSyntax(formula: string): void {
   if (formula.length > MAX_FORMULA_LENGTH) {
@@ -1461,6 +1517,20 @@ export function validateFormulaSyntax(formula: string): void {
   if (isNaN(result)) {
     throw new FormulaError(
       `Could not evaluate formula: "${formula}" (resolved to "${averaged}").`,
+    );
+  }
+
+  // Second gate — see the @remarks block above for why this is a
+  // deliberate, separate step rather than folded into the check above.
+  try {
+    parseDamageFormula(formula, NEUTRAL_VALIDATION_CONTEXT, false);
+  } catch (err) {
+    if (!(err instanceof FormulaError)) throw err;
+    throw new FormulaError(
+      `This formula can't be rolled: dice notation must come at the very ` +
+        `start, optionally followed by a flat +/- bonus (e.g. "1d6+STR"). ` +
+        `A multiplier before dice, dice inside parentheses, or dice ` +
+        `anywhere but the start of the formula isn't supported yet.`,
     );
   }
 }
