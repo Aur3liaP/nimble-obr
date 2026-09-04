@@ -2041,3 +2041,113 @@ describe("validateFormulaSyntax: write-time gate validates syntax, not resolved 
     expect(() => formulaSyntaxError("garbage(1)")).not.toThrow();
   });
 });
+
+describe("validateFormulaSyntax: dice-position gate (1.5.1 fix)", () => {
+  // Bug report: "LVL*1d4" saved successfully as a custom formula, then
+  // failed on the very first roll with "Unexpected trailing input in
+  // formula: d4". validateFormulaSyntax's original arithmetic-only check
+  // (diceToAverage finds NdX ANYWHERE in the string and averages it before
+  // checking the rest as ordinary arithmetic) doesn't agree with
+  // rollFormula's actual constraint (parseDamageFormula only recognizes
+  // dice notation as the formula's leading token). This describe block
+  // covers the second gate added to close that gap: it calls
+  // parseDamageFormula itself (the same function rollFormula uses),
+  // against the neutral context, so a formula accepted here is one
+  // rollFormula can actually split — not two independently-written
+  // definitions of "valid dice position" happening to agree.
+
+  it("rejects every formula from the diagnostic's own table that used to pass all four checks and fail at roll time", () => {
+    const badFormulas = [
+      "LVL*1d4", // the original bug report
+      "2*1d6",
+      "STR*1d8",
+      "(1d6)",
+      "2*(1d6+STR)",
+      "d4*3",
+      "1d6*2",
+      "1d6*STR",
+    ];
+    for (const formula of badFormulas) {
+      const error = formulaSyntaxError(formula);
+      expect(error, `expected "${formula}" to be rejected`).toBeDefined();
+      // GM-legible: names the actual problem (dice position), doesn't leak
+      // the raw parser wording ("trailing input"/"unrecognized token")
+      // that used to differ per sub-case — see the diagnostic's own
+      // finding that these 8 formulas fail via two different internal
+      // error shapes at roll time. One clear message regardless of which
+      // sub-case produced it.
+      expect(error).toContain("dice notation must come at the very start");
+    }
+  });
+
+  it("still rejects formulas that were already rejected everywhere (this gate must not change their outcome or message)", () => {
+    // Reject for a DIFFERENT reason than dice position — the new gate
+    // must never even run for these, since the arithmetic check above it
+    // already throws first.
+    expect(formulaSyntaxError("1d4 foo")).toContain("Unexpected trailing input");
+    expect(formulaSyntaxError("1d6+")).toContain("Unrecognized token");
+    expect(formulaSyntaxError("1 1d6")).toContain("Unexpected trailing input");
+    expect(formulaSyntaxError("1d4 1d6")).toContain("Unexpected trailing input");
+    expect(formulaSyntaxError("1d6x2")).toContain("Unexpected trailing input");
+  });
+
+  it("does not reject formulas that are valid today: known-good shapes, positional dice, dynamic dice, KEYd20, and flat no-dice formulas", () => {
+    const goodFormulas = [
+      "1d8+STR", // control from the diagnostic table
+      "2d6", // control from the diagnostic table
+      "1d6+STR+2",
+      "d66", // positional
+      "d66a", // positional, advantage variant
+      "d44",
+      "d88a",
+      "incrementdice(1,LEVEL)d6",
+      "1dstepdice(LEVEL,4,6,8,10,12)",
+      "KEYd20",
+      "STR + 2", // flat, no dice at all
+      "floor(LEVEL / 2) + STR",
+    ];
+    for (const formula of goodFormulas) {
+      expect(
+        formulaSyntaxError(formula),
+        `expected "${formula}" to be accepted`,
+      ).toBeUndefined();
+    }
+  });
+
+  it("still waves through a real character's out-of-range dice bounds — this gate is about POSITION, not bounds, per the existing bounds contract", () => {
+    // Same formulas already covered by the "point 8" describe block above,
+    // re-asserted here specifically because this new gate calls
+    // parseDamageFormula with enforceLimits explicitly threaded through —
+    // a regression here would mean that plumbing leaked `true` by mistake.
+    expect(formulaSyntaxError("99999d6")).toBeUndefined();
+    expect(formulaSyntaxError("incrementdice(150,LEVEL)d6")).toBeUndefined();
+  });
+
+  describe("mutation guards", () => {
+    // A neutral-ish context (level 1, matching NEUTRAL_VALIDATION_CONTEXT's
+    // own level) — the formulas exercised here only ever reference LVL,
+    // so the exact stat values don't matter, only the level does.
+    const ctx = buildContext(makeCharacter({ level: 1 }));
+
+    it("regression: if the second gate is removed entirely, the known-bad formulas are wrongly accepted again", () => {
+      // Directly exercises parseDamageFormula the way the removed gate
+      // would have, to prove it's the thing actually catching these —
+      // not a coincidence of the arithmetic check above it.
+      expect(() => parseDamageFormula("LVL*1d4", ctx, false)).toThrow();
+      expect(() => parseDamageFormula("1d6*2", ctx, false)).toThrow();
+    });
+
+    it("regression: if enforceLimits were wired to true for this gate's parseDamageFormula call, a legitimate high-count dynamic formula would be wrongly rejected", () => {
+      // Same case as the bounds test above, called directly against
+      // parseDamageFormula with enforceLimits: true to show what WOULD
+      // happen if that plumbing regressed — confirms the `false` argument
+      // in validateFormulaSyntax is load-bearing, not decorative.
+      expect(() =>
+        parseDamageFormula("incrementdice(150,LEVEL)d6", ctx, true),
+      ).toThrow();
+      expect(() =>
+        parseDamageFormula("incrementdice(150,LEVEL)d6", ctx, false),
+      ).not.toThrow();
+    });
+  });
+});
