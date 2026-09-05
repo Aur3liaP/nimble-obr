@@ -1371,13 +1371,13 @@ export const BASE_SPELLS: SpellTemplate[] = [
   {
     name: "Terror",
     sourceKey: "terror",
-    catalogVersion: 1,
+    catalogVersion: 2,
     type: "spell",
     spellTier: 5,
     spellSchool: "hexbinder" as SpellSchool,
     actionCost: 2,
     range: "8",
-    formula: "",
+    formula: "LVL*1d4",
     description:
       "Single Target. Damage: LVL×1d4 (ignoring armor). Advantage for each Affliction on the target.",
   },

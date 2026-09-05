@@ -13,6 +13,7 @@ import { BASE_SPELLS } from "../data/spells";
 import { BASIC_EQUIPMENTS } from "../data/equipment";
 import {
   buildContext,
+  DICE_TOKEN_SOURCE,
   diceToAverage,
   evalFormula,
   evalFormulaWithContext,
@@ -22,12 +23,12 @@ import {
   isEngineRollableItem,
   normalizeSubstitutedSignsForDisplay,
   parseDamageFormula,
+  POSITIONAL_DICE_SIDES,
   resolveFormulaDisplay,
   rollFormula,
   rollFormulaWithContext,
   safeEval,
   substituteVariables,
-  validateFormula,
   validateFormulaSyntax,
   VARIABLE_TABLE,
 } from "./formulaParser";
@@ -691,59 +692,75 @@ describe("rollFormula", () => {
   });
 });
 
-describe("validateFormula (write-time safety gate)", () => {
-  it("does not throw for a well-formed formula within all limits", () => {
-    const ctx = buildContext(makeCharacter());
-    expect(() => validateFormula("1d8 + STR + 2", ctx)).not.toThrow();
-  });
-
-  it("throws for dice count/sides beyond the safety limits", () => {
-    const ctx = buildContext(makeCharacter());
-    expect(() => validateFormula("101d6", ctx)).toThrow();
-    expect(() => validateFormula("1d1001", ctx)).toThrow();
-  });
-
-  it("throws for dynamically-resolved dice beyond the safety limits", () => {
-    const ctx = buildContext(makeCharacter({ level: 500 }));
-    expect(() => validateFormula("incrementdice(1,LEVEL)d6", ctx)).toThrow();
-  });
-
-  it("throws for an over-length formula", () => {
-    const ctx = buildContext(makeCharacter());
-    expect(() => validateFormula("1+".repeat(150) + "1", ctx)).toThrow();
-  });
-
-  it("throws when safeEval's character whitelist rejects the resolved formula, same as the read paths", () => {
-    // Was previously passed through silently (the return value of the
-    // final safeEval call was discarded): a formula accepted at save time
-    // could still fail the moment someone actually rolled or displayed it.
-    const ctx = buildContext(makeCharacter());
-    expect(() => validateFormula("STR;2", ctx)).toThrow(FormulaError);
-  });
-});
+// `validateFormula` (context-bound write-time safety gate) was removed in
+// 1.6.0 — see CLAUDE.md's "Formula parser" section. Its coverage
+// (well-formed formulas passing, dice count/sides/length limits enforced,
+// safeEval's whitelist rejecting a bad resolved formula) already exists
+// via the real production paths: the "parseDamageFormula" and "rollFormula"
+// describe blocks above cover the bounds/length cases against a real
+// context, and the "cross-path consistency" describe block below covers
+// the safeEval-whitelist case across all four real paths.
 
 describe("cross-path consistency: an invalid formula must be rejected identically everywhere (point 1)", () => {
-  // The three read/write paths (validateFormula at save time,
-  // evalFormulaWithContext and resolveFormulaDisplay at read time) must
-  // agree on what counts as invalid. They diverged once already
-  // (validateFormula discarded safeEval's return value while the other two
-  // threw on NaN) — this test exists specifically to catch that class of
-  // regression again, not just today's specific bug.
+  // 1.6.0: rebuilt on the FOUR paths that actually exist and run in
+  // production today — validateFormulaSyntax (the real write-time gate),
+  // evalFormulaWithContext, resolveFormulaDisplay, and rollFormula.
+  //
+  // The version of this test that predated 1.5.1 instead paired
+  // `validateFormula` (removed in 1.6.0, zero production callers even back
+  // then), evalFormulaWithContext, and resolveFormulaDisplay — neither
+  // `validateFormulaSyntax` nor `rollFormula` was in the picture, which is
+  // exactly why that version could never have caught the 1.5.1 bug
+  // (`validateFormulaSyntax` accepting a formula `rollFormula` then
+  // couldn't actually roll): the two paths that disagreed with each other
+  // weren't part of the test. This version would have caught it.
+  //
+  // Only genuine SYNTAX-level failures belong in this loop — unknown
+  // tokens, malformed numbers, wrong arity. A BOUNDS-only failure (e.g.
+  // dice sides below the lower limit) is deliberately NOT something
+  // validateFormulaSyntax agrees on rejecting (see its own doc: bounds are
+  // a roll-time concern, checked against the real character, not a
+  // write-time one) — that divergence is itself pinned by a dedicated test
+  // right below this one, not folded into this loop.
   it.each([
     ["STR;2", "character whitelist rejects a leftover unsubstituted symbol"],
     ["1d6+.", "a bare '.' with no digits is not a valid number"],
-    ["KEYd0", "sides below the lower bound"],
-  ])("rejects %s (%s) in validateFormula, evalFormulaWithContext, and resolveFormulaDisplay alike", (formula) => {
+    // 1.6.0: a multiplier-notation formula, so the new syntax is covered by
+    // this contract from the start, not just by the dice-multiplier's own
+    // describe block.
+    ["2*1d6+.", "multiplier notation (1.6.0) with the same malformed trailing modifier"],
+  ])(
+    "rejects %s (%s) in validateFormulaSyntax, evalFormulaWithContext, resolveFormulaDisplay, and rollFormula alike",
+    (formula) => {
+      const char = makeCharacter({ keyStats: ["str"], stats: { str: 3, dex: 0, int: 0, wil: 0 } });
+
+      expect(formulaSyntaxError(formula)).toBeTruthy();
+
+      const evalResult = evalFormula(formula, char);
+      expect(evalResult.error).toBeTruthy();
+
+      const displayResult = resolveFormulaDisplay(formula, char);
+      expect(displayResult.error).toBeTruthy();
+
+      const rollResult = rollFormula(formula, char);
+      expect(rollResult.error).toBeTruthy();
+    },
+  );
+
+  it("the one deliberate exception: a BOUNDS-only failure (KEYd0, sides below the lower limit) is rejected by the three real-context paths but waved through by validateFormulaSyntax — by design, not an oversight", () => {
     const char = makeCharacter({ keyStats: ["str"], stats: { str: 3, dex: 0, int: 0, wil: 0 } });
-    const ctx = buildContext(char);
 
-    expect(() => validateFormula(formula, ctx)).toThrow(FormulaError);
+    // validateFormulaSyntax substitutes against a neutral (KEY=1) context
+    // with enforceLimits: false — "KEYd0" never even reaches a
+    // count/sides check here, by design.
+    expect(formulaSyntaxError("KEYd0")).toBeUndefined();
 
-    const evalResult = evalFormulaWithContext(formula, ctx);
-    expect(evalResult.error).toBeTruthy();
-
-    const displayResult = resolveFormulaDisplay(formula, char);
-    expect(displayResult.error).toBeTruthy();
+    // The three paths that resolve against the REAL character (KEY=3 here)
+    // all enforce bounds by default and correctly reject "3d0" (a die
+    // needs at least 2 sides).
+    expect(evalFormula("KEYd0", char).error).toBeTruthy();
+    expect(resolveFormulaDisplay("KEYd0", char).error).toBeTruthy();
+    expect(rollFormula("KEYd0", char).error).toBeTruthy();
   });
 });
 
@@ -1312,6 +1329,106 @@ describe("positional dice notation (d44/d66/d88, Nimble Core Rules 2nd printing)
   });
 });
 
+describe("single canonical dice-token source (1.6.0 position-detection unification)", () => {
+  // Before 1.6.0, "where can dice notation appear" had three independently
+  // hand-written answers in this file: diceToAverage's global (unanchored)
+  // replace, parseDamageFormula's anchored (^) match, and
+  // resolveFormulaDisplay's own unanchored match — plus a fourth,
+  // unnoticed duplicate of diceToAverage's own regex inside
+  // resolveDynamicDice's bounds-check loop. diceToAverage/
+  // resolveDynamicDice legitimately still need to find dice notation
+  // ANYWHERE (a lenient arithmetic pass and a bounds sweep, neither a
+  // rollability check) — see DICE_TOKEN_SOURCE's own doc for why those two
+  // are deliberately not unified with parseDamageFormula's leading-only
+  // position check (matchLeadingDiceToken). What IS unified: every one of
+  // those regexes is now built from the exported DICE_TOKEN_SOURCE
+  // fragments instead of a hand-retyped literal, and the positional
+  // alternation is derived from POSITIONAL_DICE_SIDES instead of a
+  // separately hand-typed "44|66|88". These tests build their OWN
+  // expectation from the same two exports, independent of any one
+  // function's internals, and cross-check every consumer against it — a
+  // hand-copied duplicate regex quietly reintroduced at any call site that
+  // recognizes a different set of tokens will disagree with at least one
+  // check below and go red. (resolveFormulaDisplay is the one deliberate,
+  // documented exception — see its own comment — so it's not exercised
+  // here.)
+
+  it("DICE_TOKEN_SOURCE.positional's alternation is derived from POSITIONAL_DICE_SIDES, not a separately hand-typed list", () => {
+    expect(DICE_TOKEN_SOURCE.positional).toContain(POSITIONAL_DICE_SIDES.join("|"));
+  });
+
+  it.each(POSITIONAL_DICE_SIDES)(
+    "every positional size (d%i) is recognized identically as positional by diceToAverage and rollFormula (via parseDamageFormula)",
+    (sides) => {
+      const char = makeCharacter();
+      for (const token of [`d${sides}`, `d${sides}a`]) {
+        // diceToAverage: fully resolved to a plain number, never left as
+        // dice notation — a positional token averaged as a generic NdX
+        // instead would leave a stray "d" behind or produce a different
+        // number (positionalDiceAverage's positional read vs. a simple
+        // NdX sum are different formulas).
+        expect(diceToAverage(token)).not.toMatch(/d/i);
+
+        // rollFormula: takes the positional path (rollPositionalDice),
+        // never the generic NdX one — 2 rolls (3 for the "a" variant),
+        // and never eligible for crit/fumble.
+        const result = rollFormula(token, char);
+        expect(result.error).toBeUndefined();
+        expect(result.canCritOrFumble).toBe(false);
+        expect(result.rolls.length).toBe(token.endsWith("a") ? 3 : 2);
+      }
+    },
+  );
+
+  it("a plain NdX using the same digits as a positional size is NOT treated as positional, once it carries an explicit count", () => {
+    const char = makeCharacter();
+    for (const sides of POSITIONAL_DICE_SIDES) {
+      const result = rollFormula(`2d${sides}`, char); // explicit count -> literal (if unusual) NdX roll
+      expect(result.error).toBeUndefined();
+      expect(result.canCritOrFumble).toBe(true); // genuine NdX, not positional
+      expect(result.rolls.length).toBe(2);
+    }
+  });
+
+  it("reconstructing 'does this formula start with a dice token' purely from the exported DICE_TOKEN_SOURCE fragments (independent of parseDamageFormula's own internals) agrees with rollFormula's actual accept/reject split", () => {
+    const leadingRe = new RegExp(
+      `^(?:${DICE_TOKEN_SOURCE.positional}|${DICE_TOKEN_SOURCE.plain})`,
+      "i",
+    );
+    const char = makeCharacter({ stats: { str: 3, dex: 0, int: 0, wil: 0 } });
+    const ctx = buildContext(char);
+
+    // Substituted formulas that lead with a dice token — must roll
+    // successfully.
+    for (const formula of ["1d8+STR", "2d6", "d66", "d66a", "12d100+2"]) {
+      expect(leadingRe.test(substituteVariables(formula, ctx))).toBe(true);
+      expect(rollFormula(formula, char).error).toBeUndefined();
+    }
+
+    // No dice at all — no leading match, but still a valid flat roll.
+    expect(leadingRe.test(substituteVariables("STR + 2", ctx))).toBe(false);
+    expect(rollFormula("STR + 2", char).error).toBeUndefined();
+
+    // Dice notation present but NOT the leading token — no leading match,
+    // and rollFormula must reject these per the position contract, not
+    // silently roll something else. "1+1d20"/"STR+1d20" specifically:
+    // dropping the "^" anchor from matchLeadingDiceToken's plain match
+    // still finds "1d20" (just not at the start), and slicing the
+    // remainder by the MATCHED TEXT's length instead of its actual index
+    // happens to leave a clean, valid "20" behind for this exact digit
+    // layout — so a naive anchor-loss bug here doesn't merely change the
+    // error message (as it does for shorter formulas like "2+1d6"), it
+    // silently ACCEPTS and rolls "1d20+20", a wrong success. Confirmed by
+    // hand: reintroducing the dropped "^" makes this specific assertion
+    // go red while formulas like "2+1d6" stay green by coincidence — see
+    // the describe block's own comment.
+    for (const formula of ["1+1d20", "STR+1d20"]) {
+      expect(leadingRe.test(substituteVariables(formula, ctx))).toBe(false);
+      expect(rollFormula(formula, char).error).toBeDefined();
+    }
+  });
+});
+
 describe("substituteVariables word-boundary fix (point 1)", () => {
   // \bKEY\b never matched inside "KEYD20": \b requires a transition
   // between a word character and a non-word character, but digits count
@@ -1792,10 +1909,18 @@ describe("normalizeSubstitutedSignsForDisplay tolerates whitespace around the si
 
 describe("game data validation (point 4)", () => {
   // Iterates every formula in src/data/spells.ts and src/data/equipment.ts
-  // through validateFormula, and additionally requires a non-empty
-  // diceNotation (via parseDamageFormula) for any formula whose raw text
-  // looks like it should roll dice — this is what originally caught
-  // d66/d88/d44 evaluating to a flat 0 instead of rolling.
+  // through parseDamageFormula — the actual function `rollFormula` uses —
+  // against a real, level-20 character, and additionally requires a
+  // non-empty diceNotation for any formula whose raw text looks like it
+  // should roll dice. This is what originally caught d66/d88/d44
+  // evaluating to a flat 0 instead of rolling.
+  //
+  // 1.6.0: this used to go through `validateFormula` (removed — see
+  // CLAUDE.md's "Formula parser" section for why) rather than
+  // `parseDamageFormula` directly. Switching to `parseDamageFormula` makes
+  // this test exercise the SAME function `rollFormula` calls in
+  // production, for every catalog entry — strictly closer to "is this
+  // actually rollable" than the old validateFormula-based check was.
   //
   // No hardcoded list of "known-bad" formulas: entries meant to be resolved
   // by a human rather than the engine (e.g. equipment reading
@@ -1848,26 +1973,20 @@ describe("game data validation (point 4)", () => {
     expect(manualCount).toBe(3); // Weapon of Animosity, Weapon of Wounding, Vindication
   });
 
-  it("validates every rollable spell/equipment formula, with dice-shaped formulas producing real dice notation", () => {
+  it("validates every rollable spell/equipment formula against a real character (the actual roll path), with dice-shaped formulas producing real dice notation", () => {
     const failures: string[] = [];
 
     for (const { name, formula } of entries) {
       let validationError: string | null = null;
+      let diceNotation = "";
       try {
-        validateFormula(formula, ctx);
+        diceNotation = parseDamageFormula(formula, ctx).diceNotation;
       } catch (err) {
         validationError = err instanceof Error ? err.message : String(err);
       }
 
-      let missingDice = false;
-      if (!validationError && looksLikeDice(formula)) {
-        try {
-          const { diceNotation } = parseDamageFormula(formula, ctx);
-          missingDice = diceNotation === "";
-        } catch (err) {
-          validationError = err instanceof Error ? err.message : String(err);
-        }
-      }
+      const missingDice =
+        validationError === null && looksLikeDice(formula) && diceNotation === "";
 
       if (validationError !== null) {
         failures.push(`${name} :: "${formula}" :: ${validationError}`);
@@ -1882,16 +2001,16 @@ describe("game data validation (point 4)", () => {
   });
 
   it("every rollable entry's formula also passes validateFormulaSyntax, independent of any one character's context", () => {
-    // Distinct from the test above: validateFormula needs a real character
-    // context (dice-count/sides bounds are checked against it, and dynamic
-    // dice like incrementdice/stepdice resolve differently per level).
-    // validateFormulaSyntax needs neither — it's a pure "does this even
-    // parse" gate (see its own doc comment), which is exactly the class of
-    // bug that shipped here: "Special" isn't a bounds problem or a
-    // level-dependent problem, it's not a formula at all. Kept as its own
-    // assertion, on the same `entries` list, so this specific gate is
-    // traceable on its own rather than folded into the mixed failure list
-    // above.
+    // Distinct from the test above: parseDamageFormula there resolves
+    // against a real character context (dice-count/sides bounds are
+    // checked against it, and dynamic dice like incrementdice/stepdice
+    // resolve differently per level). validateFormulaSyntax needs neither
+    // — it's a pure "does this even parse" gate (see its own doc comment),
+    // which is exactly the class of bug that shipped here: "Special"
+    // isn't a bounds problem or a level-dependent problem, it's not a
+    // formula at all. Kept as its own assertion, on the same `entries`
+    // list, so this specific gate is traceable on its own rather than
+    // folded into the mixed failure list above.
     const failures: string[] = [];
     for (const { name, formula } of entries) {
       try {
@@ -2016,13 +2135,15 @@ describe("validateFormulaSyntax: write-time gate validates syntax, not resolved 
     expect(formulaSyntaxError("incrementdice(150,LEVEL)d6")).toBeUndefined();
   });
 
-  it("still enforces bounds against a real character, via the unchanged validateFormula, at the same LEVEL that validateFormulaSyntax waves through", () => {
-    const ctx = buildContext(makeCharacter({ level: 500 }));
-    expect(() => validateFormula("incrementdice(1,LEVEL)d6", ctx)).toThrow();
+  it("still enforces bounds against a real character, via rollFormula (the actual roll path — validateFormula, which used to demonstrate this, was removed in 1.6.0), at the same case validateFormulaSyntax waves through", () => {
+    const char = makeCharacter({ level: 500 });
+    expect(rollFormula("incrementdice(1,LEVEL)d6", char).error).toBeDefined();
     const charNoKey = makeCharacter({ keyStats: [] });
-    // KEYd20 -> "0d20" for this real character; validateFormula (the
-    // context-bound gate, not validateFormulaSyntax) must still reject it.
-    expect(() => validateFormula("KEYd20", buildContext(charNoKey))).toThrow();
+    // KEYd20 -> "0d20" for this real character; rollFormula (the real
+    // roll path, resolved against the actual character) must still
+    // reject it, even though validateFormulaSyntax's neutral context
+    // (KEY=1) waves it through.
+    expect(rollFormula("KEYd20", charNoKey).error).toBeDefined();
   });
 
   it("still rejects genuine syntax problems: unrecognized tokens, wrong function arity, and over-length formulas", () => {
@@ -2055,27 +2176,23 @@ describe("validateFormulaSyntax: dice-position gate (1.5.1 fix)", () => {
   // against the neutral context, so a formula accepted here is one
   // rollFormula can actually split — not two independently-written
   // definitions of "valid dice position" happening to agree.
+  //
+  // 1.6.0 UPDATE: 6 of the original diagnostic table's 8 "bad" formulas
+  // ("LVL*1d4", "2*1d6", "STR*1d8", "d4*3", "1d6*2", "1d6*STR") are now
+  // VALID — they're exactly the two multiplier shapes CLAUDE.md's "Formula
+  // parser" section documents as added in 1.6.0. Moved to the "known-good"
+  // test below. The remaining 2 ("(1d6)", "2*(1d6+STR)") still involve
+  // parentheses, which 1.6.0 deliberately does NOT support (see
+  // matchLeadingDiceToken's own doc) — they stay in this describe block,
+  // still rejected with the same message.
 
-  it("rejects every formula from the diagnostic's own table that used to pass all four checks and fail at roll time", () => {
-    const badFormulas = [
-      "LVL*1d4", // the original bug report
-      "2*1d6",
-      "STR*1d8",
-      "(1d6)",
-      "2*(1d6+STR)",
-      "d4*3",
-      "1d6*2",
-      "1d6*STR",
-    ];
+  it("still rejects the parenthesized formulas from the diagnostic's own table — parentheses are deliberately out of scope for the 1.6.0 multiplier work", () => {
+    const badFormulas = ["(1d6)", "2*(1d6+STR)"];
     for (const formula of badFormulas) {
       const error = formulaSyntaxError(formula);
       expect(error, `expected "${formula}" to be rejected`).toBeDefined();
       // GM-legible: names the actual problem (dice position), doesn't leak
-      // the raw parser wording ("trailing input"/"unrecognized token")
-      // that used to differ per sub-case — see the diagnostic's own
-      // finding that these 8 formulas fail via two different internal
-      // error shapes at roll time. One clear message regardless of which
-      // sub-case produced it.
+      // the raw parser wording ("trailing input"/"unrecognized token").
       expect(error).toContain("dice notation must come at the very start");
     }
   });
@@ -2091,7 +2208,7 @@ describe("validateFormulaSyntax: dice-position gate (1.5.1 fix)", () => {
     expect(formulaSyntaxError("1d6x2")).toContain("Unexpected trailing input");
   });
 
-  it("does not reject formulas that are valid today: known-good shapes, positional dice, dynamic dice, KEYd20, and flat no-dice formulas", () => {
+  it("does not reject formulas that are valid today: known-good shapes, positional dice, dynamic dice, KEYd20, flat no-dice formulas, and both multiplier shapes (1.6.0)", () => {
     const goodFormulas = [
       "1d8+STR", // control from the diagnostic table
       "2d6", // control from the diagnostic table
@@ -2105,6 +2222,15 @@ describe("validateFormulaSyntax: dice-position gate (1.5.1 fix)", () => {
       "KEYd20",
       "STR + 2", // flat, no dice at all
       "floor(LEVEL / 2) + STR",
+      // 1.6.0: multiplier before the dice — moved here from the diagnostic
+      // table's "bad" list, see this describe block's own comment above.
+      "LVL*1d4", // the original bug report; Terror's formula (1.6.0)
+      "2*1d6",
+      "STR*1d8",
+      // 1.6.0: multiplier after the dice.
+      "d4*3", // bare implicit-count dice + multiplier
+      "1d6*2",
+      "1d6*STR",
     ];
     for (const formula of goodFormulas) {
       expect(
@@ -2129,12 +2255,16 @@ describe("validateFormulaSyntax: dice-position gate (1.5.1 fix)", () => {
     // so the exact stat values don't matter, only the level does.
     const ctx = buildContext(makeCharacter({ level: 1 }));
 
-    it("regression: if the second gate is removed entirely, the known-bad formulas are wrongly accepted again", () => {
+    it("regression: if the second gate is removed entirely, the known-bad (parenthesized) formulas are wrongly accepted again", () => {
       // Directly exercises parseDamageFormula the way the removed gate
       // would have, to prove it's the thing actually catching these —
-      // not a coincidence of the arithmetic check above it.
-      expect(() => parseDamageFormula("LVL*1d4", ctx, false)).toThrow();
-      expect(() => parseDamageFormula("1d6*2", ctx, false)).toThrow();
+      // not a coincidence of the arithmetic check above it. Uses the
+      // parenthesized formulas (still rejected post-1.6.0) rather than the
+      // multiplier ones this same call used to reject pre-1.6.0 — those
+      // are now legitimately accepted, see this describe block's own
+      // comment above.
+      expect(() => parseDamageFormula("(1d6)", ctx, false)).toThrow();
+      expect(() => parseDamageFormula("2*(1d6+STR)", ctx, false)).toThrow();
     });
 
     it("regression: if enforceLimits were wired to true for this gate's parseDamageFormula call, a legitimate high-count dynamic formula would be wrongly rejected", () => {
@@ -2149,5 +2279,170 @@ describe("validateFormulaSyntax: dice-position gate (1.5.1 fix)", () => {
         parseDamageFormula("incrementdice(150,LEVEL)d6", ctx, false),
       ).not.toThrow();
     });
+  });
+});
+
+describe("dice multiplier notation (1.6.0)", () => {
+  // Two shapes only — CLAUDE.md's "Formula parser" section: multiplier
+  // BEFORE the dice ("LVL*1d4", "2*1d6", "STR*1d8") and AFTER the dice
+  // ("1d4*LVL", "1d6*2"). No parentheses, no division. Both forms apply the
+  // multiplier to the SUMMED kept dice, never to the modifier and never to
+  // the primary die's raw face (crit/fumble unaffected).
+
+  it("before-form ('LVL*1d4') rolls the die, multiplies the sum, and reports the multiplier", () => {
+    const char = makeCharacter({ level: 5 }); // LVL -> 5
+    mockRolls([3], 4);
+    const result = rollFormula("LVL*1d4", char);
+    expect(result.error).toBeUndefined();
+    expect(result.kept).toEqual([3]);
+    expect(result.multiplier).toBe(5);
+    expect(result.modifier).toBe(0);
+    expect(result.total).toBe(15); // 3 * 5
+  });
+
+  it("after-form ('1d6*2') rolls the die, multiplies the sum, and reports the multiplier", () => {
+    const char = makeCharacter();
+    mockRolls([4], 6);
+    const result = rollFormula("1d6*2", char);
+    expect(result.error).toBeUndefined();
+    expect(result.kept).toEqual([4]);
+    expect(result.multiplier).toBe(2);
+    expect(result.total).toBe(8); // 4 * 2
+  });
+
+  it("a variable multiplier after the dice ('1d8*STR') resolves and applies the same way", () => {
+    const char = makeCharacter({ stats: { str: 3, dex: 0, int: 0, wil: 0 } });
+    mockRolls([5], 8);
+    const result = rollFormula("1d8*STR", char);
+    expect(result.multiplier).toBe(3);
+    expect(result.total).toBe(15); // 5 * 3
+  });
+
+  it("combines a multiplier with a trailing flat modifier: the multiplier applies ONLY to the dice sum, never to the modifier", () => {
+    const char = makeCharacter({ level: 5 });
+    mockRolls([3], 4);
+    // (3 * 5) + 2 = 17, NOT (3 + 2) * 5 = 25.
+    const result = rollFormula("LVL*1d4+2", char);
+    expect(result.multiplier).toBe(5);
+    expect(result.modifier).toBe(2);
+    expect(result.total).toBe(17);
+  });
+
+  it("standard operator precedence, DELIBERATE not incidental: \"2*1d6+3\" is (2×diceSum)+3, never 2×(diceSum+3) — no game data exercises this combination yet, this test is the only thing pinning the decision", () => {
+    // RollFormulaResult.multiplier's own JSDoc documents this as a
+    // deliberate choice, not a byproduct of how the split happens to be
+    // coded — see that doc for the full reasoning. Two rolls of the SAME
+    // die value make the two readings numerically distinguishable:
+    // (2*4)+3 = 11 vs 2*(4+3) = 14.
+    const char = makeCharacter();
+    mockRolls([4], 6);
+    const result = rollFormula("2*1d6+3", char);
+    expect(result.multiplier).toBe(2);
+    expect(result.modifier).toBe(3);
+    expect(result.total).toBe(11); // (2*4)+3, NOT 2*(4+3)=14
+  });
+
+  it("crit/fumble read the raw primary die face, unaffected by the multiplier, in both forms", () => {
+    const char = makeCharacter({ level: 5 });
+    mockRolls([4], 4); // max face on d4
+    let result = rollFormula("LVL*1d4", char);
+    expect(result.isCritical).toBe(true);
+    expect(result.isFumble).toBe(false);
+    expect(result.total).toBe(20); // 4 * 5, not affected by the crit check
+
+    mockRolls([1], 4); // min face
+    result = rollFormula("1d4*5", char);
+    expect(result.isFumble).toBe(true);
+    expect(result.isCritical).toBe(false);
+    expect(result.total).toBe(5); // 1 * 5
+  });
+
+  it("canCritOrFumble stays true for a multiplier roll — it's still a genuine NdX, just scaled", () => {
+    const char = makeCharacter({ level: 5 });
+    mockRolls([2], 4);
+    expect(rollFormula("LVL*1d4", char).canCritOrFumble).toBe(true);
+  });
+
+  it("multiplier is undefined — never 1 — for a roll that used no multiplier at all", () => {
+    const char = makeCharacter();
+    mockRolls([3], 8);
+    const result = rollFormula("1d8+STR", char);
+    expect(result.multiplier).toBeUndefined();
+  });
+
+  it("a multiplier formula is accepted consistently across the write, evaluate, display, and roll paths", () => {
+    const char = makeCharacter({ level: 5 });
+    for (const formula of ["LVL*1d4", "1d4*LVL", "2*1d6", "1d6*2"]) {
+      expect(formulaSyntaxError(formula), formula).toBeUndefined();
+      expect(evalFormula(formula, char).error, formula).toBeUndefined();
+      expect(resolveFormulaDisplay(formula, char).error, formula).toBeUndefined();
+      expect(rollFormula(formula, char).error, formula).toBeUndefined();
+    }
+  });
+
+  it("resolveFormulaDisplay shows the multiplier alongside the dice, in the order it was WRITTEN, using '×' not '*'", () => {
+    const char = makeCharacter({ level: 5 });
+    expect(resolveFormulaDisplay("LVL*1d4", char).display).toBe("5×1d4");
+    expect(resolveFormulaDisplay("1d4*LVL", char).display).toBe("1d4×5");
+    expect(resolveFormulaDisplay("2*1d6", char).display).toBe("2×1d6");
+    expect(resolveFormulaDisplay("1d6*2", char).display).toBe("1d6×2");
+  });
+
+  it("resolveFormulaDisplay appends a trailing flat modifier after the multiplied dice group, same as the no-multiplier case", () => {
+    const char = makeCharacter({ level: 5 });
+    expect(resolveFormulaDisplay("LVL*1d4+2", char).display).toBe("5×1d4+2");
+  });
+
+  it("resolveFormulaDisplay never shows just the dice fragment for a multiplier formula — the pre-1.6.0 bug this closes", () => {
+    const char = makeCharacter({ level: 5 });
+    const display = resolveFormulaDisplay("LVL*1d4", char).display;
+    expect(display).not.toBe("1d4");
+    expect(display).toContain("×");
+  });
+
+  it("a still-unsupported dice position (a multiplier not at the very start of the formula) reports an error instead of the old misleading fragment display", () => {
+    // Pre-1.6.0, resolveFormulaDisplay's unanchored search found "1d6"
+    // anywhere and replaced it with "0" before evaluating the rest as the
+    // modifier: for "2+STR*1d6" (STR=3), substituted "2+3*1d6" became
+    // "2+3*0" = 2, silently displaying "1d6+2" — wrong order, and the ×3
+    // multiplier vanished entirely (multiplied away by the substituted 0).
+    // The multiplier here isn't the formula's leading token ("2+" precedes
+    // it) — neither supported shape — so this must still be rejected, now
+    // with an honest error instead of a plausible-looking wrong fragment.
+    const char = makeCharacter({ stats: { str: 3, dex: 0, int: 0, wil: 0 } });
+    const result = resolveFormulaDisplay("2+STR*1d6", char);
+    expect(result.error).toBeDefined();
+    expect(result.display).toBe("2+STR*1d6");
+  });
+
+  it("positional dice never combine with a multiplier — 'd66*2' is not one of the two supported shapes and stays rejected", () => {
+    expect(formulaSyntaxError("d66*2")).toBeDefined();
+  });
+
+  it("1.5.1's known residual gap closes automatically: a formula from that family, persisted on a character BEFORE 1.6.0 shipped, now displays and rolls correctly with zero migration and zero intervention", () => {
+    // `formula` is a plain string field with no version tag of its own —
+    // a character record saved before 1.6.0 with formula: "LVL*1d4" (the
+    // exact shape 1.5.1 flagged as "saves fine, fails on the first roll,
+    // and displays as a stale, misleading '1d4' fragment forever after")
+    // is byte-for-byte indistinguishable from one saved today. This test
+    // exercises that exact string with no special setup, proving there is
+    // nothing left to migrate: the fix is in the code that reads the
+    // string, not in the stored data.
+    const preExisting1_5_1Formula = "LVL*1d4";
+    const char = makeCharacter({ level: 5 });
+
+    // Used to display as "1d4" (multiplier silently dropped) — now shows
+    // the multiplier, matching what will actually be rolled.
+    expect(resolveFormulaDisplay(preExisting1_5_1Formula, char)).toEqual({
+      display: "5×1d4",
+    });
+
+    // Used to throw "Unexpected trailing input in formula: d4" on the very
+    // first roll — now rolls cleanly.
+    mockRolls([3], 4);
+    const rolled = rollFormula(preExisting1_5_1Formula, char);
+    expect(rolled.error).toBeUndefined();
+    expect(rolled.multiplier).toBe(5);
+    expect(rolled.total).toBe(15);
   });
 });
