@@ -501,29 +501,174 @@ export function diceToAverage(
   );
 
   // e.g.  2d6  →  7   (average of 2×(1+6)/2)
-  result = result.replace(/(\d+)d(\d+)/gi, (match, count, sides) => {
-    const n = parseInt(count, 10);
-    const s = parseInt(sides, 10);
-    if (enforceLimits) assertDiceWithinLimits(n, s, match, rawFormula);
-    const avg = Math.round(n * ((1 + s) / 2));
-    return String(avg);
-  });
+  result = result.replace(
+    new RegExp(DICE_TOKEN_SOURCE.plain, "gi"),
+    (match, count, sides) => {
+      const n = parseInt(count, 10);
+      const s = parseInt(sides, 10);
+      if (enforceLimits) assertDiceWithinLimits(n, s, match, rawFormula);
+      const avg = Math.round(n * ((1 + s) / 2));
+      return String(avg);
+    },
+  );
   return result;
+}
+
+/**
+ * Result of {@link matchLeadingDiceToken}: the dice token found at the very
+ * start of a formula, if any, split from whatever text follows it.
+ */
+interface LeadingDiceToken {
+  /** Exact matched substring, e.g. "12d6" or "d66a" — already lowercase,
+   * since this runs on {@link substituteVariables}'s output. NEVER includes
+   * the multiplier (see `multiplier` below): "5*1d4" and "1d4*5" both
+   * report `token: "1d4"`. */
+  token: string;
+  /** Everything after the token AND, when present, its multiplier — unparsed,
+   * the caller evaluates this as the formula's flat modifier. */
+  rest: string;
+  /** Set instead of a plain `NdX` shape when `token` is positional notation
+   * (`d44`/`d66`/`d88`, optional advantage suffix) — see the @file header.
+   * Positional dice never carry a multiplier (see `multiplier` below). */
+  positional?: { sides: number; advantage: boolean };
+  /**
+   * 1.6.0: the resolved (already-substituted, so a variable like LVL/STR is
+   * already a plain, possibly negative integer) coefficient applied to the
+   * dice token, from either of the two supported shapes — a single flat
+   * number immediately before ("5*1d4") or immediately after ("1d4*5") the
+   * dice token, with no parentheses and no more than one `*`. `undefined`
+   * for a formula with no multiplier at all — never `1`, so a caller can
+   * tell "no multiplier was written" apart from "a multiplier of 1 was
+   * written" without a magic-number check (relevant to
+   * `resolveFormulaDisplay` and `RollLog`, both of which must NOT show a
+   * multiplier that wasn't actually there). Only ever set alongside a
+   * plain `NdX` token, never a positional one — see the @file header's
+   * "PAS dans ce lot" note; positional dice have their own fixed
+   * roll-and-read mechanic that "multiply the read value" has no rulebook
+   * meaning for, and no catalog content needs it.
+   */
+  multiplier?: number;
+  /**
+   * Whether `multiplier` was written before or after the dice token in the
+   * substituted formula. Display-only metadata, irrelevant to rolling
+   * (which only needs the numeric coefficient) — {@link parseDamageFormula}
+   * doesn't propagate it. {@link resolveFormulaDisplay} uses it to mirror
+   * what the player/GM actually wrote ("5×1d4" vs "1d4×5") rather than
+   * imposing a canonical order; `RollLog`'s post-roll breakdown
+   * deliberately does NOT use it — a rolled breakdown describes an
+   * already-computed result (dice value → ×multiplier → +modifier), not a
+   * formula echo, so it always renders in that fixed order regardless of
+   * how the formula was written. Two different, equally deliberate
+   * choices for two different kinds of display; don't "fix" one to match
+   * the other.
+   */
+  multiplierPosition?: "before" | "after";
+}
+
+/**
+ * The single canonical definition of where dice notation may legally sit
+ * for this app to actually roll it: the very first token of an
+ * already-substituted, already dynamic-dice-resolved formula, or nowhere
+ * at all. Anything else — dice notation later in the string, inside
+ * parentheses, or after another operator — is not a valid roll position:
+ * this returns `null`, and the caller evaluates the whole remaining string
+ * as ordinary arithmetic instead, which then rejects any leftover
+ * dice-shaped text on its own, the same way any other malformed input is.
+ *
+ * This is the ONE place that decides dice position. {@link parseDamageFormula}
+ * is its only caller — and, through it, both `rollFormulaWithContext` (real
+ * rolling) and `validateFormulaSyntax`'s second gate (which calls
+ * `parseDamageFormula` directly), so a write-time-accepted formula is, by
+ * construction, one this function can actually split, not two independent
+ * definitions of "valid dice position" happening to agree. See
+ * `validateFormulaSyntax`'s own doc for the 1.5.1 bug this fixed.
+ *
+ * {@link diceToAverage} and {@link resolveDynamicDice}'s bounds-check loop
+ * deliberately do NOT go through this function — they need to find dice
+ * notation ANYWHERE in a formula (a lenient arithmetic pass and a bounds
+ * sweep, respectively, not a rollability check). Routing them through this
+ * function's leading-only semantics would reject formulas earlier, with a
+ * less specific error message than the dedicated second gate produces —
+ * see the "dice-position gate" tests in formulaParser.test.ts, which pin
+ * that exact message.
+ *
+ * Positional dice are checked first: they have their own fixed shape, and
+ * {@link normalizeImplicitDiceCount} deliberately leaves a bare positional
+ * token untouched (never rewritten to `1dNN`) — see that function's own doc.
+ *
+ * 1.6.0: also recognizes a multiplier immediately before or after a PLAIN
+ * (non-positional) dice token — "5*1d4"/"1d4*5" — with no parentheses and
+ * no more than the one `*`, matching the two shapes CLAUDE.md's "Formula
+ * parser" section documents as supported. The multiplier itself must
+ * already be a plain, possibly-signed integer (this runs on an
+ * already-substituted formula, so a variable like LVL/STR is already a
+ * number by this point) — an arbitrary sub-expression as the multiplier
+ * ("(LVL+1)*1d4") is out of scope, deliberately: that needs parenthesized
+ * dice support, which this app doesn't have (see CLAUDE.md).
+ *
+ * @param subbed - Formula with variables and dynamic-dice helpers already
+ * resolved (i.e. {@link resolveDynamicDice}'s output), NOT the raw
+ * user-typed formula.
+ */
+function matchLeadingDiceToken(subbed: string): LeadingDiceToken | null {
+  const positionalMatch = subbed.match(
+    new RegExp(`^${DICE_TOKEN_SOURCE.positional}`, "i"),
+  );
+  if (positionalMatch) {
+    return {
+      token: positionalMatch[0],
+      rest: subbed.slice(positionalMatch[0].length),
+      positional: {
+        sides: positionalDieFaceSize(positionalMatch[1]),
+        advantage: !!positionalMatch[2],
+      },
+    };
+  }
+
+  // Multiplier BEFORE the dice: "5*1d4", "-2*1d8" (a negative-stat
+  // substitution can produce the leading "-").
+  const beforeMatch = subbed.match(
+    new RegExp(`^(-?\\d+)\\s*\\*\\s*${DICE_TOKEN_SOURCE.plain}`, "i"),
+  );
+  if (beforeMatch) {
+    const [whole, multiplierText, count, sides] = beforeMatch;
+    return {
+      token: `${count}d${sides}`,
+      rest: subbed.slice(whole.length),
+      multiplier: Number(multiplierText),
+      multiplierPosition: "before",
+    };
+  }
+
+  const plainMatch = subbed.match(new RegExp(`^${DICE_TOKEN_SOURCE.plain}`, "i"));
+  if (plainMatch) {
+    // Multiplier AFTER the dice: "1d6*5", "1d8*-2" — checked against the
+    // remainder immediately following the dice token, so it can never
+    // consume anything the modifier grammar would otherwise own.
+    const afterMatch = subbed
+      .slice(plainMatch[0].length)
+      .match(/^\s*\*\s*(-?\d+)/);
+    if (afterMatch) {
+      return {
+        token: plainMatch[0],
+        rest: subbed.slice(plainMatch[0].length + afterMatch[0].length),
+        multiplier: Number(afterMatch[1]),
+        multiplierPosition: "after",
+      };
+    }
+    return { token: plainMatch[0], rest: subbed.slice(plainMatch[0].length) };
+  }
+
+  return null;
 }
 
 /**
  * Splits a formula into its leading dice notation and its numeric modifier.
  *
- * Also the choke point for this codebase's "where is dice notation allowed
- * to appear" constraint: dice must be the substituted formula's very first
- * token (or absent entirely, or positional) — anything else, dice-shaped
- * text included, is handed to {@link safeEval} as-is and rejected the same
- * way any other malformed arithmetic is. {@link validateFormulaSyntax}
- * reuses this exact function (rather than a separate position check) so a
- * write-time-accepted formula is, by construction, one this function can
- * actually split — see that function's own doc for why a second,
- * independent definition of "valid dice position" used to exist and
- * disagree with this one.
+ * Delegates the "where is dice notation allowed to appear" question
+ * entirely to {@link matchLeadingDiceToken} — see that function's own doc
+ * for why it's the single canonical definition, shared (indirectly, via
+ * this function) with `rollFormulaWithContext` and `validateFormulaSyntax`.
  *
  * @example parseDamageFormula("1d8+STR+2", ctx) // → { diceNotation: "1d8", modifier: <STR+2> }
  *
@@ -545,42 +690,33 @@ export function diceToAverage(
  * whole formula is evaluated as the modifier. `positional` is set instead
  * of a plain `NdX` when the formula leads with positional dice notation
  * (`d44`/`d66`/`d88`, optional `a` suffix) — see {@link rollPositionalDice}.
+ * `multiplier` (1.6.0) is set when the formula used one of the two
+ * supported multiplier shapes ("5*1d4"/"1d4*5") — `undefined`, never `1`,
+ * when absent; see {@link matchLeadingDiceToken}'s own doc. It applies to
+ * the DICE portion only, never to `modifier` — `rollFormulaWithContext` is
+ * the caller that actually does that multiplication, against the summed
+ * kept dice, after rolling. Deliberately standard operator precedence:
+ * "2*1d6+3" is `modifier: 3` alongside a dice group worth `2×diceSum`, so
+ * the final total is `(2×diceSum)+3`, never `2×(diceSum+3)` — see
+ * `RollFormulaResult.multiplier`'s own doc for the full reasoning.
  */
 export function parseDamageFormula(
   formula: string,
   ctx: FormulaContext,
   enforceLimits: boolean = true,
-): { diceNotation: string; modifier: number; positional?: { sides: number; advantage: boolean } } {
+): {
+  diceNotation: string;
+  modifier: number;
+  positional?: { sides: number; advantage: boolean };
+  multiplier?: number;
+} {
   // Substitute variables first, then split dice from modifiers
   let subbed = substituteVariables(formula, ctx);
   subbed = resolveDynamicDice(subbed, formula, enforceLimits);
 
-  // Positional dice (d44/d66/d88, optional advantage "a") — checked before
-  // the plain NdX match below, since normalizeImplicitDiceCount deliberately
-  // leaves a bare positional token untouched (see its doc comment) rather
-  // than normalizing it to "1dNN".
-  const positionalMatch = subbed.match(/^d(44|66|88)(a)?(?![a-z0-9])/i);
-  if (positionalMatch) {
-    const rest = subbed.slice(positionalMatch[0].length);
-    const modifier = rest.trim() ? safeEval(rest) : 0;
-    if (isNaN(modifier)) {
-      throw new FormulaError(
-        `Could not evaluate the modifier in formula: "${formula}" (resolved to "${subbed}").`,
-      );
-    }
-    return {
-      diceNotation: positionalMatch[0].toLowerCase(),
-      modifier,
-      positional: {
-        sides: positionalDieFaceSize(positionalMatch[1]),
-        advantage: !!positionalMatch[2],
-      },
-    };
-  }
+  const leading = matchLeadingDiceToken(subbed);
 
-  // Extract leading NdX
-  const diceMatch = subbed.match(/^(\d+d\d+)/i);
-  if (!diceMatch) {
+  if (!leading) {
     // No dice — pure modifier
     const mod = safeEval(subbed);
     // NaN is a parse failure (safeEval's whitelist rejected something left
@@ -595,16 +731,18 @@ export function parseDamageFormula(
     return { diceNotation: "", modifier: mod };
   }
 
-  const diceNotation = diceMatch[1];
-  const rest = subbed.slice(diceNotation.length); // e.g.  "+2+3"
-  const modifier = rest.trim() ? safeEval(rest) : 0;
+  const modifier = leading.rest.trim() ? safeEval(leading.rest) : 0;
   if (isNaN(modifier)) {
     throw new FormulaError(
       `Could not evaluate the modifier in formula: "${formula}" (resolved to "${subbed}").`,
     );
   }
 
-  return { diceNotation, modifier };
+  if (leading.positional) {
+    return { diceNotation: leading.token.toLowerCase(), modifier, positional: leading.positional };
+  }
+
+  return { diceNotation: leading.token, modifier, multiplier: leading.multiplier };
 }
 
 /**
@@ -1052,8 +1190,52 @@ export function safeEval(expr: string): number {
  * printing): `d44`, `d66`, `d88`. Rolled and read positionally by
  * {@link rollPositionalDice}/{@link positionalDiceAverage}, never summed
  * like a normal `NdX` — see the @file header.
+ *
+ * Exported so tests can parametrize over the actual set this file
+ * recognizes rather than a hand-typed "44, 66, 88" list that could drift
+ * from it — same reasoning as {@link VARIABLE_TABLE} being exported.
  */
-const POSITIONAL_DICE_SIDES = [44, 66, 88] as const;
+export const POSITIONAL_DICE_SIDES = [44, 66, 88] as const;
+
+/**
+ * Canonical regex-source fragments for the two dice-token shapes this
+ * parser recognizes: an explicit-count roll (`NdX`, count and sides
+ * captured as two numbered groups) and a positional roll (`d44`/`d66`/
+ * `d88`, optional advantage suffix, sides and suffix captured as two
+ * numbered groups). `positional`'s alternation is built from
+ * {@link POSITIONAL_DICE_SIDES} itself, never a separately hand-typed
+ * "44|66|88" — so the set of recognized positional sizes can't drift
+ * between the two.
+ *
+ * Every function in this file that recognizes a dice token — whether
+ * enforcing WHERE one may appear ({@link matchLeadingDiceToken}, the sole
+ * definition of that) or merely finding one wherever it appears
+ * ({@link diceToAverage}, {@link resolveDynamicDice}'s bounds-check loop,
+ * {@link positionalDicePattern}) — is built from these two fragments,
+ * wrapped in whatever anchor (`^`), preceding-character exclusion, or `g`
+ * flag its own use case needs. Position is NOT encoded here; see each call
+ * site's own doc for why its requirements differ (`diceToAverage`/
+ * `resolveDynamicDice` deliberately need to find dice notation ANYWHERE,
+ * `matchLeadingDiceToken` deliberately only at the very start).
+ *
+ * @remarks As of 1.6.0, {@link resolveFormulaDisplay} is ALSO built on this
+ * (indirectly, via {@link matchLeadingDiceToken}) — it held its own
+ * hand-written pattern through the position-detection unification alone,
+ * specifically so its matching approach would only be rewritten once, when
+ * the multiplier work needed it to change shape anyway (to show a
+ * multiplier alongside dice notation) rather than twice. See that
+ * function's own doc.
+ *
+ * Exported (alongside {@link POSITIONAL_DICE_SIDES}) so tests can build an
+ * independent expectation from these same fragments and cross-check every
+ * consumer against it, rather than re-typing the shape by hand in the test
+ * file too — see formulaParser.test.ts's "single canonical dice-token
+ * source" describe block.
+ */
+export const DICE_TOKEN_SOURCE = {
+  plain: `(\\d+)d(\\d+)`,
+  positional: `d(${POSITIONAL_DICE_SIDES.join("|")})(a)?(?![a-z0-9])`,
+} as const;
 
 /**
  * Normalizes implicit-count dice notation (`dN`, e.g. a bare `d20`) to
@@ -1216,7 +1398,7 @@ function positionalDiceAverage(sides: number, advantage: boolean): number {
  * `matchAll`/`match`/`replace` over it.
  */
 function positionalDicePattern(): RegExp {
-  return /([a-z0-9]?)d(44|66|88)(a)?(?![a-z0-9])/gi;
+  return new RegExp(`([a-z0-9]?)${DICE_TOKEN_SOURCE.positional}`, "gi");
 }
 
 /**
@@ -1274,7 +1456,7 @@ function resolveDynamicDice(
   // before reading count/sides, so this single check guards all of them —
   // none of those callers do their own limit check on the result.
   if (enforceLimits) {
-    for (const match of formula.matchAll(/(\d+)d(\d+)/gi)) {
+    for (const match of formula.matchAll(new RegExp(DICE_TOKEN_SOURCE.plain, "gi"))) {
       assertDiceWithinLimits(
         Number(match[1]),
         Number(match[2]),
@@ -1348,52 +1530,16 @@ export function evalFormulaWithContext(
   }
 }
 
-/**
- * Validates a raw formula against every safety limit (length, recursion
- * depth, dice count/sides) without evaluating it to a final display or
- * roll value. Intended as a write-time gate: call this before persisting a
- * formula on an action/spell/item so an out-of-range formula is rejected
- * at save time instead of merely failing safely (but silently, from the
- * saver's point of view) the next time someone tries to roll or display it.
- *
- * @remarks Status as of 1.5.1: this is currently NOT wired into any write
- * path in the app — grep confirms zero production callers, only tests.
- * `validateFormulaSyntax` (context-free, see its own doc) is the actual
- * write-time gate in production today, via `useFormulaField`. Whether to
- * wire this one in too (it additionally needs a real character context,
- * which not every write site has to hand) or remove it is a decision for
- * a future batch, not made here.
- *
- * @param formula - Raw formula as a player/GM is about to save it.
- * @param ctx - Context used to resolve variables/dynamic dice before checking limits.
- * @throws {FormulaError} if the formula violates any safety limit.
- */
-export function validateFormula(formula: string, ctx: FormulaContext): void {
-  // Explicit, first-line check on the raw string — this is what actually
-  // gets persisted in scene metadata and broadcast to the table, so this
-  // gate must not rely on substituteVariables' own length check (which
-  // happens to run on this same raw string too) as an implementation detail.
-  if (formula.length > MAX_FORMULA_LENGTH) {
-    throw new FormulaError(
-      `Formula too long (${formula.length} chars, max ${MAX_FORMULA_LENGTH}).`,
-    );
-  }
-  const substituted = substituteVariables(formula, ctx);
-  const resolved = resolveDynamicDice(substituted, formula);
-  const averaged = diceToAverage(resolved, formula);
-  const result = safeEval(averaged); // lets a MAX_PARSE_DEPTH violation propagate as FormulaError
-  // A NaN result (safeEval's character whitelist rejected something left
-  // after substitution) must reject the save the same way
-  // evalFormulaWithContext/resolveFormulaDisplay reject it at read time —
-  // otherwise a formula this write-time gate waves through can still fail
-  // the moment someone actually rolls or displays it, which defeats the
-  // point of having the gate.
-  if (isNaN(result)) {
-    throw new FormulaError(
-      `Could not evaluate formula: "${formula}" (resolved to "${averaged}").`,
-    );
-  }
-}
+// `validateFormula` (context-bound, real-character bounds check at write
+// time) lived here through 1.6.0 and was removed: it had zero production
+// callers since at least 1.5.1, and its whole design — enforcing dice
+// bounds against a REAL character at write time — is the exact anti-pattern
+// `validateFormulaSyntax` below is deliberately built to avoid (see its own
+// doc: a character's KEY/FLAW/HP can legitimately be outside any neutral
+// range mid-creation, and dynamic-dice bounds are inherently
+// level-dependent). Wiring it into a real write path would have
+// reintroduced that trap in a second place; see CLAUDE.md's "Formula
+// parser" section for the full reasoning behind removing it instead.
 
 /**
  * Synthetic {@link FormulaContext} used only by {@link validateFormulaSyntax},
@@ -1600,6 +1746,28 @@ export function isEngineRollableItem(item: {
  * substituting variables but *keeping* dice notation intact (e.g.
  * "1d8 + STR + 2" → "1d8+5"), so players see what they're about to roll.
  *
+ * 1.6.0: now built on {@link matchLeadingDiceToken} — the same canonical
+ * "where can dice notation appear" definition {@link parseDamageFormula}
+ * uses to roll — instead of its own hand-written, unanchored "find dice
+ * anywhere" pattern. Two consequences, both intentional:
+ * - A multiplier ("5*1d4"/"1d4*5") is now shown alongside the dice, in the
+ *   SAME order it was written ({@link LeadingDiceToken.multiplierPosition}):
+ *   "LVL*1d4" at level 5 displays "5×1d4", "1d4*LVL" displays "1d4×5" — a
+ *   literal "*" is stored-formula syntax, not what a player should read;
+ *   "×" matches the book's own notation (Terror's own description already
+ *   reads "LVL×1d4"). Order is preserved here specifically because this
+ *   function shows UNRESOLVED notation the player is about to roll — it
+ *   mirrors intent, unlike `RollLog`'s post-roll breakdown, which describes
+ *   an already-computed result and deliberately uses a fixed dice→×→+
+ *   order regardless of how the formula was written. Don't harmonize the
+ *   two; see `RollLog.tsx`'s own comment.
+ * - A formula whose dice notation isn't actually in a rollable position
+ *   (mid-string, inside parentheses) no longer shows a misleading fragment
+ *   of it (e.g. the pre-1.6.0 bug: "LVL*1d4" displayed as just "1d4",
+ *   silently dropping the multiplier) — it now falls through to the
+ *   "no leading dice" branch below, which correctly reports an error
+ *   instead, the same as every other unrollable formula.
+ *
  * @param formula - Raw formula as stored on the action/spell/item.
  * @param char - Character providing the variable values.
  * @returns `display`: a simplified display string, or the original formula
@@ -1618,12 +1786,14 @@ export function resolveFormulaDisplay(
   try {
     let f = substituteVariables(formula, ctx);
     f = resolveDynamicDice(f, formula);
-    // Evaluate non-dice parts but keep dice notation
-    // e.g. "1d8 + 2 + 1" → "1d8+3"
-    // Positional dice (bare d44/d66/d88, optional "a") shown as-is too, same
-    // as plain NdX — never resolved to a number for display.
-    const diceMatch = f.match(/\d+d\d+|d(?:44|66|88)a?(?![a-z0-9])/i);
-    if (!diceMatch) {
+
+    const leading = matchLeadingDiceToken(f);
+    if (!leading) {
+      // No dice at a rollable position — evaluate the whole thing as plain
+      // arithmetic. Also where a formula with dice notation somewhere
+      // OTHER than the leading position (mid-string, inside parens) ends
+      // up: safeEval below fails on the leftover dice-shaped text, same as
+      // every other unrollable formula — see this function's own doc.
       const val = safeEval(f);
       // NaN here means safeEval's character whitelist rejected whatever's
       // left after substitution — a genuine parse failure, not "nothing to
@@ -1638,9 +1808,16 @@ export function resolveFormulaDisplay(
       return { display: String(val) };
     }
 
-    const dicePart = diceMatch[0];
-    const rest = f.replace(dicePart, "0");
-    const modifier = safeEval(rest);
+    // Dice notation itself, with a multiplier (if any) shown alongside it
+    // in the order it was WRITTEN — see this function's own doc.
+    const dicePart =
+      leading.multiplier === undefined
+        ? leading.token
+        : leading.multiplierPosition === "before"
+          ? `${leading.multiplier}×${leading.token}`
+          : `${leading.token}×${leading.multiplier}`;
+
+    const modifier = leading.rest.trim() ? safeEval(leading.rest) : 0;
     // Same reasoning as above: a NaN modifier is a parse failure, not a
     // legitimate zero — keep those two outcomes visibly distinct instead
     // of both falling through to "just show the dice part".
@@ -1764,7 +1941,47 @@ export interface RollFormulaResult {
    */
   droppedIndices: number[];
   modifier: number;
+  /**
+   * 1.6.0: the coefficient applied to the summed kept dice (`kept.reduce`)
+   * before adding `modifier`, from either of the two supported multiplier
+   * shapes ("5*1d4"/"1d4*5" — see CLAUDE.md's "Formula parser" section and
+   * {@link matchLeadingDiceToken}'s own doc). `undefined`, never `1`, for
+   * every roll that didn't use one — a caller (`RollLog`) that wants to
+   * show "×N" only for an actual multiplier checks
+   * `multiplier !== undefined && multiplier !== 1`, not just truthiness,
+   * since `0` is a legitimate (if unusual) multiplier value. Never set for
+   * positional dice or a flat, dice-less formula. Applying it here, to the
+   * ALREADY-ROLLED dice sum, rather than to `kept[0]` or to the dice count
+   * before rolling, is what keeps crit/fumble unaffected by it — see
+   * `isCritical`/`isFumble` below.
+   *
+   * `total`'s formula is `diceSum * multiplier + modifier` — standard
+   * arithmetic operator precedence (multiplication binds tighter than
+   * addition), applied deliberately, not an incidental property of how
+   * this happens to be coded. Concretely: `"2*1d6+3"` means
+   * `(2 × diceRoll) + 3`, never `2 × (diceRoll + 3)` — the trailing `+3` is
+   * the formula's flat modifier, syntactically outside the multiplied
+   * group in both supported shapes (the multiplier sits immediately before
+   * or after the DICE TOKEN only, never wrapping a modifier too — no
+   * parentheses exist in this grammar to make it do so either way; see
+   * CLAUDE.md's "Formula parser" section for why parenthesized grouping is
+   * out of scope). No catalog content exercises this combination as of
+   * 1.6.0 (Terror's own formula, `"LVL*1d4"`, carries no modifier at all),
+   * so this is pinned by a dedicated test
+   * (formulaParser.test.ts's "dice multiplier notation" describe block)
+   * rather than by any real game data — don't rely on game data alone to
+   * keep this behavior from drifting.
+   */
+  multiplier?: number;
   total: number;
+  /**
+   * Read off `kept[0]` (the primary die's raw face), same as always —
+   * `multiplier` never enters this check. Rolling the max face on a d4
+   * still critical-hits at ×5 exactly as it would unmultiplied; this app
+   * displays the critical indicator, it doesn't automate a critical's
+   * extra-dice mechanic, so there's no "reroll and re-multiply" step to
+   * get right here — see CLAUDE.md's "Formula parser" section.
+   */
   isCritical: boolean;
   isFumble: boolean;
   /**
@@ -1807,11 +2024,13 @@ export function rollFormulaWithContext(
   let count = 1;
   let diceNotation: string;
   let modifier: number;
+  let multiplier: number | undefined;
 
   try {
     const parsed = parseDamageFormula(formula, ctx);
     diceNotation = parsed.diceNotation;
     modifier = parsed.modifier;
+    multiplier = parsed.multiplier;
 
     if (parsed.positional) {
       // Positional dice roll their own fixed 2 (or 3, for the "a" variant)
@@ -1898,12 +2117,22 @@ export function rollFormulaWithContext(
   }
 
   const diceSum = kept.reduce((a, b) => a + b, 0);
-  const total = diceSum + modifier;
+  // Multiplier applies to the SUMMED kept dice, not to kept[0] individually
+  // and not to the dice count before rolling — see RollFormulaResult's own
+  // doc on `multiplier` for why that's what keeps crit/fumble unaffected.
+  //
+  // Standard operator precedence, deliberate: "2*1d6+3" is (2×diceSum)+3,
+  // not 2×(diceSum+3) — the modifier is never multiplied. See
+  // RollFormulaResult.multiplier's own doc for the full reasoning; pinned
+  // by formulaParser.test.ts's "dice multiplier notation" tests since no
+  // real game data exercises multiplier+modifier together as of 1.6.0.
+  const total = diceSum * (multiplier ?? 1) + modifier;
 
   // The primary die is kept[0] — the leftmost surviving die, in original
   // roll order, per rollFormula's own doc above. It alone decides crit
   // and fumble; the other kept dice (when count > 1) are irrelevant to
-  // both checks.
+  // both checks. Read off the raw, unmultiplied face — see the doc on
+  // `isCritical` in RollFormulaResult.
   const isCritical = kept[0] === sides;
   const isFumble = kept[0] === 1;
 
@@ -1913,6 +2142,7 @@ export function rollFormulaWithContext(
     kept,
     droppedIndices,
     modifier,
+    multiplier,
     total,
     isCritical,
     isFumble,

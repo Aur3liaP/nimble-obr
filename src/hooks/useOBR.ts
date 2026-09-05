@@ -76,6 +76,7 @@ import {
 } from "../utils/characterStore";
 import { convertToMonster, convertToPlayer } from "../utils/characterSwitch";
 import { formatModifier } from "../utils/formatModifier";
+import { buildDiceRollResult } from "../utils/diceRollResult";
 
 /** OBR player role as reported by the SDK. */
 
@@ -1936,15 +1937,13 @@ export function useOBR(): UseOBRReturn {
       req.mode,
       req.advantageCount ?? 0,
     );
-    const result: DiceRollResult = {
-      ...rolled,
+    const result = buildDiceRollResult(rolled, {
       label: req.label,
       formula: req.formula,
       playerId: playerIdRef.current,
       playerName: playerNameRef.current,
-      timestamp: Date.now(),
       hidden: req.hidden || false,
-    };
+    });
     if (result.error) return result;
     await pushRollToLog(result);
     return result;
@@ -1970,15 +1969,13 @@ export function useOBR(): UseOBRReturn {
       req.mode,
       req.advantageCount ?? 0,
     );
-    const result: DiceRollResult = {
-      ...rolled,
+    const result = buildDiceRollResult(rolled, {
       label: req.label,
       formula: req.formula,
       playerId: playerIdRef.current,
       playerName: playerNameRef.current,
-      timestamp: Date.now(),
       hidden: req.hidden || false,
-    };
+    });
     if (result.error) return result;
     await pushRollToLog(result);
     return result;
