@@ -393,6 +393,19 @@ function RollEntry({
             [{roll.kept.join(", ")}]
           </span>
         )}
+        {/* 1.6.0: the dice-sum multiplier ("×5" for e.g. Terror's
+            "LVL*1d4"). Gated on `!== 1` (not just presence) so an old log
+            entry that predates this field, or a formula that genuinely
+            resolves to a ×1 coefficient, never shows a parasitic "×1" —
+            see `DiceRollResult.multiplier`'s own doc. Order is fixed
+            (dice, then ×multiplier, then +modifier) regardless of whether
+            the formula was written "5*1d4" or "1d4*5": this describes an
+            already-computed result, not a formula echo — see
+            `resolveFormulaDisplay`'s own comment on why THAT function
+            preserves written order and this one deliberately doesn't. */}
+        {roll.multiplier !== undefined && roll.multiplier !== 1 && (
+          <span className="text-stone-400 text-[10px]">×{roll.multiplier}</span>
+        )}
         {roll.modifier !== 0 && (
           <span className="text-stone-400 text-[10px]">
             {formatModifier(roll.modifier)}

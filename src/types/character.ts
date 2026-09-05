@@ -628,6 +628,19 @@ export interface DiceRollResult {
    */
   droppedIndices?: number[];
   modifier: number;
+  /**
+   * 1.6.0: the coefficient applied to the dice sum, carried through
+   * unchanged from {@link formulaParser.RollFormulaResult}'s own
+   * `multiplier` field — see its doc for the roll-time reasoning (applies
+   * to the summed dice only, never to `modifier`, never to the crit/fumble
+   * check). OPTIONAL for the exact same reason `droppedIndices` above is:
+   * roll-LOG metadata, not `NimbleCharacter` state, so this needed no
+   * schema bump. An entry already sitting in scene metadata from before
+   * this field existed simply won't have it — `RollLog` must render such
+   * an entry the same as any other `multiplier`-less roll (no "×1" badge),
+   * not fail or show a stale/undefined value.
+   */
+  multiplier?: number;
   total: number;
   isCritical: boolean;
   isFumble: boolean;
